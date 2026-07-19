@@ -28,16 +28,16 @@
 ## Preview
 
 <p align="center">
-  <img src="docs/screenshots/main-window.png" width="820" alt="Main window — game profiles">
+  <img src="docs/screenshots/main-window.png" width="820" alt="Profiles tab">
 </p>
 
-<p align="center"><em>Profiles tab — pick a game, tune resolution / power / color, hit Save.</em></p>
+<p align="center"><em>Profiles — pick a game, tune resolution / power / color, then Save.</em></p>
 
 <p align="center">
-  <img src="docs/screenshots/settings.png" width="820" alt="Settings dialog">
+  <img src="docs/screenshots/settings.png" width="820" alt="Settings window">
 </p>
 
-<p align="center"><em>Settings — language, theme, monitor, tray and startup behaviour.</em></p>
+<p align="center"><em>Settings — language, theme, monitor, tray and startup options.</em></p>
 
 ---
 
