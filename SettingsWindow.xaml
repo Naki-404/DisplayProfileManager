@@ -1,0 +1,75 @@
+<Window x:Class="DisplayProfileManager.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Settings" Height="560" Width="520"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None" ResizeMode="NoResize"
+        Background="{DynamicResource BgBrush}"
+        Foreground="{DynamicResource TextBrush}">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="36" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+    <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource BgBrush}">
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <DockPanel>
+                <Button Style="{StaticResource CaptionCloseButton}" HorizontalAlignment="Right"
+                        Width="36" Height="28" Click="Close_Click"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Path Width="9" Height="9" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
+                          Data="M1,1 L9,9 M9,1 L1,9"/>
+                </Button>
+                <TextBlock x:Name="TxtTitle" Text="Settings" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </DockPanel>
+
+            <ScrollViewer Grid.Row="1" Margin="0,14,0,12" VerticalScrollBarVisibility="Hidden">
+                <StackPanel>
+                    <TextBlock x:Name="LblAppearance" Text="Appearance" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock x:Name="LblLang" Text="Language" Foreground="{DynamicResource MutedBrush}"/>
+                    <ComboBox x:Name="CmbLang" Margin="0,4,0,10" SelectionChanged="Lang_Changed">
+                        <ComboBoxItem Content="English" Tag="en"/>
+                        <ComboBoxItem Content="Русский" Tag="ru"/>
+                    </ComboBox>
+                    <TextBlock x:Name="LblTheme" Text="Theme" Foreground="{DynamicResource MutedBrush}"/>
+                    <ComboBox x:Name="CmbTheme" Margin="0,4,0,8" SelectionChanged="Theme_Changed">
+                        <ComboBoxItem Content="Dark pink" Tag="dark"/>
+                        <ComboBoxItem Content="Light" Tag="light"/>
+                        <ComboBoxItem Content="Custom" Tag="custom"/>
+                    </ComboBox>
+                    <Button x:Name="BtnEditPalette" Content="Edit palette…" Style="{StaticResource GhostButton}"
+                            HorizontalAlignment="Left" Margin="0,0,0,12" Click="EditPalette_Click"/>
+
+                    <TextBlock x:Name="LblMonitor" Text="Monitor" Foreground="{DynamicResource MutedBrush}"/>
+                    <ComboBox x:Name="CmbMonitor" Margin="0,4,0,12"/>
+
+                    <TextBlock x:Name="LblBehavior" Text="Behavior" FontWeight="SemiBold" Margin="0,8,0,8"/>
+                    <CheckBox x:Name="ChkAutostart"/>
+                    <CheckBox x:Name="ChkStartMin"/>
+                    <CheckBox x:Name="ChkNotify"/>
+                    <CheckBox x:Name="ChkBackup"/>
+                    <CheckBox x:Name="ChkTrayClose"/>
+                    <CheckBox x:Name="ChkConfirmDelete"/>
+                    <CheckBox x:Name="ChkShowActive"/>
+
+                    <TextBlock x:Name="LblData" Text="Data" FontWeight="SemiBold" Margin="0,16,0,8"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="BtnExport" Content="Export…" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Export_Click"/>
+                        <Button x:Name="BtnImport" Content="Import…" Style="{StaticResource GhostButton}" Click="Import_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <DockPanel Grid.Row="2">
+                <Button x:Name="BtnCancel" Content="Cancel" Style="{StaticResource GhostButton}" Click="Close_Click"/>
+                <Button x:Name="BtnSave" Content="Save" Style="{StaticResource AccentButton}"
+                        HorizontalAlignment="Right" MinWidth="100" Click="Save_Click"/>
+            </DockPanel>
+        </Grid>
+    </Border>
+</Window>

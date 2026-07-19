@@ -1,0 +1,244 @@
+using System.IO;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using DisplayProfileManager.Models;
+using DisplayProfileManager.Services;
+
+namespace DisplayProfileManager;
+
+public partial class SettingsWindow : Window
+{
+    public bool Imported { get; private set; }
+    private ThemePalette? _customPalette;
+
+    public SettingsWindow()
+    {
+        InitializeComponent();
+        Opacity = 0;
+        Loaded += (_, _) => UiMotion.PopIn(this);
+        LoadFromConfig();
+        ApplyLabels();
+        UpdatePaletteButton();
+    }
+
+    private void LoadFromConfig()
+    {
+        var cfg = App.Services.Config.Current;
+        var ui = cfg.Ui ?? new UiPreferences();
+        _customPalette = ui.CustomPalette?.Clone()
+                         ?? ThemeService.SeedCustom(ui.CustomAccent, ui.CustomBackground);
+
+        SelectByTag(CmbLang, ui.Locale);
+        SelectByTag(CmbTheme, ui.Theme);
+
+        CmbMonitor.Items.Clear();
+        CmbMonitor.Items.Add(new ComboBoxItem { Content = Loc.T("setup.monitor.primary"), Tag = "" });
+        int sel = 0;
+        int i = 1;
+        foreach (var d in DisplayEngine.GetDisplays())
+        {
+            var label = d.Primary ? $"{d.Friendly} ★" : d.Friendly;
+            CmbMonitor.Items.Add(new ComboBoxItem { Content = $"{label} ({d.DeviceName})", Tag = d.DeviceName });
+            if (string.Equals(d.DeviceName, ui.PreferredDisplayDevice, StringComparison.OrdinalIgnoreCase))
+                sel = i;
+            i++;
+        }
+        CmbMonitor.SelectedIndex = sel;
+
+        ChkAutostart.IsChecked = cfg.StartWithWindows;
+        ChkStartMin.IsChecked = cfg.StartMinimized;
+        ChkNotify.IsChecked = ui.NotifyOnGameStart;
+        ChkBackup.IsChecked = ui.BackupOnSave;
+        ChkTrayClose.IsChecked = ui.MinimizeToTrayOnClose;
+        ChkConfirmDelete.IsChecked = ui.ConfirmDelete;
+        ChkShowActive.IsChecked = ui.ShowActiveInHeader;
+    }
+
+    private void ApplyLabels()
+    {
+        TxtTitle.Text = Loc.T("settings.title");
+        LblAppearance.Text = Loc.T("settings.appearance");
+        LblBehavior.Text = Loc.T("settings.behavior");
+        LblData.Text = Loc.T("settings.data");
+        LblLang.Text = Loc.T("setup.language");
+        LblTheme.Text = Loc.T("setup.theme");
+        LblMonitor.Text = Loc.T("setup.monitor");
+        ChkAutostart.Content = Loc.T("setup.autostart");
+        ChkStartMin.Content = Loc.T("setup.startMin");
+        ChkNotify.Content = Loc.T("setup.notify");
+        ChkBackup.Content = Loc.T("setup.backup");
+        ChkTrayClose.Content = Loc.T("setup.trayClose");
+        ChkConfirmDelete.Content = Loc.Locale == "ru" ? "Подтверждать удаление" : "Confirm before delete";
+        ChkShowActive.Content = Loc.Locale == "ru" ? "Показывать активный профиль в шапке" : "Show active profile in header";
+        BtnEditPalette.Content = Loc.T("setup.editPalette");
+        BtnExport.Content = Loc.T("btn.export");
+        BtnImport.Content = Loc.T("btn.import");
+        BtnCancel.Content = Loc.T("btn.cancel");
+        BtnSave.Content = Loc.T("btn.save");
+        if (CmbTheme.Items[0] is ComboBoxItem d) d.Content = Loc.T("setup.theme.dark");
+        if (CmbTheme.Items[1] is ComboBoxItem light) light.Content = Loc.T("setup.theme.light");
+        if (CmbTheme.Items[2] is ComboBoxItem c) c.Content = Loc.T("setup.theme.custom");
+    }
+
+    private void UpdatePaletteButton()
+    {
+        BtnEditPalette.Visibility = CmbTheme.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static void SelectByTag(System.Windows.Controls.ComboBox cmb, string? tag)
+    {
+        for (int i = 0; i < cmb.Items.Count; i++)
+        {
+            if (cmb.Items[i] is ComboBoxItem it &&
+                string.Equals(it.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
+            {
+                cmb.SelectedIndex = i;
+                return;
+            }
+        }
+        cmb.SelectedIndex = 0;
+    }
+
+    private void Lang_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (CmbLang.SelectedItem is ComboBoxItem lang)
+        {
+            Loc.SetLocale(lang.Tag?.ToString());
+            ApplyLabels();
+        }
+    }
+
+    private void Theme_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        UpdatePaletteButton();
+        var theme = (CmbTheme.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "dark";
+        if (theme == "custom")
+        {
+            _customPalette ??= ThemeService.SeedCustom("#C45C84", "#120E11");
+            ThemeService.ApplyPalette(_customPalette);
+        }
+        else
+        {
+            ThemeService.Apply(new UiPreferences { Theme = theme, Locale = Loc.Locale });
+        }
+    }
+
+    private void EditPalette_Click(object sender, RoutedEventArgs e)
+    {
+        _customPalette ??= ThemeService.SeedCustom("#C45C84", "#120E11");
+        var win = new CustomThemeWindow(_customPalette) { Owner = this };
+        if (win.ShowDialog() == true && win.ResultPalette != null)
+        {
+            _customPalette = win.ResultPalette;
+            ThemeService.ApplyPalette(_customPalette);
+        }
+    }
+
+    private UiPreferences BuildUi()
+    {
+        string? mon = (CmbMonitor.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+        string theme = (CmbTheme.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "dark";
+        var ui = new UiPreferences
+        {
+            Locale = (CmbLang.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "en",
+            Theme = theme,
+            SetupCompleted = true,
+            NotifyOnGameStart = ChkNotify.IsChecked == true,
+            BackupOnSave = ChkBackup.IsChecked == true,
+            MinimizeToTrayOnClose = ChkTrayClose.IsChecked == true,
+            ConfirmDelete = ChkConfirmDelete.IsChecked == true,
+            ShowActiveInHeader = ChkShowActive.IsChecked == true,
+            PreferredDisplayDevice = string.IsNullOrWhiteSpace(mon) ? null : mon
+        };
+        if (theme == "custom")
+        {
+            ui.CustomPalette = (_customPalette ?? ThemeService.SeedCustom("#C45C84", "#120E11")).Clone();
+            ui.CustomAccent = ui.CustomPalette.Accent;
+            ui.CustomBackground = ui.CustomPalette.Bg;
+        }
+        return ui;
+    }
+
+    private void Save_Click(object sender, RoutedEventArgs e)
+    {
+        var cfg = App.Services.Config.Current;
+        cfg.Ui = BuildUi();
+        cfg.StartWithWindows = ChkAutostart.IsChecked == true;
+        cfg.StartMinimized = ChkStartMin.IsChecked == true;
+        Loc.SetLocale(cfg.Ui.Locale);
+        ThemeService.Apply(cfg.Ui);
+        App.Services.Config.Save(cfg);
+
+        var exe = Environment.ProcessPath ?? "";
+        if (!string.IsNullOrWhiteSpace(exe))
+            AutostartService.SetEnabled(cfg.StartWithWindows, exe);
+
+        DialogResult = true;
+        Close();
+    }
+
+    private void Export_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = "JSON (*.json)|*.json",
+            FileName = "dpm-profiles.json"
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            File.Copy(App.Services.Config.ConfigPath, dlg.FileName, true);
+            ThemedDialog.Show(this, Loc.T("toast.exported"));
+        }
+        catch (Exception ex)
+        {
+            ThemedDialog.Show(this, ex.Message);
+        }
+    }
+
+    private void Import_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "JSON (*.json)|*.json" };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            var json = File.ReadAllText(dlg.FileName);
+            var imported = JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+            if (imported == null)
+            {
+                ThemedDialog.Show(this, "Invalid file.");
+                return;
+            }
+
+            imported.Ui ??= App.Services.Config.Current.Ui ?? new UiPreferences();
+            imported.Ui.SetupCompleted = true;
+            imported.ConfigVersion = Math.Max(imported.ConfigVersion, ConfigService.CurrentVersion);
+            App.Services.Config.Save(imported);
+            Imported = true;
+            ThemedDialog.Show(this, Loc.T("toast.imported"));
+            LoadFromConfig();
+            ThemeService.Apply(App.Services.Config.Current.Ui!);
+        }
+        catch (Exception ex)
+        {
+            ThemedDialog.Show(this, ex.Message);
+        }
+    }
+
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
+        Loc.SetLocale(ui.Locale);
+        ThemeService.Apply(ui);
+        DialogResult = false;
+        Close();
+    }
+}

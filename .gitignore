@@ -1,0 +1,11 @@
+bin/
+obj/
+dist/
+Installer/bin/
+Installer/obj/
+Installer/payload/
+*.user
+*.suo
+.vs/
+*.pdb
+_shot*.ps1

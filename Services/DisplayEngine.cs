@@ -1,0 +1,489 @@
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using DisplayProfileManager.Models;
+
+namespace DisplayProfileManager.Services;
+
+/// <summary>
+/// System display / power APIs only (ChangeDisplaySettings, gamma ramp, powercfg).
+/// Never opens game process handles.
+/// </summary>
+public sealed class DisplayEngine
+{
+    private const string PowerHighPerf = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
+    private const string PowerBalanced = "381b4222-f694-41f0-9685-ff5bb260df2e";
+    private static string ResolveQResPath()
+    {
+        var beside = Path.Combine(AppContext.BaseDirectory, "QRes.exe");
+        if (File.Exists(beside)) return beside;
+        var tools = @"C:\Tools\QRes\QRes.exe";
+        if (File.Exists(tools)) return tools;
+        return beside;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool SetDeviceGammaRamp(IntPtr hDC, ref RAMP ramp);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool GetDeviceGammaRamp(IntPtr hDC, ref RAMP ramp);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumDisplaySettings(string? deviceName, int modeNum, ref DEVMODE devMode);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int ChangeDisplaySettingsEx(string? lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, int dwflags, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+
+    private const int ENUM_CURRENT_SETTINGS = -1;
+    private const int CDS_UPDATEREGISTRY = 0x01;
+    private const int DISP_CHANGE_SUCCESSFUL = 0;
+    private const int DM_PELSWIDTH = 0x80000;
+    private const int DM_PELSHEIGHT = 0x100000;
+    private const int DM_DISPLAYFREQUENCY = 0x400000;
+    private const int DM_BITSPERPEL = 0x40000;
+    private const int DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x1;
+    private const int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAY_DEVICE
+    {
+        public int cb;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceString;
+        public int StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceID;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceKey;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DEVMODE
+    {
+        private const int CCHDEVICENAME = 32;
+        private const int CCHFORMNAME = 32;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
+        public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
+        public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RAMP
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
+        public ushort[] Red;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
+        public ushort[] Green;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
+        public ushort[] Blue;
+    }
+
+    private ColorSettings _liveColor = new();
+    private RAMP? _factoryRamp;
+    private bool _hasFactoryRamp;
+
+    public ColorSettings LiveColor => _liveColor.Clone();
+
+    /// <summary>Call once at startup before any ApplyColor — stores OS gamma for RestoreFactory.</summary>
+    public void CaptureFactoryGammaRamp()
+    {
+        var ramp = new RAMP
+        {
+            Red = new ushort[256],
+            Green = new ushort[256],
+            Blue = new ushort[256]
+        };
+        var hdc = GetDC(IntPtr.Zero);
+        try
+        {
+            if (GetDeviceGammaRamp(hdc, ref ramp))
+            {
+                _factoryRamp = CloneRamp(ramp);
+                _hasFactoryRamp = true;
+                AppLog.Info("Factory gamma ramp captured.");
+            }
+        }
+        finally
+        {
+            ReleaseDC(IntPtr.Zero, hdc);
+        }
+    }
+
+    public void ApplyProfile(GameProfile profile, DefaultSettings defaults)
+    {
+        if (profile.ApplyPowerPlan && !string.IsNullOrWhiteSpace(profile.PowerPlan))
+            SetPowerPlan(profile.PowerPlan);
+
+        if (profile.ApplyResolution && !string.IsNullOrWhiteSpace(profile.Resolution))
+        {
+            var device = profile.DisplayDevice
+                         ?? AppConfigPreferredDevice();
+            SetResolution(profile.Resolution!, profile.RefreshRate, device);
+        }
+
+        if (profile.ApplyColor)
+        {
+            _liveColor = profile.Color.Clone();
+            _liveColor.Clamp();
+            ApplyColor(_liveColor);
+        }
+    }
+
+    private static string? AppConfigPreferredDevice()
+    {
+        try
+        {
+            return DisplayProfileManager.App.Services?.Config?.Current?.Ui?.PreferredDisplayDevice;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public void RestoreDefaults(DefaultSettings defaults)
+    {
+        if (!string.IsNullOrWhiteSpace(defaults.PowerPlan))
+            SetPowerPlan(defaults.PowerPlan!);
+
+        if (!string.IsNullOrWhiteSpace(defaults.Resolution))
+            SetResolution(defaults.Resolution!, defaults.RefreshRate);
+
+        _liveColor = defaults.Color.Clone();
+        _liveColor.Clamp();
+        ApplyColor(_liveColor);
+        AppLog.Info($"Restored defaults: res={defaults.Resolution}, power={defaults.PowerPlan}");
+    }
+
+    public void ApplyColor(ColorSettings color)
+    {
+        color.Clamp();
+        _liveColor = color.Clone();
+        var ramp = BuildRamp(color);
+        ApplyRamp(ramp);
+        AppLog.Info($"Color applied: B={color.Brightness:F2} C={color.Contrast:F2} G={color.Gamma:F2}");
+    }
+
+    public void AdjustBrightness(double delta, ColorSettings? fallbackDefaults = null)
+    {
+        var c = _liveColor.Clone();
+        c.Brightness += delta;
+        c.Clamp();
+        ApplyColor(c);
+    }
+
+    public void AdjustContrast(double delta)
+    {
+        var c = _liveColor.Clone();
+        c.Contrast += delta;
+        c.Clamp();
+        ApplyColor(c);
+    }
+
+    public void AdjustGamma(double delta)
+    {
+        var c = _liveColor.Clone();
+        c.Gamma += delta;
+        c.Clamp();
+        ApplyColor(c);
+    }
+
+    public void ResetColor(ColorSettings defaults)
+    {
+        var c = defaults?.Clone() ?? ColorSettings.Neutral;
+        if (c.Brightness < 0.05 || c.Brightness > 0.95)
+            c = ColorSettings.Neutral;
+        ApplyColor(c);
+    }
+
+    public void ResetColorToFactoryOrNeutral(ColorSettings? configured)
+    {
+        if (_hasFactoryRamp && _factoryRamp.HasValue)
+        {
+            ApplyRamp(_factoryRamp.Value);
+            _liveColor = ColorSettings.Neutral;
+            AppLog.Info("Color reset to captured factory ramp.");
+            return;
+        }
+        ResetColor(configured ?? ColorSettings.Neutral);
+    }
+
+    public void ApplyIdentityColor() => ApplyColor(ColorSettings.Neutral);
+
+    public void RestoreFactory(DefaultSettings factory)
+    {
+        var f = factory ?? new DefaultSettings();
+        if (string.IsNullOrWhiteSpace(f.Resolution))
+            f.Resolution = GetCurrentResolution();
+
+        if (!string.IsNullOrWhiteSpace(f.PowerPlan))
+            SetPowerPlan(f.PowerPlan!);
+        if (!string.IsNullOrWhiteSpace(f.Resolution))
+            SetResolution(f.Resolution!, f.RefreshRate);
+
+        if (_hasFactoryRamp && _factoryRamp.HasValue)
+        {
+            ApplyRamp(_factoryRamp.Value);
+            _liveColor = ColorSettings.Neutral;
+        }
+        else
+        {
+            var c = f.Color ?? ColorSettings.Neutral;
+            if (c.Brightness < 0.05 || c.Brightness > 0.95)
+                c = ColorSettings.Neutral;
+            ApplyColor(c);
+        }
+
+        AppLog.Info($"Factory restored: res={f.Resolution}");
+    }
+
+    private void ApplyRamp(RAMP ramp)
+    {
+        var hdc = GetDC(IntPtr.Zero);
+        try
+        {
+            if (!SetDeviceGammaRamp(hdc, ref ramp))
+                AppLog.Error("SetDeviceGammaRamp failed.");
+        }
+        finally
+        {
+            ReleaseDC(IntPtr.Zero, hdc);
+        }
+    }
+
+    private static RAMP CloneRamp(RAMP src) => new()
+    {
+        Red = (ushort[])src.Red.Clone(),
+        Green = (ushort[])src.Green.Clone(),
+        Blue = (ushort[])src.Blue.Clone()
+    };
+
+    private static RAMP BuildRamp(ColorSettings color)
+    {
+        var ramp = new RAMP
+        {
+            Red = new ushort[256],
+            Green = new ushort[256],
+            Blue = new ushort[256]
+        };
+
+        double brightnessOffset = (color.Brightness - 0.5) * 2.0;
+        double contrast = color.Contrast;
+        double gamma = Math.Max(0.01, color.Gamma);
+
+        for (int i = 0; i < 256; i++)
+        {
+            double normalized = i / 255.0;
+            double value = (normalized - 0.5) * contrast + 0.5;
+            value += brightnessOffset * 0.5;
+            value = Math.Pow(Math.Clamp(value, 0.0, 1.0), 1.0 / gamma);
+            value = Math.Clamp(value, 0.0, 1.0);
+            ushort word = (ushort)Math.Clamp((int)(value * 65535.0 + 0.5), 0, 65535);
+            ramp.Red[i] = word;
+            ramp.Green[i] = word;
+            ramp.Blue[i] = word;
+        }
+
+        return ramp;
+    }
+
+    public bool SetResolution(string resolution, int refreshRate = 0, string? deviceName = null)
+    {
+        var parts = resolution.ToLowerInvariant().Split('x');
+        if (parts.Length != 2 ||
+            !int.TryParse(parts[0], out int width) ||
+            !int.TryParse(parts[1], out int height))
+        {
+            AppLog.Error($"Invalid resolution: {resolution}");
+            return false;
+        }
+
+        if (width < 640 || height < 480 || width > 7680 || height > 4320)
+        {
+            AppLog.Error($"Resolution out of range: {resolution}");
+            return false;
+        }
+
+        string? device = string.IsNullOrWhiteSpace(deviceName) ? null : deviceName.Trim();
+
+        var mode = new DEVMODE();
+        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref mode))
+            return SetResolutionViaQRes(width, height);
+
+        mode.dmPelsWidth = width;
+        mode.dmPelsHeight = height;
+        mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+        if (mode.dmBitsPerPel == 0) mode.dmBitsPerPel = 32;
+
+        if (refreshRate > 0)
+        {
+            mode.dmDisplayFrequency = refreshRate;
+            mode.dmFields |= DM_DISPLAYFREQUENCY;
+        }
+
+        int result = ChangeDisplaySettingsEx(device, ref mode, IntPtr.Zero, CDS_UPDATEREGISTRY, IntPtr.Zero);
+        if (result != DISP_CHANGE_SUCCESSFUL)
+        {
+            AppLog.Error($"ChangeDisplaySettingsEx failed ({result}), trying QRes.");
+            return SetResolutionViaQRes(width, height);
+        }
+
+        AppLog.Info($"Resolution → {resolution}" + (refreshRate > 0 ? $"@{refreshRate}" : "")
+                    + (device != null ? $" on {device}" : ""));
+        return true;
+    }
+
+    public static List<(string DeviceName, string Friendly, bool Primary)> GetDisplays()
+    {
+        var list = new List<(string, string, bool)>();
+        uint i = 0;
+        while (true)
+        {
+            var dd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
+            if (!EnumDisplayDevices(null, i, ref dd, 0)) break;
+            i++;
+            if ((dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) == 0) continue;
+            bool primary = (dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
+            string friendly = string.IsNullOrWhiteSpace(dd.DeviceString) ? dd.DeviceName : dd.DeviceString;
+            list.Add((dd.DeviceName, friendly, primary));
+        }
+        return list;
+    }
+
+    private static bool SetResolutionViaQRes(int width, int height)
+    {
+        var qres = ResolveQResPath();
+        if (!File.Exists(qres))
+        {
+            AppLog.Error("QRes.exe not found.");
+            return false;
+        }
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = qres,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add($"/x:{width}");
+            psi.ArgumentList.Add($"/y:{height}");
+
+            using var p = Process.Start(psi);
+            if (p == null) return false;
+            if (!p.WaitForExit(5000))
+            {
+                try { p.Kill(); } catch { }
+                AppLog.Error("QRes timed out.");
+                return false;
+            }
+
+            if (p.ExitCode != 0)
+            {
+                AppLog.Error($"QRes exit code {p.ExitCode}");
+                return false;
+            }
+
+            AppLog.Info($"Resolution via QRes → {width}x{height}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"QRes failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    public void SetPowerPlan(string plan)
+    {
+        string guid = plan.ToLowerInvariant() switch
+        {
+            "highperformance" or "high" or "high_performance" => PowerHighPerf,
+            "balanced" => PowerBalanced,
+            _ when Guid.TryParse(plan, out _) => plan,
+            _ => PowerBalanced
+        };
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powercfg.exe",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add("/setactive");
+            psi.ArgumentList.Add(guid);
+
+            using var p = Process.Start(psi);
+            p?.WaitForExit(5000);
+            AppLog.Info($"Power plan → {plan}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"powercfg failed: {ex.Message}");
+        }
+    }
+
+    public static List<string> GetAvailableResolutions()
+    {
+        var set = new SortedSet<string>(StringComparer.Ordinal);
+        var mode = new DEVMODE();
+        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        int i = 0;
+        while (EnumDisplaySettings(null, i, ref mode))
+        {
+            if (mode.dmPelsWidth >= 800 && mode.dmBitsPerPel >= 32)
+                set.Add($"{mode.dmPelsWidth}x{mode.dmPelsHeight}");
+            i++;
+        }
+        return set.ToList();
+    }
+
+    public static string GetCurrentResolution()
+    {
+        var mode = new DEVMODE();
+        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref mode))
+            return $"{mode.dmPelsWidth}x{mode.dmPelsHeight}";
+        return "1920x1080";
+    }
+}

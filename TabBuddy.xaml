@@ -1,0 +1,12 @@
+<UserControl x:Class="DisplayProfileManager.TabBuddy"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="26" IsHitTestVisible="False"
+             Background="Transparent">
+    <TextBlock x:Name="SysLine"
+               Text="" FontSize="11"
+               Foreground="#7A5E68"
+               VerticalAlignment="Center" HorizontalAlignment="Left"
+               Margin="2,0,2,0" Opacity="0.85"
+               TextTrimming="CharacterEllipsis"/>
+</UserControl>
