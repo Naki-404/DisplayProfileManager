@@ -6,7 +6,7 @@ namespace DisplayProfileManager.Services;
 
 public sealed class ConfigService : IDisposable
 {
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -239,6 +239,26 @@ public sealed class ConfigService : IDisposable
             cfg.ConfigVersion = 6;
             changed = true;
             AppLog.Info("Migrated to v6 (UI preferences).");
+        }
+
+        if (cfg.ConfigVersion < 7)
+        {
+            // Global adjust hotkeys are opt-in (empty by default). Clear old stock bindings.
+            cfg.GlobalHotkeys ??= new GlobalHotkeys();
+            static bool IsStock(string? g, string stock) =>
+                string.Equals(g?.Trim(), stock, StringComparison.OrdinalIgnoreCase);
+            var hk = cfg.GlobalHotkeys;
+            if (IsStock(hk.BrightnessUp, "Ctrl+Alt+Up")) hk.BrightnessUp = null;
+            if (IsStock(hk.BrightnessDown, "Ctrl+Alt+Down")) hk.BrightnessDown = null;
+            if (IsStock(hk.ContrastUp, "Ctrl+Alt+Right")) hk.ContrastUp = null;
+            if (IsStock(hk.ContrastDown, "Ctrl+Alt+Left")) hk.ContrastDown = null;
+            if (IsStock(hk.GammaUp, "Ctrl+Alt+Add")) hk.GammaUp = null;
+            if (IsStock(hk.GammaDown, "Ctrl+Alt+Subtract")) hk.GammaDown = null;
+            if (IsStock(hk.ResetColor, "Ctrl+Alt+NumPad9") || IsStock(hk.ResetColor, "NumPad9"))
+                hk.ResetColor = null;
+            cfg.ConfigVersion = 7;
+            changed = true;
+            AppLog.Info("Migrated to v7 (empty global adjust hotkeys by default).");
         }
 
         cfg.Ui ??= new UiPreferences();

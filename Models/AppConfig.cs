@@ -146,13 +146,13 @@ public sealed class ColorSettings
 
 public sealed class GlobalHotkeys
 {
-    public string? BrightnessUp { get; set; } = "Ctrl+Alt+Up";
-    public string? BrightnessDown { get; set; } = "Ctrl+Alt+Down";
-    public string? ContrastUp { get; set; } = "Ctrl+Alt+Right";
-    public string? ContrastDown { get; set; } = "Ctrl+Alt+Left";
-    public string? GammaUp { get; set; } = "Ctrl+Alt+Add";
-    public string? GammaDown { get; set; } = "Ctrl+Alt+Subtract";
-    public string? ResetColor { get; set; } = "Ctrl+Alt+NumPad9";
+    public string? BrightnessUp { get; set; }
+    public string? BrightnessDown { get; set; }
+    public string? ContrastUp { get; set; }
+    public string? ContrastDown { get; set; }
+    public string? GammaUp { get; set; }
+    public string? GammaDown { get; set; }
+    public string? ResetColor { get; set; }
 }
 
 public sealed class QuickPreset

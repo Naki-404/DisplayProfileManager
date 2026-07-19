@@ -515,13 +515,13 @@ public partial class MainWindow : Window
             cfg.FactoryDefaults = ConfigService.CaptureFactoryDefaults();
         cfg.FactoryDefaults.Color = ColorSettings.Neutral;
 
-        cfg.GlobalHotkeys.BrightnessUp = HkBrightUp.Text.Trim();
-        cfg.GlobalHotkeys.BrightnessDown = HkBrightDown.Text.Trim();
-        cfg.GlobalHotkeys.ContrastUp = HkContrastUp.Text.Trim();
-        cfg.GlobalHotkeys.ContrastDown = HkContrastDown.Text.Trim();
-        cfg.GlobalHotkeys.GammaUp = HkGammaUp.Text.Trim();
-        cfg.GlobalHotkeys.GammaDown = HkGammaDown.Text.Trim();
-        cfg.GlobalHotkeys.ResetColor = HkReset.Text.Trim();
+        cfg.GlobalHotkeys.BrightnessUp = NormHotkey(HkBrightUp.Text);
+        cfg.GlobalHotkeys.BrightnessDown = NormHotkey(HkBrightDown.Text);
+        cfg.GlobalHotkeys.ContrastUp = NormHotkey(HkContrastUp.Text);
+        cfg.GlobalHotkeys.ContrastDown = NormHotkey(HkContrastDown.Text);
+        cfg.GlobalHotkeys.GammaUp = NormHotkey(HkGammaUp.Text);
+        cfg.GlobalHotkeys.GammaDown = NormHotkey(HkGammaDown.Text);
+        cfg.GlobalHotkeys.ResetColor = NormHotkey(HkReset.Text);
 
         cfg.StartWithWindows = ChkAutostart.IsChecked == true;
         cfg.StartMinimized = ChkStartMin.IsChecked == true;
@@ -546,13 +546,28 @@ public partial class MainWindow : Window
         if (_selectedPreset != null) PushPresetEditor();
         Save_Click_Silent();
 
-        if (MainTabs.SelectedIndex == 1 && _selectedPreset != null)
+        // Apply targets the active tab — not whatever game happens to be selected in the list
+        if (ReferenceEquals(MainTabs.SelectedItem, TabGlobal))
         {
-            App.Services.Monitor.ApplyPreset(_selectedPreset);
-            ShowToast($"Applied: {_selectedPreset.Name}");
+            App.Services.Display.RestoreDefaults(App.Services.Config.Current.Defaults);
+            ShowToast("Applied global defaults");
+            SetStatus("Applied global defaults");
             return;
         }
 
+        if (ReferenceEquals(MainTabs.SelectedItem, TabPresets))
+        {
+            if (_selectedPreset != null)
+            {
+                App.Services.Monitor.ApplyPreset(_selectedPreset);
+                ShowToast($"Applied: {_selectedPreset.Name}");
+                return;
+            }
+            ThemedDialog.Show(this, "Select a preset first.", "Apply");
+            return;
+        }
+
+        // Profiles (or other)
         if (_selected != null)
         {
             App.Services.Display.ApplyProfile(_selected, App.Services.Config.Current.Defaults);
@@ -585,13 +600,13 @@ public partial class MainWindow : Window
             cfg.FactoryDefaults = ConfigService.CaptureFactoryDefaults();
         cfg.FactoryDefaults.Color = ColorSettings.Neutral;
 
-        cfg.GlobalHotkeys.BrightnessUp = HkBrightUp.Text.Trim();
-        cfg.GlobalHotkeys.BrightnessDown = HkBrightDown.Text.Trim();
-        cfg.GlobalHotkeys.ContrastUp = HkContrastUp.Text.Trim();
-        cfg.GlobalHotkeys.ContrastDown = HkContrastDown.Text.Trim();
-        cfg.GlobalHotkeys.GammaUp = HkGammaUp.Text.Trim();
-        cfg.GlobalHotkeys.GammaDown = HkGammaDown.Text.Trim();
-        cfg.GlobalHotkeys.ResetColor = HkReset.Text.Trim();
+        cfg.GlobalHotkeys.BrightnessUp = NormHotkey(HkBrightUp.Text);
+        cfg.GlobalHotkeys.BrightnessDown = NormHotkey(HkBrightDown.Text);
+        cfg.GlobalHotkeys.ContrastUp = NormHotkey(HkContrastUp.Text);
+        cfg.GlobalHotkeys.ContrastDown = NormHotkey(HkContrastDown.Text);
+        cfg.GlobalHotkeys.GammaUp = NormHotkey(HkGammaUp.Text);
+        cfg.GlobalHotkeys.GammaDown = NormHotkey(HkGammaDown.Text);
+        cfg.GlobalHotkeys.ResetColor = NormHotkey(HkReset.Text);
 
         cfg.StartWithWindows = ChkAutostart.IsChecked == true;
         cfg.StartMinimized = ChkStartMin.IsChecked == true;
@@ -912,11 +927,33 @@ public partial class MainWindow : Window
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
             return;
-        if (key == Key.Escape) { box.Text = ""; return; }
+        // Clear binding
+        if (key is Key.Escape or Key.Back or Key.Delete)
+        {
+            box.Text = "";
+            _dirty = true;
+            if (box == TxtPresetHotkey && _selectedPreset != null)
+                PushPresetEditor();
+            return;
+        }
         box.Text = HotkeyService.GestureFromKeys(Keyboard.Modifiers, key);
+        _dirty = true;
         if (box == TxtPresetHotkey && _selectedPreset != null)
             PushPresetEditor();
     }
+
+    private void ClearHotkey_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button { Tag: System.Windows.Controls.TextBox box })
+            return;
+        box.Text = "";
+        _dirty = true;
+        if (box == TxtPresetHotkey && _selectedPreset != null)
+            PushPresetEditor();
+    }
+
+    private static string? NormHotkey(string? text)
+        => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     private void RefreshLog_Click(object sender, RoutedEventArgs e)
     {

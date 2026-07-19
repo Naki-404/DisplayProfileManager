@@ -86,7 +86,7 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,4">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="BtnApply" Content="Apply" Style="{StaticResource AccentButton}" Margin="0,0,8,0" Click="Apply_Click"
-                        ToolTip="Apply current profile / selected preset now"/>
+                        ToolTip="Apply Global defaults / selected profile / selected preset (depends on active tab)"/>
                 <Button x:Name="BtnSave" Content="Save" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Save_Click"/>
                 <Button x:Name="BtnReset" Content="Reset settings" Style="{StaticResource GhostButton}" Click="ResetSettings_Click"
                         ToolTip="Restore factory display settings (resolution + neutral color)"/>
@@ -332,30 +332,48 @@
                             <Slider x:Name="SldDefGamma" Minimum="0.3" Maximum="3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
 
                             <Separator/>
-                            <TextBlock Text="Adjustment hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <TextBlock Text="Adjustment hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                            <TextBlock Text="Click a field and press a key combo. Esc / Backspace / Delete or Clear removes it."
+                                       Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="150"/>
                                     <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     <RowDefinition/><RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="Brightness +" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkBrightUp" Margin="0,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkBrightUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"
+                                         ToolTip="Click, then press keys. Empty = disabled."/>
+                                <Button Grid.Row="0" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkBrightUp}"/>
                                 <TextBlock Grid.Row="1" Text="Brightness -" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkBrightDown" Margin="0,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkBrightDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="1" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkBrightDown}"/>
                                 <TextBlock Grid.Row="2" Text="Contrast +" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="HkContrastUp" Margin="0,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="HkContrastUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="2" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkContrastUp}"/>
                                 <TextBlock Grid.Row="3" Text="Contrast -" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="HkContrastDown" Margin="0,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="HkContrastDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="3" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkContrastDown}"/>
                                 <TextBlock Grid.Row="4" Text="Gamma +" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="4" Grid.Column="1" x:Name="HkGammaUp" Margin="0,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="4" Grid.Column="1" x:Name="HkGammaUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="4" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkGammaUp}"/>
                                 <TextBlock Grid.Row="5" Text="Gamma -" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="5" Grid.Column="1" x:Name="HkGammaDown" Margin="0,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="5" Grid.Column="1" x:Name="HkGammaDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="5" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkGammaDown}"/>
                                 <TextBlock Grid.Row="6" Text="Reset color" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="6" Grid.Column="1" x:Name="HkReset" Margin="0,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="6" Grid.Column="1" x:Name="HkReset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="6" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkReset}"/>
                             </Grid>
 
                             <Separator/>
