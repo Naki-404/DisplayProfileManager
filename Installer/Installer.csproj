@@ -15,7 +15,7 @@
     <Product>Display Profile Manager Setup</Product>
     <Company>Nakidev</Company>
     <Authors>Nakidev</Authors>
-    <Copyright>Copyright © Nakidev</Copyright>
+    <Copyright>Copyright (c) Nakidev</Copyright>
     <Description>Installer for Display Profile Manager by Nakidev</Description>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>

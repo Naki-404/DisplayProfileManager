@@ -16,7 +16,7 @@
     <Product>Display Profile Manager</Product>
     <Company>Nakidev</Company>
     <Authors>Nakidev</Authors>
-    <Copyright>Copyright © Nakidev</Copyright>
+    <Copyright>Copyright (c) Nakidev</Copyright>
     <Description>Per-game display profiles by Nakidev</Description>
     <AssemblyTitle>Display Profile Manager</AssemblyTitle>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>

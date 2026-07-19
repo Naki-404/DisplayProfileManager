@@ -27,10 +27,18 @@ if (Test-Path $qres) {
     Copy-Item $qres (Join-Path $publish 'QRes.exe') -Force
 }
 
-Write-Host '== Stage installer payload ==' -ForegroundColor Cyan
+Write-Host '== Stage installer payload (app files only) ==' -ForegroundColor Cyan
 if (Test-Path $payload) { Remove-Item $payload -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $payload | Out-Null
-Copy-Item (Join-Path $publish '*') $payload -Recurse -Force
+# Strict whitelist — never ship screenshots/docs/extra junk
+$appExe = Join-Path $publish 'DisplayProfileManager.exe'
+if (-not (Test-Path $appExe)) { throw "Missing $appExe" }
+Copy-Item $appExe (Join-Path $payload 'DisplayProfileManager.exe') -Force
+$qresOut = Join-Path $publish 'QRes.exe'
+if (Test-Path $qresOut) {
+  Copy-Item $qresOut (Join-Path $payload 'QRes.exe') -Force
+}
+Get-ChildItem $payload | ForEach-Object { '  payload: {0}' -f $_.Name }
 
 Write-Host '== Build Setup.exe ==' -ForegroundColor Cyan
 $setupOut = Join-Path $outSetup 'setup-build'
