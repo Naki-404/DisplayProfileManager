@@ -171,22 +171,28 @@ internal static class InstallerCore
         return null;
     }
 
-    /// <summary>Remove app files, shortcuts, ARP entry. Does not show UI.</summary>
-    internal static void PerformUninstall(bool confirmUi, bool silent)
+    /// <summary>Remove app files, shortcuts, ARP entry. Restores display first. Does not show UI.</summary>
+    internal static void PerformUninstall(bool confirmUi, bool silent, Action<string>? log = null)
     {
         _ = confirmUi;
         var dir = FindInstallLocation() ?? DefaultInstallDir;
 
+        log?.Invoke("Closing Display Profile Manager…");
         try
         {
             foreach (var p in Process.GetProcessesByName("DisplayProfileManager"))
             {
-                try { p.CloseMainWindow(); p.WaitForExit(1500); } catch { }
-                try { if (!p.HasExited) p.Kill(); } catch { }
+                try { p.CloseMainWindow(); p.WaitForExit(2000); } catch { }
+                try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { try { p.Kill(); } catch { } }
             }
+            // brief pause so gamma APIs aren't fighting a dying process
+            Thread.Sleep(400);
         }
         catch { }
 
+        DisplayRestore.RestoreNeutralDisplay(log);
+
+        log?.Invoke("Removing shortcuts…");
         try
         {
             var start = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", AppName + ".lnk");
@@ -196,22 +202,25 @@ internal static class InstallerCore
         }
         catch { }
 
+        log?.Invoke("Unregistering from Apps & Features…");
         try
         {
             Registry.CurrentUser.DeleteSubKeyTree($@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{AppId}", false);
         }
         catch { }
 
+        log?.Invoke("Deleting application files…");
         // Delete everything except the running Uninstall.exe (locked). Rest cleaned by ScheduleSelfCleanup.
         if (Directory.Exists(dir))
         {
-            var self = Environment.ProcessPath ?? "";
+            var self = Path.GetFullPath(Environment.ProcessPath ?? "");
             foreach (var file in Directory.GetFiles(dir))
             {
                 try
                 {
-                    if (string.Equals(file, self, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(Path.GetFullPath(file), self, StringComparison.OrdinalIgnoreCase))
                         continue;
+                    File.SetAttributes(file, FileAttributes.Normal);
                     File.Delete(file);
                 }
                 catch { }
@@ -222,31 +231,44 @@ internal static class InstallerCore
             }
         }
 
-        if (!silent)
-        {
-            // legacy path no longer used — UI shows success animation
-        }
+        log?.Invoke("Finishing…");
+        _ = silent;
     }
 
     /// <summary>After Uninstall.exe exits, remove remaining folder (including itself).</summary>
     internal static void ScheduleSelfCleanup(string? installDir)
     {
-        if (string.IsNullOrWhiteSpace(installDir) || !Directory.Exists(installDir))
+        if (string.IsNullOrWhiteSpace(installDir))
             return;
+
         try
         {
-            var bat = Path.Combine(Path.GetTempPath(), "dpm-uninstall-cleanup.cmd");
-            var lines = new[]
+            var self = Environment.ProcessPath;
+            var bat = Path.Combine(Path.GetTempPath(), $"dpm-cleanup-{Guid.NewGuid():N}.cmd");
+            // ping delay is more reliable than timeout under some locales
+            var lines = new List<string>
             {
                 "@echo off",
-                "timeout /t 2 /nobreak >nul",
-                $"rmdir /s /q \"{installDir}\"",
-                "del \"%~f0\""
+                "ping 127.0.0.1 -n 3 >nul"
             };
+            if (!string.IsNullOrWhiteSpace(self))
+            {
+                lines.Add($"del /f /q \"{self}\" >nul 2>&1");
+            }
+            lines.Add($"rmdir /s /q \"{installDir}\" >nul 2>&1");
+            // second pass if first failed due to locks
+            lines.Add("ping 127.0.0.1 -n 2 >nul");
+            if (!string.IsNullOrWhiteSpace(self))
+                lines.Add($"del /f /q \"{self}\" >nul 2>&1");
+            lines.Add($"rmdir /s /q \"{installDir}\" >nul 2>&1");
+            lines.Add("del \"%~f0\" >nul 2>&1");
+
             File.WriteAllLines(bat, lines);
+
             Process.Start(new ProcessStartInfo
             {
-                FileName = bat,
+                FileName = "cmd.exe",
+                Arguments = $"/c \"{bat}\"",
                 CreateNoWindow = true,
                 UseShellExecute = false,
                 WindowStyle = ProcessWindowStyle.Hidden

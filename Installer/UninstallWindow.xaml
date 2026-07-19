@@ -88,7 +88,7 @@
                      Foreground="{StaticResource TextBrush}"/>
           <TextBlock Margin="0,8,0,0" TextAlignment="Center" HorizontalAlignment="Center"
                      Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
-                     Text="Thanks for trying Display Profile Manager.&#10;made by Nakidev"/>
+                     Text="Display settings restored.&#10;Thanks — made by Nakidev"/>
         </StackPanel>
       </Grid>
     </Grid>

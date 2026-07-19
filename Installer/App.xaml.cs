@@ -28,7 +28,9 @@ public partial class App : System.Windows.Application
         {
             if (silent)
             {
+                var dir = InstallerCore.FindInstallLocation();
                 InstallerCore.PerformUninstall(confirmUi: false, silent: true);
+                InstallerCore.ScheduleSelfCleanup(dir);
                 Shutdown();
                 return;
             }

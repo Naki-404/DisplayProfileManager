@@ -64,9 +64,16 @@ public partial class UninstallWindow : Window
         try
         {
             TxtStatus.Text = "Closing app…";
-            await Task.Delay(200);
-            TxtStatus.Text = "Removing files & shortcuts…";
-            await Task.Run(() => InstallerCore.PerformUninstall(confirmUi: false, silent: true)).ConfigureAwait(true);
+            await Task.Delay(150);
+
+            // Must reset gamma on UI/STA-friendly context; run whole uninstall sequence with live status
+            await Task.Run(() =>
+            {
+                InstallerCore.PerformUninstall(confirmUi: false, silent: true, log: msg =>
+                {
+                    Dispatcher.Invoke(() => TxtStatus.Text = msg);
+                });
+            }).ConfigureAwait(true);
 
             _spin.Stop();
             PanelWork.Visibility = Visibility.Collapsed;
@@ -81,8 +88,8 @@ public partial class UninstallWindow : Window
             CheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, pop);
             CheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, pop.Clone());
 
-            await Task.Delay(2200);
-            // Finish deleting install folder (Uninstall.exe itself) after we exit
+            await Task.Delay(2000);
+            // Delete Uninstall.exe + install folder after this process exits
             InstallerCore.ScheduleSelfCleanup(_installDir);
             System.Windows.Application.Current.Shutdown();
         }
