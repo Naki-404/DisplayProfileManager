@@ -2,29 +2,18 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Windows;
 using Microsoft.Win32;
 
 namespace DisplayProfileManager.Setup;
 
-internal static class Program
+internal static class InstallerCore
 {
     private const string AppName = "Display Profile Manager";
     private const string AppId = "DisplayProfileManager";
     private const string Version = "1.4.0";
+    private const string Publisher = "Nakidev";
     private const string ExeName = "DisplayProfileManager.exe";
-
-    [STAThread]
-    private static void Main(string[] args)
-    {
-        ApplicationConfiguration.Initialize();
-        if (args.Any(a => a.Equals("/uninstall", StringComparison.OrdinalIgnoreCase)))
-        {
-            Uninstall(silent: args.Any(a => a.Equals("/silent", StringComparison.OrdinalIgnoreCase)));
-            return;
-        }
-
-        Application.Run(new SetupForm());
-    }
 
     internal static string DefaultInstallDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", AppId);
@@ -72,6 +61,11 @@ internal static class Program
         if (!File.Exists(exe))
             throw new InvalidOperationException("Payload missing DisplayProfileManager.exe");
 
+        // Clear Mark-of-the-Web so Windows is less likely to nag on first run
+        TryUnblock(exe);
+        var qres = Path.Combine(dir, "QRes.exe");
+        if (File.Exists(qres)) TryUnblock(qres);
+
         log("Registering uninstall…");
         WriteUninstallKey(dir, exe);
 
@@ -110,7 +104,6 @@ internal static class Program
 
         try
         {
-            // stop running instance
             foreach (var p in Process.GetProcessesByName("DisplayProfileManager"))
             {
                 try { p.CloseMainWindow(); p.WaitForExit(1500); } catch { }
@@ -142,12 +135,12 @@ internal static class Program
         catch (Exception ex)
         {
             if (!silent)
-                MessageBox.Show("Could not remove all files:\n" + ex.Message, AppName);
+                System.Windows.MessageBox.Show("Could not remove all files:\n" + ex.Message, AppName);
             return;
         }
 
         if (!silent)
-            MessageBox.Show(AppName + " was uninstalled.", AppName);
+            System.Windows.MessageBox.Show(AppName + " was uninstalled.", AppName);
     }
 
     private static void ExtractPayload(string dir)
@@ -161,7 +154,6 @@ internal static class Program
 
         foreach (var name in names)
         {
-            // Embedded as Installer.payload.DisplayProfileManager.exe etc.
             var marker = ".payload.";
             var idx = name.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
             var relative = idx >= 0 ? name[(idx + marker.Length)..] : Path.GetFileName(name);
@@ -171,6 +163,7 @@ internal static class Program
             using var src = asm.GetManifestResourceStream(name)!;
             using var dst = File.Create(dest);
             src.CopyTo(dst);
+            TryUnblock(dest);
         }
     }
 
@@ -179,7 +172,7 @@ internal static class Program
         using var key = Registry.CurrentUser.CreateSubKey($@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{AppId}")!;
         key.SetValue("DisplayName", AppName);
         key.SetValue("DisplayVersion", Version);
-        key.SetValue("Publisher", AppName);
+        key.SetValue("Publisher", Publisher);
         key.SetValue("InstallLocation", dir);
         key.SetValue("DisplayIcon", exe);
         key.SetValue("UninstallString", $"\"{Path.Combine(dir, "Uninstall.exe")}\" /uninstall");
@@ -194,25 +187,36 @@ internal static class Program
         }
         catch { }
 
-        // Copy this setup as Uninstall.exe beside the app
         var self = Environment.ProcessPath!;
         var uninst = Path.Combine(dir, "Uninstall.exe");
         File.Copy(self, uninst, true);
+        TryUnblock(uninst);
     }
 
     private static void CreateShortcut(string lnkPath, string target, string workDir)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(lnkPath)!);
-        // WScript.Shell COM — no extra deps
         var shellType = Type.GetTypeFromProgID("WScript.Shell")
             ?? throw new InvalidOperationException("WScript.Shell unavailable");
         dynamic shell = Activator.CreateInstance(shellType)!;
         var sc = shell.CreateShortcut(lnkPath);
         sc.TargetPath = target;
         sc.WorkingDirectory = workDir;
-        sc.Description = AppName;
+        sc.Description = AppName + " by " + Publisher;
         sc.Save();
         Marshal.FinalReleaseComObject(sc);
         Marshal.FinalReleaseComObject(shell);
+    }
+
+    /// <summary>Remove Zone.Identifier ADS (Mark of the Web) when present.</summary>
+    private static void TryUnblock(string path)
+    {
+        try
+        {
+            var zone = path + ":Zone.Identifier";
+            if (File.Exists(zone))
+                File.Delete(zone);
+        }
+        catch { /* ignore */ }
     }
 }

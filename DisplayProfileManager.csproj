@@ -14,8 +14,11 @@
     <FileVersion>1.4.0.0</FileVersion>
     <InformationalVersion>1.4.0</InformationalVersion>
     <Product>Display Profile Manager</Product>
-    <Company>Display Profile Manager</Company>
-    <Description>Per-game display profiles</Description>
+    <Company>Nakidev</Company>
+    <Authors>Nakidev</Authors>
+    <Copyright>Copyright © Nakidev</Copyright>
+    <Description>Per-game display profiles by Nakidev</Description>
+    <AssemblyTitle>Display Profile Manager</AssemblyTitle>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
     <DebugType>embedded</DebugType>
     <DefaultItemExcludes>$(DefaultItemExcludes);Installer\**;dist\**;obj\**;bin\**</DefaultItemExcludes>

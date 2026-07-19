@@ -51,6 +51,13 @@ if (Test-Path $portable) { Remove-Item $portable -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $portable | Out-Null
 Copy-Item (Join-Path $publish '*') $portable -Force
 
+# Clear Mark-of-the-Web on local artifacts (SmartScreen is quieter without Zone.Identifier)
+Get-ChildItem $outSetup -Recurse -Include '*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
+  try { Unblock-File -Path $_.FullName -ErrorAction SilentlyContinue } catch {}
+  $zone = $_.FullName + ':Zone.Identifier'
+  if (Test-Path $zone) { Remove-Item $zone -Force -ErrorAction SilentlyContinue }
+}
+
 Write-Host ''
 Write-Host 'Done.' -ForegroundColor Green
 Get-ChildItem $publish | ForEach-Object { '  app: {0,8:N1} KB  {1}' -f ($_.Length/1KB), $_.Name }
@@ -58,3 +65,6 @@ Get-ChildItem $final | ForEach-Object { '  setup:{0,8:N1} KB  {1}' -f ($_.Length
 Write-Host ''
 Write-Host "Installer: $final"
 Write-Host "Portable:  $portable"
+Write-Host ''
+Write-Host 'Note: SmartScreen "Unknown publisher" is fully removed only with a paid Authenticode certificate.' -ForegroundColor DarkYellow
+Write-Host 'Author/publisher metadata is set to Nakidev. Local builds are Unblock-File cleaned.'

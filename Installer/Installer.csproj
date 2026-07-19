@@ -3,12 +3,20 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net6.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>DisplayProfileManager-Setup</AssemblyName>
     <RootNamespace>DisplayProfileManager.Setup</RootNamespace>
     <ApplicationIcon>..\Assets\app.ico</ApplicationIcon>
     <Version>1.4.0</Version>
+    <FileVersion>1.4.0.0</FileVersion>
+    <InformationalVersion>1.4.0</InformationalVersion>
+    <Product>Display Profile Manager Setup</Product>
+    <Company>Nakidev</Company>
+    <Authors>Nakidev</Authors>
+    <Copyright>Copyright © Nakidev</Copyright>
+    <Description>Installer for Display Profile Manager by Nakidev</Description>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -17,6 +25,7 @@
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="..\Assets\app.ico" Link="Assets\app.ico" />
     <EmbeddedResource Include="payload\**\*" Condition="Exists('payload')" />
   </ItemGroup>
 </Project>
