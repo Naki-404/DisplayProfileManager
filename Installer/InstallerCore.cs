@@ -144,17 +144,38 @@ internal static class InstallerCore
         log?.Invoke("Installation complete.");
     }
 
-    internal static void Uninstall(bool silent)
+    internal static string? FindInstallLocation()
     {
-        string? dir = null;
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey($@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{AppId}");
-            dir = key?.GetValue("InstallLocation") as string;
+            var dir = key?.GetValue("InstallLocation") as string;
+            if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+                return dir;
         }
         catch { }
 
-        dir ??= DefaultInstallDir;
+        if (Directory.Exists(DefaultInstallDir))
+            return DefaultInstallDir;
+
+        // Fallback: folder next to this Uninstall.exe
+        try
+        {
+            var beside = Path.GetDirectoryName(Environment.ProcessPath);
+            if (!string.IsNullOrWhiteSpace(beside) &&
+                File.Exists(Path.Combine(beside, ExeName)))
+                return beside;
+        }
+        catch { }
+
+        return null;
+    }
+
+    /// <summary>Remove app files, shortcuts, ARP entry. Does not show UI.</summary>
+    internal static void PerformUninstall(bool confirmUi, bool silent)
+    {
+        _ = confirmUi;
+        var dir = FindInstallLocation() ?? DefaultInstallDir;
 
         try
         {
@@ -181,21 +202,61 @@ internal static class InstallerCore
         }
         catch { }
 
-        try
+        // Delete everything except the running Uninstall.exe (locked). Rest cleaned by ScheduleSelfCleanup.
+        if (Directory.Exists(dir))
         {
-            if (Directory.Exists(dir))
-                Directory.Delete(dir, true);
-        }
-        catch (Exception ex)
-        {
-            if (!silent)
-                System.Windows.MessageBox.Show("Could not remove all files:\n" + ex.Message, AppName);
-            return;
+            var self = Environment.ProcessPath ?? "";
+            foreach (var file in Directory.GetFiles(dir))
+            {
+                try
+                {
+                    if (string.Equals(file, self, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    File.Delete(file);
+                }
+                catch { }
+            }
+            foreach (var sub in Directory.GetDirectories(dir))
+            {
+                try { Directory.Delete(sub, true); } catch { }
+            }
         }
 
         if (!silent)
-            System.Windows.MessageBox.Show(AppName + " was uninstalled.", AppName);
+        {
+            // legacy path no longer used — UI shows success animation
+        }
     }
+
+    /// <summary>After Uninstall.exe exits, remove remaining folder (including itself).</summary>
+    internal static void ScheduleSelfCleanup(string? installDir)
+    {
+        if (string.IsNullOrWhiteSpace(installDir) || !Directory.Exists(installDir))
+            return;
+        try
+        {
+            var bat = Path.Combine(Path.GetTempPath(), "dpm-uninstall-cleanup.cmd");
+            var lines = new[]
+            {
+                "@echo off",
+                "timeout /t 2 /nobreak >nul",
+                $"rmdir /s /q \"{installDir}\"",
+                "del \"%~f0\""
+            };
+            File.WriteAllLines(bat, lines);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = bat,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+        }
+        catch { }
+    }
+
+    [Obsolete("Use PerformUninstall + UninstallWindow")]
+    internal static void Uninstall(bool silent) => PerformUninstall(confirmUi: false, silent: silent);
 
     private static List<string> ExtractPayloadWhitelisted(string dir)
     {

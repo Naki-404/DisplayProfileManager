@@ -149,13 +149,6 @@ public partial class SetupWindow : Window
             StopInstallAnimations();
             SetStatus("Done — registered in Apps & Features.");
 
-            var pulse = new DoubleAnimation(1, 0.55, TimeSpan.FromMilliseconds(160))
-            {
-                AutoReverse = true,
-                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
-            };
-            BtnInstall.BeginAnimation(OpacityProperty, pulse);
-
             if (launch)
             {
                 var exe = Path.Combine(target, "DisplayProfileManager.exe");
@@ -167,8 +160,9 @@ public partial class SetupWindow : Window
                 });
             }
 
-            await Task.Delay(450);
-            Close();
+            await ShowSuccessAndCloseAsync(
+                "Installed successfully",
+                "Thank you for installing Display Profile Manager.\nEnjoy — made by Nakidev");
         }
         catch (Exception ex)
         {
@@ -181,5 +175,28 @@ public partial class SetupWindow : Window
             BtnInstall.IsEnabled = true;
             BtnCancel.IsEnabled = true;
         }
+    }
+
+    private async Task ShowSuccessAndCloseAsync(string title, string body)
+    {
+        TxtSuccessTitle.Text = title;
+        TxtSuccessBody.Text = body;
+        SuccessOverlay.Visibility = Visibility.Visible;
+
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        SuccessOverlay.BeginAnimation(OpacityProperty, fade);
+
+        var pop = new DoubleAnimation(0.5, 1, TimeSpan.FromMilliseconds(420))
+        {
+            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.45 }
+        };
+        SuccessCheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, pop);
+        SuccessCheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, pop.Clone());
+
+        await Task.Delay(2400);
+        Close();
     }
 }
