@@ -89,7 +89,8 @@ public static class GameCatalog
                 ApplyColor = true,
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
-                Color = new ColorSettings { Brightness = 0.55, Contrast = 1.15, Gamma = 0.9 },
+                // Default = RivaTuner gamma-1 via Low Level
+                Color = ColorSettings.FromRivaTuner(0, 10, 1.5),
                 Companions = File.Exists(riva)
                     ? new List<CompanionApp>
                     {
@@ -104,7 +105,8 @@ public static class GameCatalog
                             MinimizeToTray = true
                         }
                     }
-                    : new List<CompanionApp>()
+                    : new List<CompanionApp>(),
+                Presets = CreateTarkovRivaPresets()
             },
         };
     }
@@ -148,27 +150,74 @@ public static class GameCatalog
             Color = ColorSettings.Neutral
         };
 
-        if (string.Equals(profile.ProcessName, "EscapeFromTarkov.exe", StringComparison.OrdinalIgnoreCase)
-            && File.Exists(riva))
+        if (string.Equals(profile.ProcessName, "EscapeFromTarkov.exe", StringComparison.OrdinalIgnoreCase))
         {
             profile.ApplyColor = true;
-            profile.Color = new ColorSettings { Brightness = 0.55, Contrast = 1.15, Gamma = 0.9 };
-            profile.Companions.Add(new CompanionApp
+            profile.Color = ColorSettings.FromRivaTuner(0, 10, 1.5);
+            profile.Presets = CreateTarkovRivaPresets();
+            if (File.Exists(riva))
             {
-                Path = riva,
-                LaunchMode = "scheduledTask",
-                TaskName = "GameResolution-RivaTuner",
-                OnStop = "closeThenKill",
-                StopHotkey = null,
-                DismissDialogs = true,
-                MinimizeToTray = true
-            });
+                profile.Companions.Add(new CompanionApp
+                {
+                    Path = riva,
+                    LaunchMode = "scheduledTask",
+                    TaskName = "GameResolution-RivaTuner",
+                    OnStop = "closeThenKill",
+                    StopHotkey = null,
+                    DismissDialogs = true,
+                    MinimizeToTray = true
+                });
+            }
         }
 
         return profile;
     }
 
-    private static string Normalize(string processName)
+    /// <summary>
+    /// Color schemes from the user's RivaTuner (gamma-1 / gamma-2 / Night),
+    /// converted B/C/G → DPM and applied via Low Level backend.
+    /// </summary>
+    public static List<QuickPreset> CreateTarkovRivaPresets() => new()
+    {
+        new()
+        {
+            Id = "tarkov_gamma1",
+            Name = "gamma-1",
+            Hotkey = "Ctrl+Alt+NumPad1",
+            ApplyColor = true,
+            Color = ColorSettings.FromRivaTuner(0, 10, 1.5),
+            ApplyResolution = false
+        },
+        new()
+        {
+            Id = "tarkov_gamma2",
+            Name = "gamma-2",
+            Hotkey = "Ctrl+Alt+NumPad2",
+            ApplyColor = true,
+            Color = ColorSettings.FromRivaTuner(-35, 5, 3.0),
+            ApplyResolution = false
+        },
+        new()
+        {
+            Id = "tarkov_night",
+            Name = "Night",
+            Hotkey = "Ctrl+Alt+NumPad3",
+            ApplyColor = true,
+            Color = ColorSettings.FromRivaTuner(-16, 5, 3.0),
+            ApplyResolution = false
+        },
+        new()
+        {
+            Id = "tarkov_neutral",
+            Name = "Neutral",
+            Hotkey = "Ctrl+Alt+NumPad0",
+            ApplyColor = true,
+            Color = ColorSettings.Neutral,
+            ApplyResolution = false
+        },
+    };
+
+    public static string Normalize(string processName)
     {
         processName = processName.Trim();
         if (!processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))

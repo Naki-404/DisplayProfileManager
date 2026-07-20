@@ -57,6 +57,7 @@ public partial class SettingsWindow : Window
 
     private void ApplyLabels()
     {
+        Title = Loc.T("settings.title");
         TxtTitle.Text = Loc.T("settings.title");
         LblAppearance.Text = Loc.T("settings.appearance");
         LblBehavior.Text = Loc.T("settings.behavior");
@@ -69,16 +70,35 @@ public partial class SettingsWindow : Window
         ChkNotify.Content = Loc.T("setup.notify");
         ChkBackup.Content = Loc.T("setup.backup");
         ChkTrayClose.Content = Loc.T("setup.trayClose");
-        ChkConfirmDelete.Content = Loc.Locale == "ru" ? "Подтверждать удаление" : "Confirm before delete";
-        ChkShowActive.Content = Loc.Locale == "ru" ? "Показывать активный профиль в шапке" : "Show active profile in header";
+        ChkConfirmDelete.Content = Loc.T("settings.confirmDelete");
+        ChkShowActive.Content = Loc.T("settings.showActive");
         BtnEditPalette.Content = Loc.T("setup.editPalette");
         BtnExport.Content = Loc.T("btn.export");
         BtnImport.Content = Loc.T("btn.import");
         BtnCancel.Content = Loc.T("btn.cancel");
         BtnSave.Content = Loc.T("btn.save");
-        if (CmbTheme.Items[0] is ComboBoxItem d) d.Content = Loc.T("setup.theme.dark");
-        if (CmbTheme.Items[1] is ComboBoxItem light) light.Content = Loc.T("setup.theme.light");
-        if (CmbTheme.Items[2] is ComboBoxItem c) c.Content = Loc.T("setup.theme.custom");
+        if (CmbTheme.Items.Count > 0 && CmbTheme.Items[0] is ComboBoxItem d) d.Content = Loc.T("setup.theme.dark");
+        if (CmbTheme.Items.Count > 1 && CmbTheme.Items[1] is ComboBoxItem light) light.Content = Loc.T("setup.theme.light");
+        if (CmbTheme.Items.Count > 2 && CmbTheme.Items[2] is ComboBoxItem c) c.Content = Loc.T("setup.theme.custom");
+
+        // Refresh "Primary" label in monitor list without losing selection
+        if (CmbMonitor.Items.Count > 0 && CmbMonitor.Items[0] is ComboBoxItem primary)
+            primary.Content = Loc.T("setup.monitor.primary");
+    }
+
+    private void Lang_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (CmbLang.SelectedItem is ComboBoxItem lang)
+        {
+            Loc.SetLocale(lang.Tag?.ToString());
+            ApplyLabels();
+            // Also refresh main window immediately while settings dialog is open
+            if (Owner is MainWindow mw)
+                mw.ApplyLocalization();
+            if (System.Windows.Application.Current is App app)
+                app.RebuildTrayMenu();
+        }
     }
 
     private void UpdatePaletteButton()
@@ -98,16 +118,6 @@ public partial class SettingsWindow : Window
             }
         }
         cmb.SelectedIndex = 0;
-    }
-
-    private void Lang_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (!IsLoaded) return;
-        if (CmbLang.SelectedItem is ComboBoxItem lang)
-        {
-            Loc.SetLocale(lang.Tag?.ToString());
-            ApplyLabels();
-        }
     }
 
     private void Theme_Changed(object sender, SelectionChangedEventArgs e)

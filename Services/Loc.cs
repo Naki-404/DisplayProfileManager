@@ -13,12 +13,14 @@ public static class Loc
         ["btn.apply"] = ("Apply", "Применить"),
         ["btn.save"] = ("Save", "Сохранить"),
         ["btn.reset"] = ("Reset settings", "Сброс настроек"),
-        ["btn.preview"] = ("Preview 5s", "Превью 5с"),
-        ["btn.scan"] = ("Scan games", "Сканировать"),
-        ["btn.addManual"] = ("Add manually", "Добавить вручную"),
-        ["btn.restore"] = ("Restore my games", "Восстановить игры"),
+        ["btn.preview"] = ("Preview", "Превью"),
+        ["btn.compareAb"] = ("A/B", "A/B"),
+        ["btn.scan"] = ("Scan", "Скан"),
+        ["btn.addManual"] = ("Add", "Добавить"),
+        ["btn.restore"] = ("Restore games", "Восстановить"),
         ["btn.dup"] = ("Dup", "Копия"),
         ["btn.delete"] = ("Delete", "Удалить"),
+        ["btn.add"] = ("Add", "Добавить"),
         ["btn.settings"] = ("Settings", "Настройки"),
         ["btn.import"] = ("Import…", "Импорт…"),
         ["btn.export"] = ("Export…", "Экспорт…"),
@@ -63,17 +65,77 @@ public static class Loc
         ["settings.behavior"] = ("Behavior", "Поведение"),
         ["settings.data"] = ("Data", "Данные"),
         ["settings.saved"] = ("Settings saved", "Настройки сохранены"),
+        ["settings.confirmDelete"] = ("Confirm before delete", "Подтверждать удаление"),
+        ["settings.showActive"] = ("Show active profile in header", "Показывать активный профиль в шапке"),
         ["toast.game"] = ("Profile applied", "Профиль применён"),
-        ["toast.preview"] = ("Preview — reverting in 5s…", "Превью — откат через 5с…"),
+        ["toast.preview"] = ("Color preview applied — use A/B to compare with factory", "Превью цвета — A/B сравнивает с заводским"),
         ["toast.previewDone"] = ("Preview ended", "Превью завершено"),
+        ["toast.ab.preview"] = ("A/B: Preview", "A/B: Превью"),
+        ["toast.ab.factory"] = ("A/B: Factory", "A/B: Заводской"),
+        ["toast.crash.restored"] = ("Restored after crash", "Восстановлено после сбоя"),
+        ["toast.health"] = ("GPU: {0}", "GPU: {0}"),
         ["toast.imported"] = ("Profiles imported", "Профили импортированы"),
         ["toast.exported"] = ("Profiles exported", "Профили экспортированы"),
         ["toast.saved"] = ("Saved", "Сохранено"),
         ["confirm.delete"] = ("Delete this profile?", "Удалить этот профиль?"),
+        ["hotkey.compareAb"] = ("A/B compare", "Сравнить A/B"),
         ["display"] = ("Display", "Дисплей"),
         ["profile"] = ("Profile", "Профиль"),
         ["enabled"] = ("Enabled", "Включено"),
         ["alreadyRunning"] = ("Display Profile Manager is already running.", "Display Profile Manager уже запущен."),
+
+        // Profile editor / color
+        ["color.backend"] = ("Color backend", "Способ цвета"),
+        ["color.lock"] = ("Lock color while game is running", "Удерживать цвет, пока игра запущена"),
+        ["color.lock.tip"] = ("Re-applies gamma every 0.5–2s so the game cannot reset it.", "Периодически заново ставит гамму, чтобы игра её не сбрасывала."),
+        ["color.backend.tip"] = (
+            "Left: NVIDIA/AMD Control Panel–style B/C/G + Digital Vibrance. Right: Low Level — full RivaTuner B/C/G ramp.",
+            "Слева: B/C/G как в панели NVIDIA/AMD + Digital Vibrance. Справа: Low Level — полная рампа RivaTuner B/C/G."),
+        ["color.apply"] = ("Apply color with this profile", "Применять цвет с этим профилем"),
+        ["color.apply.tip"] = ("When enabled, brightness / contrast / gamma / vibrance from this profile are applied when the game starts.", "Если включено, яркость / контраст / гамма / vibrance из профиля применяются при старте игры."),
+        ["color.brightness.tip"] = ("RivaTuner Brightness (−125..125). Added in 8-bit space before contrast/gamma.", "Яркость RivaTuner (−125..125). Добавляется в 8-битном пространстве до контраста/гаммы."),
+        ["color.vibrance.tip"] = ("Color saturation. On NVIDIA/AMD uses driver vibrance; ignored by the Low Level ramp.", "Насыщенность. На NVIDIA/AMD — vibrance драйвера; на рампу Low Level не влияет."),
+        ["color.shadow.tip"] = ("Extra lift on dark tones after the RT curve (not in classic RivaTuner).", "Доп. подъём теней после кривой RT (в классическом RivaTuner нет)."),
+        ["display.res.tip"] = ("Switch the selected monitor to this resolution while the game runs, then restore on exit.", "Переключает выбранный монитор на это разрешение на время игры и возвращает назад при выходе."),
+        ["display.power.tip"] = ("Switch Windows power plan (High performance / Balanced) while the game runs.", "Переключает схему электропитания Windows (высокая производительность / сбалансированная) на время игры."),
+        ["companions.tip"] = ("Extra programs launched with the game (optional args, e.g. Overwolf -launchapp …). Closed when the game exits if configured.", "Доп. программы при старте игры (можно указать аргументы, напр. Overwolf -launchapp …). При выходе могут закрываться."),
+        ["btn.apply.tip"] = ("Apply to the display for the current tab. Settings autosave as you edit — no Save button.", "Применить к экрану для текущей вкладки. Настройки сохраняются сами при изменении — кнопки Save нет."),
+        ["toast.applied"] = ("Applied", "Применено"),
+        ["toast.preset.hotkey"] = ("Preset hotkey applied", "Пресет по хоткею применён"),
+        ["toast.global.kept.preset"] = ("Global saved — active preset kept on screen", "Global сохранён — активный пресет на экране не тронут"),
+        ["btn.reset.tip"] = ("Restore factory display settings (native resolution + neutral color).", "Вернуть заводские настройки дисплея (родное разрешение + нейтральный цвет)."),
+        ["presets.export.tip"] = ("Share this game’s preset pack as a file others can import.", "Сохранить набор пресетов этой игры в файл для передачи."),
+        ["presets.import.tip"] = ("Load a preset pack file into the selected game.", "Загрузить файл с пресетами в выбранную игру."),
+        ["global.autostart.tip"] = ("Create a scheduled task so the app starts when you sign in to Windows.", "Создаёт задачу планировщика, чтобы приложение запускалось при входе в Windows."),
+        ["global.startmin.tip"] = ("Start hidden in the system tray instead of showing the main window.", "Запускать свёрнутым в трей, без показа главного окна."),
+
+        // Session extras
+        ["session.title"] = ("Session extras", "Дополнительно на сессию"),
+        ["session.sub"] = ("System-only tweaks (no game injection)", "Только системные настройки (без вмешательства в игру)"),
+        ["session.deferred"] = ("Deferred re-apply: {0} s", "Повторное применение через: {0} с"),
+        ["session.deferred.tip"] = ("Wait N seconds after game start, then apply display/color again. Helps when a launcher overwrites settings.", "Подождать N секунд после старта игры и снова применить цвет/разрешение. Полезно, если лаунчер перебивает настройки."),
+        ["session.quiet"] = ("Quiet notifications", "Тихие уведомления"),
+        ["session.quiet.tip"] = ("Turns off Windows toast notifications while the game runs (Focus Assist–style). Restored when the game exits.", "Отключает всплывающие уведомления Windows на время игры (как Focus Assist). После выхода из игры возвращает обратно."),
+        ["session.night"] = ("Disable Night Light", "Отключить Night Light"),
+        ["session.night.tip"] = ("Tries to turn off Windows blue-light filter (Night Light) so colors stay predictable in dark scenes.", "Пытается выключить фильтр синего света Windows (Night Light), чтобы картинка в тенях была предсказуемой."),
+        ["session.hdr"] = ("Disable Auto HDR", "Отключить Auto HDR"),
+        ["session.hdr.tip"] = ("Turns off Windows Auto HDR for games so SDR color presets are not altered.", "Отключает Auto HDR Windows для игр, чтобы SDR-пресеты цвета не искажались."),
+        ["session.primary"] = ("Primary monitor only", "Только основной монитор"),
+        ["session.primary.tip"] = ("Temporarily disables extra monitors while the game runs. Restored on exit.", "Временно отключает дополнительные мониторы на время игры. После выхода восстанавливает."),
+        ["session.bright"] = ("Set monitor brightness (DDC/CI)", "Яркость монитора (DDC/CI)"),
+        ["session.bright.lbl"] = ("Panel brightness: {0}%", "Яркость панели: {0}%"),
+        ["session.bright.tip"] = ("Changes the monitor’s own backlight via DDC/CI (not gamma). Needs a compatible cable/monitor.", "Меняет подсветку самого монитора через DDC/CI (не гамму). Нужен поддерживаемый монитор/кабель."),
+        ["session.audio"] = ("Switch default audio device", "Сменить устройство звука"),
+        ["session.audio.tip"] = ("Switches the Windows default playback device for this profile (e.g. headset). Restored on exit.", "Переключает устройство воспроизведения Windows по умолчанию (например наушники). После выхода возвращает."),
+        ["session.scaling"] = ("Scaling mode", "Масштабирование"),
+        ["session.scaling.tip"] = ("How a non-native resolution is shown: default, stretch, or center (letterbox).", "Как показывать неродное разрешение: по умолчанию, растянуть или по центру."),
+        ["presets.export"] = ("Export", "Экспорт"),
+        ["presets.import"] = ("Import", "Импорт"),
+        ["unsaved.title"] = ("Unsaved changes", "Несохранённые изменения"),
+        ["unsaved.message"] = ("You have unsaved changes. Save them before continuing?", "Есть несохранённые изменения. Сохранить перед продолжением?"),
+        ["unsaved.save"] = ("Save", "Сохранить"),
+        ["unsaved.discard"] = ("Don't save", "Не сохранять"),
+        ["unsaved.cancel"] = ("Cancel", "Отмена"),
     };
 
     public static string Locale => _locale;
@@ -83,9 +145,17 @@ public static class Loc
     public static void SetLocale(string? locale)
     {
         var next = string.Equals(locale, "ru", StringComparison.OrdinalIgnoreCase) ? "ru" : "en";
-        if (_locale == next) return;
+        bool changed = _locale != next;
         _locale = next;
-        Changed?.Invoke();
+        if (changed)
+            Changed?.Invoke();
+    }
+
+    /// <summary>Format Loc.T key that contains {0} placeholders.</summary>
+    public static string Tf(string key, params object[] args)
+    {
+        try { return string.Format(T(key), args); }
+        catch { return T(key); }
     }
 
     public static string T(string key)

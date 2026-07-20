@@ -34,6 +34,12 @@ public sealed class DisplayEngine
     [DllImport("gdi32.dll")]
     private static extern bool GetDeviceGammaRamp(IntPtr hDC, ref RAMP ramp);
 
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateDC(string lpszDriver, string? lpszDevice, string? lpszOutput, IntPtr lpInitData);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern bool EnumDisplaySettings(string? deviceName, int modeNum, ref DEVMODE devMode);
 
@@ -113,8 +119,61 @@ public sealed class DisplayEngine
     private ColorSettings _liveColor = new();
     private RAMP? _factoryRamp;
     private bool _hasFactoryRamp;
+    private readonly DriverColorService _driverColor = new();
 
     public ColorSettings LiveColor => _liveColor.Clone();
+    public string DriverVendor => _driverColor.ActiveVendor;
+
+    private ColorSettings? _abPreview;
+    private bool _abShowingFactory;
+
+    /// <summary>Identity gamma + driver reset after a dirty shutdown (do not capture bad ramp as factory).</summary>
+    public void RestoreCrashSafe()
+    {
+        try { _driverColor.ResetDriverToNeutral(); }
+        catch (Exception ex) { AppLog.Error("Crash-safe driver reset: " + ex.Message); }
+
+        var ramp = new RAMP
+        {
+            Red = new ushort[256],
+            Green = new ushort[256],
+            Blue = new ushort[256]
+        };
+        LowLevelColorRamp.FillIdentity(ramp.Red, ramp.Green, ramp.Blue);
+        ApplyRamp(ramp);
+        _liveColor = ColorSettings.Neutral;
+        _abPreview = null;
+        _abShowingFactory = false;
+        AppLog.Info("Crash-safe restore: identity gamma + driver neutral.");
+    }
+
+    /// <summary>Apply color for UI live preview (does not touch profiles).</summary>
+    public void PreviewColor(ColorSettings color)
+    {
+        _abPreview = color.Clone();
+        _abShowingFactory = false;
+        ApplyColor(color);
+    }
+
+    /// <summary>Toggle between last preview and factory/identity ramp. Returns false if no preview yet.</summary>
+    public bool ToggleAbCompare()
+    {
+        if (_abPreview == null) return false;
+        if (_abShowingFactory)
+        {
+            ApplyColor(_abPreview);
+            _abShowingFactory = false;
+        }
+        else
+        {
+            ApplyNeutralOrFactoryRamp();
+            _abShowingFactory = true;
+        }
+        return true;
+    }
+
+    public bool IsAbShowingFactory => _abShowingFactory;
+    public bool HasAbPreview => _abPreview != null;
 
     /// <summary>Call once at startup before any ApplyColor — stores OS gamma for RestoreFactory.</summary>
     public void CaptureFactoryGammaRamp()
@@ -139,6 +198,9 @@ public sealed class DisplayEngine
         {
             ReleaseDC(IntPtr.Zero, hdc);
         }
+
+        // Baseline for vibrance restore — only at startup / after crash-safe, not on Low Level applies.
+        _driverColor.CaptureBaselineIfNeeded();
     }
 
     public void ApplyProfile(GameProfile profile, DefaultSettings defaults)
@@ -181,6 +243,7 @@ public sealed class DisplayEngine
         if (!string.IsNullOrWhiteSpace(defaults.Resolution))
             SetResolution(defaults.Resolution!, defaults.RefreshRate);
 
+        _driverColor.RestoreBaseline();
         _liveColor = defaults.Color.Clone();
         _liveColor.Clamp();
         ApplyColor(_liveColor);
@@ -191,10 +254,93 @@ public sealed class DisplayEngine
     {
         color.Clamp();
         _liveColor = color.Clone();
-        var ramp = BuildRamp(color);
-        ApplyRamp(ramp);
-        AppLog.Info($"Color applied: B={color.Brightness:F2} C={color.Contrast:F2} G={color.Gamma:F2}");
+
+        bool lowLevel = color.Backend is ColorBackend.LowLevel or ColorBackend.Gdi;
+
+        if (lowLevel)
+        {
+            // Restore NVIDIA/AMD only if a previous Driver session left tweaks active — no NvAPI init.
+            try { _driverColor.ClearDriverTweaksIfActive(); }
+            catch (Exception ex) { AppLog.Error("Driver restore on LowLevel: " + ex.Message); }
+
+            var ramp = BuildRamp(color);
+            if (!ApplyRamp(ramp))
+                AppLog.Error("SetDeviceGammaRamp rejected or failed (Windows may clip extreme curves).");
+
+            var (b, c, g) = color.ToRivaTunerUnits();
+            AppLog.Info($"Color applied (RT Low Level): B={b} C={c} G={g:F2} shadow={color.ShadowLift:F2}");
+        }
+        else
+        {
+            // NVIDIA Control Panel–style B/C/G via SetDeviceGammaRamp + Digital Vibrance / ADL sat.
+            var ramp = new RAMP
+            {
+                Red = new ushort[256],
+                Green = new ushort[256],
+                Blue = new ushort[256]
+            };
+            NvidiaControlPanelRamp.Fill(ramp.Red, ramp.Green, ramp.Blue, color);
+            if (!ApplyRamp(ramp))
+                AppLog.Error("NVIDIA CP-style gamma ramp rejected.");
+
+            try { _driverColor.Apply(color); }
+            catch (Exception ex) { AppLog.Error("Driver color apply: " + ex.Message); }
+            AppLog.Info(
+                $"Color applied (driver CP): B={color.Brightness:F2} C={color.Contrast:F2} G={color.Gamma:F2} " +
+                $"V={color.Vibrance} backend={color.Backend} vendor={_driverColor.ActiveVendor}");
+        }
     }
+
+    /// <summary>Identity or captured factory ramp — clears any previous Low Level curve.</summary>
+    public void ApplyNeutralOrFactoryRamp()
+    {
+        _driverColor.ClearDriverTweaksIfActive();
+        if (_hasFactoryRamp && _factoryRamp.HasValue)
+        {
+            ApplyRamp(_factoryRamp.Value);
+            return;
+        }
+
+        var ramp = new RAMP
+        {
+            Red = new ushort[256],
+            Green = new ushort[256],
+            Blue = new ushort[256]
+        };
+        LowLevelColorRamp.FillIdentity(ramp.Red, ramp.Green, ramp.Blue);
+        ApplyRamp(ramp);
+    }
+
+    /// <summary>Re-apply live ramp only (lock timer). Driver backends re-push vibrance lightly.</summary>
+    public void ReapplyLiveColor()
+    {
+        if (_liveColor.Backend is ColorBackend.LowLevel or ColorBackend.Gdi)
+        {
+            var ramp = BuildRamp(_liveColor);
+            ApplyRamp(ramp);
+        }
+        else
+        {
+            var ramp = new RAMP
+            {
+                Red = new ushort[256],
+                Green = new ushort[256],
+                Blue = new ushort[256]
+            };
+            NvidiaControlPanelRamp.Fill(ramp.Red, ramp.Green, ramp.Blue, _liveColor);
+            ApplyRamp(ramp);
+            try { _driverColor.Apply(_liveColor); }
+            catch (Exception ex) { AppLog.Error("Driver lock reapply: " + ex.Message); }
+        }
+    }
+
+    public void SyncLiveColor(ColorSettings color)
+    {
+        color.Clamp();
+        _liveColor = color.Clone();
+    }
+
+    public void ResetDriverColorNeutral() => _driverColor.ResetDriverToNeutral();
 
     public void AdjustBrightness(double delta, ColorSettings? fallbackDefaults = null)
     {
@@ -230,6 +376,7 @@ public sealed class DisplayEngine
 
     public void ResetColorToFactoryOrNeutral(ColorSettings? configured)
     {
+        _driverColor.RestoreBaseline();
         if (_hasFactoryRamp && _factoryRamp.HasValue)
         {
             ApplyRamp(_factoryRamp.Value);
@@ -253,6 +400,7 @@ public sealed class DisplayEngine
         if (!string.IsNullOrWhiteSpace(f.Resolution))
             SetResolution(f.Resolution!, f.RefreshRate);
 
+        _driverColor.RestoreBaseline();
         if (_hasFactoryRamp && _factoryRamp.HasValue)
         {
             ApplyRamp(_factoryRamp.Value);
@@ -269,17 +417,51 @@ public sealed class DisplayEngine
         AppLog.Info($"Factory restored: res={f.Resolution}");
     }
 
-    private void ApplyRamp(RAMP ramp)
+    private bool ApplyRamp(RAMP ramp)
     {
-        var hdc = GetDC(IntPtr.Zero);
+        // Prefer CreateDC("DISPLAY") — same path many gamma tools / RT GDI mode use.
+        IntPtr hdc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
+        bool created = hdc != IntPtr.Zero;
+        if (!created)
+            hdc = GetDC(IntPtr.Zero);
+        if (hdc == IntPtr.Zero)
+        {
+            AppLog.Error("No HDC for gamma ramp.");
+            return false;
+        }
+
         try
         {
-            if (!SetDeviceGammaRamp(hdc, ref ramp))
-                AppLog.Error("SetDeviceGammaRamp failed.");
+            bool ok = SetDeviceGammaRamp(hdc, ref ramp);
+            if (!ok)
+            {
+                AppLog.Error("SetDeviceGammaRamp returned false.");
+                return false;
+            }
+
+            // Detect silent reject: Windows can return TRUE but leave identity in place.
+            var check = new RAMP
+            {
+                Red = new ushort[256],
+                Green = new ushort[256],
+                Blue = new ushort[256]
+            };
+            if (GetDeviceGammaRamp(hdc, ref check))
+            {
+                int expect = LowLevelColorRamp.UnpackRampByte(ramp.Red[128]);
+                int actual = LowLevelColorRamp.UnpackRampByte(check.Red[128]);
+                if (Math.Abs(expect - actual) > 8)
+                {
+                    AppLog.Error($"Gamma ramp mismatch at mid: set≈{expect} got≈{actual} (driver may have clamped).");
+                    return false;
+                }
+            }
+            return true;
         }
         finally
         {
-            ReleaseDC(IntPtr.Zero, hdc);
+            if (created) DeleteDC(hdc);
+            else ReleaseDC(IntPtr.Zero, hdc);
         }
     }
 
@@ -299,9 +481,23 @@ public sealed class DisplayEngine
             Blue = new ushort[256]
         };
 
+        if (color.Backend == ColorBackend.LowLevel)
+        {
+            LowLevelColorRamp.Fill(ramp.Red, ramp.Green, ramp.Blue, color);
+            return ramp;
+        }
+
+        if (GpuVendorDetect.IsDriverSide(color.Backend))
+        {
+            NvidiaControlPanelRamp.Fill(ramp.Red, ramp.Green, ramp.Blue, color);
+            return ramp;
+        }
+
+        // Legacy soft GDI curve (non-RT). Uses float domain + full 16-bit precision.
         double brightnessOffset = (color.Brightness - 0.5) * 2.0;
-        double contrast = color.Contrast;
+        double contrast = Math.Max(0.01, color.Contrast);
         double gamma = Math.Max(0.01, color.Gamma);
+        double shadowLift = Math.Clamp(color.ShadowLift, 0.0, 0.4);
 
         for (int i = 0; i < 256; i++)
         {
@@ -309,8 +505,17 @@ public sealed class DisplayEngine
             double value = (normalized - 0.5) * contrast + 0.5;
             value += brightnessOffset * 0.5;
             value = Math.Pow(Math.Clamp(value, 0.0, 1.0), 1.0 / gamma);
+
+            if (shadowLift > 0.0001)
+            {
+                double lift = shadowLift * (1.0 - value) * (1.0 - value);
+                value = Math.Clamp(value + lift, 0.0, 1.0);
+            }
+
             value = Math.Clamp(value, 0.0, 1.0);
-            ushort word = (ushort)Math.Clamp((int)(value * 65535.0 + 0.5), 0, 65535);
+            // Keep MSB packing consistent with Low Level / GDI docs
+            int b = (int)Math.Clamp(Math.Round(value * 255.0), 0, 255);
+            ushort word = LowLevelColorRamp.PackRampByte(b);
             ramp.Red[i] = word;
             ramp.Green[i] = word;
             ramp.Blue[i] = word;
@@ -485,5 +690,33 @@ public sealed class DisplayEngine
         if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref mode))
             return $"{mode.dmPelsWidth}x{mode.dmPelsHeight}";
         return "1920x1080";
+    }
+
+    public void DisposeDriverColor()
+    {
+        try { RestoreGammaSafe(); } catch { }
+        try { _driverColor.Dispose(); } catch { }
+    }
+
+    /// <summary>Best-effort restore of factory/neutral ramp + driver baseline (shutdown / dispose).</summary>
+    public void RestoreGammaSafe()
+    {
+        try
+        {
+            _driverColor.RestoreBaseline();
+            if (_hasFactoryRamp && _factoryRamp.HasValue)
+            {
+                ApplyRamp(_factoryRamp.Value);
+                _liveColor = ColorSettings.Neutral;
+            }
+            else
+            {
+                ApplyColor(ColorSettings.Neutral);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("RestoreGammaSafe: " + ex.Message);
+        }
     }
 }

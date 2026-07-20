@@ -16,7 +16,7 @@ public static class GameScanner
 
         void Add(string process, string name, string? path, bool running)
         {
-            process = NormalizeExe(process);
+            process = GameCatalog.Normalize(process);
             if (string.IsNullOrWhiteSpace(process)) return;
 
             if (byProcess.TryGetValue(process, out var existing))
@@ -129,7 +129,7 @@ public static class GameScanner
                 var name = GameCatalog.GetFriendlyName(process)
                            ?? display
                            ?? Path.GetFileNameWithoutExtension(process);
-                hit = new FoundGame(NormalizeExe(process), name!, exePath, false);
+                hit = new FoundGame(GameCatalog.Normalize(process), name!, exePath, false);
             }
             catch { /* ignore broken manifest */ }
 
@@ -269,12 +269,4 @@ public static class GameScanner
 
     private static bool LooksLikeGameExe(string process) =>
         GameCatalog.IsKnown(process);
-
-    private static string NormalizeExe(string processName)
-    {
-        processName = processName.Trim();
-        if (!processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            processName += ".exe";
-        return processName;
-    }
 }

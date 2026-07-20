@@ -8,6 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using DisplayProfileManager.Models;
 using DisplayProfileManager.Services;
 
@@ -23,21 +24,36 @@ public partial class MainWindow : Window
 
     private readonly ObservableCollection<GameProfile> _profiles = new();
     private readonly ObservableCollection<QuickPreset> _presets = new();
+    private readonly DispatcherTimer _autoSaveTimer;
     private GameProfile? _selected;
     private QuickPreset? _selectedPreset;
     private bool _suppressEditorEvents;
     private bool _dirty;
+    private bool _ignoreTabChange;
+    private int _lastTabIndex;
+    private ColorBackend _profileEditorBackend = ColorBackend.LowLevel;
+    private ColorBackend _presetEditorBackend = ColorBackend.LowLevel;
+    private ColorBackend _defEditorBackend = ColorBackend.LowLevel;
 
     public MainWindow()
     {
         _suppressEditorEvents = true;
         InitializeComponent();
+        _autoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+        _autoSaveTimer.Tick += (_, _) =>
+        {
+            _autoSaveTimer.Stop();
+            if (!_dirty) return;
+            PersistConfigToDisk(showBusy: false);
+            SetStatus("Autosaved");
+        };
         ProfileList.ItemsSource = _profiles;
         PresetGameList.ItemsSource = _profiles;
         PresetList.ItemsSource = _presets;
         FooterText.Text = "Config: " + App.Services.Config.ConfigPath;
         LoadResolutions();
         FillDisplays();
+        FillAudioDevices();
         ReloadFromConfig();
         ApplyLocalization();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
@@ -48,13 +64,148 @@ public partial class MainWindow : Window
 
         MainTabs.SelectionChanged += MainTabs_SelectionChanged;
         MainTabs.PreviewMouseLeftButtonDown += MainTabs_ProfilesHeaderDown;
+        _lastTabIndex = MainTabs.SelectedIndex;
+
+        SourceInitialized += (_, _) =>
+        {
+            var handle = new WindowInteropHelper(this).Handle;
+            HwndSource.FromHwnd(handle)?.AddHook(WndProc);
+        };
+    }
+
+    private const int WmGetMinMaxInfo = 0x0024;
+    private const uint MonitorDefaultToNearest = 2;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo lpmi);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PointApi
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RectApi
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MinMaxInfo
+    {
+        public PointApi Reserved;
+        public PointApi MaxSize;
+        public PointApi MaxPosition;
+        public PointApi MinTrackSize;
+        public PointApi MaxTrackSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct MonitorInfo
+    {
+        public int CbSize;
+        public RectApi RcMonitor;
+        public RectApi RcWork;
+        public int DwFlags;
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WmGetMinMaxInfo)
+        {
+            ClampMaximizedToWorkArea(hwnd, lParam);
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    private static void ClampMaximizedToWorkArea(IntPtr hwnd, IntPtr lParam)
+    {
+        var mmi = Marshal.PtrToStructure<MinMaxInfo>(lParam);
+        IntPtr monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+        if (monitor != IntPtr.Zero)
+        {
+            var info = new MonitorInfo { CbSize = Marshal.SizeOf<MonitorInfo>() };
+            if (GetMonitorInfo(monitor, ref info))
+            {
+                RectApi work = info.RcWork;
+                RectApi monitorRect = info.RcMonitor;
+                mmi.MaxPosition.X = Math.Abs(work.Left - monitorRect.Left);
+                mmi.MaxPosition.Y = Math.Abs(work.Top - monitorRect.Top);
+                mmi.MaxSize.X = Math.Abs(work.Right - work.Left);
+                mmi.MaxSize.Y = Math.Abs(work.Bottom - work.Top);
+            }
+        }
+        Marshal.StructureToPtr(mmi, lParam, fDeleteOld: true);
     }
 
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (e.Source != MainTabs) return;
+        if (_ignoreTabChange)
+        {
+            if (MainTabs.SelectedContent is FrameworkElement fe0)
+                UiMotion.SoftContentIn(fe0);
+            return;
+        }
+
+        int newIndex = MainTabs.SelectedIndex;
+        if (newIndex == _lastTabIndex)
+        {
+            if (MainTabs.SelectedContent is FrameworkElement feSame)
+                UiMotion.SoftContentIn(feSame);
+            return;
+        }
+
+        if (_dirty)
+            FlushAutosave();
+
+        _lastTabIndex = MainTabs.SelectedIndex;
+        if (ReferenceEquals(MainTabs.SelectedItem, TabPresets))
+            FocusPresetsForActiveOrSelectedGame();
         if (MainTabs.SelectedContent is FrameworkElement fe)
             UiMotion.SoftContentIn(fe);
+    }
+
+    /// <summary>
+    /// Presets are per-game. When opening the Presets tab (or when a game starts),
+    /// select that game in the list so hotkeyed Tarkov presets are visible — not "ghost" switches.
+    /// </summary>
+    public void FocusPresetsForActiveOrSelectedGame(GameProfile? prefer = null)
+    {
+        prefer ??= App.Services.Monitor.CurrentProfile
+                   ?? _selected
+                   ?? PresetGameList.SelectedItem as GameProfile
+                   ?? _profiles.FirstOrDefault();
+        if (prefer == null) return;
+
+        var match = _profiles.FirstOrDefault(p => p.Id == prefer.Id)
+                    ?? _profiles.FirstOrDefault(p =>
+                        string.Equals(p.ProcessName, prefer.ProcessName, StringComparison.OrdinalIgnoreCase));
+        if (match == null) return;
+
+        if (!ReferenceEquals(PresetGameList.SelectedItem, match))
+            PresetGameList.SelectedItem = match;
+        else if (_presetGame == null || _presets.Count == 0)
+        {
+            // Force reload if list is empty but profile has presets
+            _presetGame = match;
+            _presets.Clear();
+            match.Presets ??= new List<QuickPreset>();
+            foreach (var p in match.Presets)
+                _presets.Add(p);
+            LblPresetGame.Text = $"Presets — {match.Name}";
+            if (_presets.Count > 0 && PresetList.SelectedItem == null)
+                PresetList.SelectedIndex = 0;
+        }
     }
 
     private void MainTabs_ProfilesHeaderDown(object sender, MouseButtonEventArgs e)
@@ -145,6 +296,9 @@ public partial class MainWindow : Window
 
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryResolveUnsavedChanges())
+            return;
+
         var win = new SettingsWindow { Owner = this };
         win.ShowDialog();
         ApplyLocalization();
@@ -160,7 +314,6 @@ public partial class MainWindow : Window
         TitleAppName.Text = Loc.T("app.name");
         Title = Loc.T("app.name");
         BtnApply.Content = Loc.T("btn.apply");
-        BtnSave.Content = Loc.T("btn.save");
         BtnReset.Content = Loc.T("btn.reset");
         BtnScan.Content = Loc.T("btn.scan");
         BtnAddManual.Content = Loc.T("btn.addManual");
@@ -175,7 +328,68 @@ public partial class MainWindow : Window
         BtnSettingsCaption.ToolTip = Loc.T("btn.settings");
         TxtSearch.ToolTip = Loc.T("search.placeholder");
         LblDisplay.Text = Loc.T("display");
+
+        if (LblColorBackend != null) LblColorBackend.Text = Loc.T("color.backend");
+        if (ChkLockColor != null) ChkLockColor.Content = Loc.T("color.lock");
+        if (ChkApplyColor != null) ChkApplyColor.Content = Loc.T("color.apply");
+        if (LblSessionTitle != null) LblSessionTitle.Text = Loc.T("session.title");
+        if (LblSessionSub != null) LblSessionSub.Text = Loc.T("session.sub");
+        if (ChkQuietToast != null) ChkQuietToast.Content = Loc.T("session.quiet");
+        if (ChkNoNightLight != null) ChkNoNightLight.Content = Loc.T("session.night");
+        if (ChkNoAutoHdr != null) ChkNoAutoHdr.Content = Loc.T("session.hdr");
+        if (ChkIsolateMon != null) ChkIsolateMon.Content = Loc.T("session.primary");
+        if (ChkMonBright != null) ChkMonBright.Content = Loc.T("session.bright");
+        if (ChkSwitchAudio != null) ChkSwitchAudio.Content = Loc.T("session.audio");
+        if (LblScaling != null) LblScaling.Text = Loc.T("session.scaling");
+
+        if (BtnPresetAdd != null) BtnPresetAdd.Content = Loc.T("btn.add");
+        if (BtnPresetDelete != null) BtnPresetDelete.Content = Loc.T("btn.delete");
+        if (BtnPresetExport != null) BtnPresetExport.Content = Loc.T("presets.export");
+        if (BtnPresetImport != null) BtnPresetImport.Content = Loc.T("presets.import");
+
+        if (BtnPreviewColor != null) BtnPreviewColor.Content = Loc.T("btn.preview");
+        if (BtnCompareAb != null) BtnCompareAb.Content = Loc.T("btn.compareAb");
+        if (LblHkCompareAb != null) LblHkCompareAb.Text = Loc.T("hotkey.compareAb");
+
+        ApplyInfoTips();
+        UpdateColorLabels();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
+    }
+
+    private void ApplyInfoTips()
+    {
+        SetTip(InfoApply, "btn.apply.tip");
+        SetTip(InfoReset, "btn.reset.tip");
+        SetTip(InfoRes, "display.res.tip");
+        SetTip(InfoPower, "display.power.tip");
+        SetTip(InfoApplyColor, "color.apply.tip");
+        SetTip(InfoBackend, "color.backend.tip");
+        SetTip(InfoLock, "color.lock.tip");
+        SetTip(InfoBrightness, "color.brightness.tip");
+        SetTip(InfoVibrance, "color.vibrance.tip");
+        SetTip(InfoShadow, "color.shadow.tip");
+        SetTip(InfoSession, "session.sub");
+        SetTip(InfoDeferred, "session.deferred.tip");
+        SetTip(InfoQuiet, "session.quiet.tip");
+        SetTip(InfoNight, "session.night.tip");
+        SetTip(InfoHdr, "session.hdr.tip");
+        SetTip(InfoPrimary, "session.primary.tip");
+        SetTip(InfoMonBright, "session.bright.tip");
+        SetTip(InfoAudio, "session.audio.tip");
+        SetTip(InfoScaling, "session.scaling.tip");
+        SetTip(InfoCompanions, "companions.tip");
+        SetTip(InfoPresetBackend, "color.backend.tip");
+        SetTip(InfoPresetLock, "color.lock.tip");
+        SetTip(InfoAutostart, "global.autostart.tip");
+        SetTip(InfoStartMin, "global.startmin.tip");
+        if (BtnPresetExport != null) BtnPresetExport.ToolTip = Loc.T("presets.export.tip");
+        if (BtnPresetImport != null) BtnPresetImport.ToolTip = Loc.T("presets.import.tip");
+    }
+
+    private static void SetTip(InfoHint? hint, string key)
+    {
+        if (hint != null)
+            hint.Tip = Loc.T(key);
     }
 
     public void UpdateActiveHeader(GameProfile? profile)
@@ -191,6 +405,17 @@ public partial class MainWindow : Window
                 bits.Add(profile.Resolution!);
             ActiveHeaderText.Text = string.Join(" · ", bits);
         }
+    }
+
+    /// <summary>Game whose preset hotkeys stay registered when no match is running.</summary>
+    public GameProfile? HotkeyPresetFallback => _presetGame ?? _selected;
+
+    private void RefreshHotkeyBindings()
+    {
+        App.Services.Hotkeys.RegisterFromConfig(
+            App.Services.Config.Current,
+            App.Services.Monitor.CurrentProfile,
+            HotkeyPresetFallback);
     }
 
     private void Search_Changed(object sender, TextChangedEventArgs e)
@@ -233,7 +458,17 @@ public partial class MainWindow : Window
 
     public void ReloadFromConfig()
     {
+        string? keepProfileId = _selected?.Id;
+        string? keepPresetGameId = _presetGame?.Id;
+        string? keepPresetId = _selectedPreset?.Id;
+        int keepTab = MainTabs.SelectedIndex;
+
         _suppressEditorEvents = true;
+        // Drop editor pointers before clearing collections — avoids Sync to orphaned profiles.
+        _selectedPreset = null;
+        _presetGame = null;
+        _selected = null;
+
         var cfg = App.Services.Config.Current;
 
         _profiles.Clear();
@@ -256,7 +491,13 @@ public partial class MainWindow : Window
         SldDefBrightness.Value = cfg.Defaults.Color.Brightness;
         SldDefContrast.Value = cfg.Defaults.Color.Contrast;
         SldDefGamma.Value = cfg.Defaults.Color.Gamma;
+        SldDefVibrance.Value = cfg.Defaults.Color.Vibrance;
+        SldDefShadow.Value = cfg.Defaults.Color.ShadowLift;
+        cfg.Defaults.EnsureDualColorSlots();
+        _defEditorBackend = cfg.Defaults.Color.Backend;
+        SetBackendToggle(cfg.Defaults.Color.Backend, TogDefBackend);
         UpdateDefLabels();
+        UpdateDriverUiAvailability();
 
         HkBrightUp.Text = cfg.GlobalHotkeys.BrightnessUp ?? "";
         HkBrightDown.Text = cfg.GlobalHotkeys.BrightnessDown ?? "";
@@ -265,17 +506,64 @@ public partial class MainWindow : Window
         HkGammaUp.Text = cfg.GlobalHotkeys.GammaUp ?? "";
         HkGammaDown.Text = cfg.GlobalHotkeys.GammaDown ?? "";
         HkReset.Text = cfg.GlobalHotkeys.ResetColor ?? "";
+        if (HkCompareAb != null) HkCompareAb.Text = cfg.GlobalHotkeys.CompareAb ?? "";
 
         ChkAutostart.IsChecked = cfg.StartWithWindows;
         ChkStartMin.IsChecked = cfg.StartMinimized;
 
+        FillAudioDevices();
+
         if (_profiles.Count > 0)
         {
-            ProfileList.SelectedIndex = 0;
-            PresetGameList.SelectedIndex = 0;
+            var keep = !string.IsNullOrEmpty(keepProfileId)
+                ? _profiles.FirstOrDefault(p => p.Id == keepProfileId)
+                : null;
+            ProfileList.SelectedItem = keep ?? _profiles[0];
+
+            var keepGame = !string.IsNullOrEmpty(keepPresetGameId)
+                ? _profiles.FirstOrDefault(p => p.Id == keepPresetGameId)
+                : null;
+            PresetGameList.SelectedItem = keepGame ?? ProfileList.SelectedItem as GameProfile;
+
+            // SelectionChanged is suppressed — load presets manually.
+            _presetGame = PresetGameList.SelectedItem as GameProfile;
+            _presets.Clear();
+            _selectedPreset = null;
+            if (_presetGame != null)
+            {
+                _presetGame.Presets ??= new List<QuickPreset>();
+                foreach (var p in _presetGame.Presets)
+                    _presets.Add(p);
+                LblPresetGame.Text = $"Presets — {_presetGame.Name}";
+            }
         }
         else
             ClearEditor();
+
+        if (!string.IsNullOrEmpty(keepPresetId) && _presets.Count > 0)
+        {
+            var pr = _presets.FirstOrDefault(p => p.Id == keepPresetId);
+            if (pr != null)
+            {
+                PresetList.SelectedItem = pr;
+                _selectedPreset = pr;
+                LoadPresetEditor(pr);
+            }
+            else if (_presets.Count > 0)
+            {
+                PresetList.SelectedIndex = 0;
+            }
+        }
+        else if (_presets.Count > 0)
+        {
+            PresetList.SelectedIndex = 0;
+        }
+
+        _ignoreTabChange = true;
+        if (keepTab >= 0 && keepTab < MainTabs.Items.Count)
+            MainTabs.SelectedIndex = keepTab;
+        _ignoreTabChange = false;
+        _lastTabIndex = MainTabs.SelectedIndex;
 
         _suppressEditorEvents = false;
         _dirty = false;
@@ -287,7 +575,7 @@ public partial class MainWindow : Window
         var cfg = App.Services.Config.Current;
         if (cfg.FirstScanDone) return;
         cfg.FirstScanDone = true;
-        App.Services.Config.Save(cfg);
+        App.Services.Config.Save(cfg, raiseChanged: false);
 
         if (_profiles.Count == 0)
             _ = RunGameScanAsync(confirmIfAny: true);
@@ -363,7 +651,7 @@ public partial class MainWindow : Window
                 {
                     existing.ExePath = g.ExePath;
                     GameVisuals.Apply(existing);
-                    _dirty = true;
+                    MarkDirty();
                 }
                 continue;
             }
@@ -375,7 +663,7 @@ public partial class MainWindow : Window
         }
         if (added > 0)
         {
-            _dirty = true;
+            MarkDirty();
             ProfileList.SelectedItem = _profiles.Last();
             ProfileList.Items.Refresh();
             PresetGameList.Items.Refresh();
@@ -411,14 +699,28 @@ public partial class MainWindow : Window
 
         SelectComboByTag(CmbPower, p.PowerPlan ?? "");
         SelectComboByTag(CmbDisplay, p.DisplayDevice ?? "");
-        SldBrightness.Value = p.Color.Brightness;
-        SldContrast.Value = p.Color.Contrast;
-        SldGamma.Value = p.Color.Gamma;
+        p.EnsureDualColorSlots();
+        _profileEditorBackend = p.Color.Backend;
+        SetBackendToggle(p.Color.Backend, TogBackend);
+        ChkLockColor.IsChecked = p.Color.LockColor;
+        ApplyColorSliders(p.Color, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
+        var sx = p.Session ?? new SessionExtras();
+        SldDeferred.Value = sx.DeferredApplySeconds;
+        ChkQuietToast.IsChecked = sx.QuietNotifications;
+        ChkNoNightLight.IsChecked = sx.DisableNightLight;
+        ChkNoAutoHdr.IsChecked = sx.DisableAutoHdr;
+        ChkIsolateMon.IsChecked = sx.IsolatePrimaryMonitor;
+        ChkMonBright.IsChecked = sx.ApplyMonitorBrightness;
+        SldMonBright.Value = sx.MonitorBrightness;
+        ChkSwitchAudio.IsChecked = sx.SwitchAudioDevice;
+        SelectAudioDevice(sx.AudioDeviceId);
+        SelectComboByTag(CmbScaling, string.IsNullOrWhiteSpace(sx.ScalingMode) ? "default" : sx.ScalingMode!);
         UpdateColorLabels();
+        UpdateShadowSliderEnabled();
         CompanionList.ItemsSource = null;
         CompanionList.ItemsSource = p.Companions;
         _suppressEditorEvents = false;
-        _dirty = false;
+        // Keep _dirty — profile switch must not pretend changes were saved to disk
     }
 
     private void ClearEditor()
@@ -431,7 +733,7 @@ public partial class MainWindow : Window
     private void EditorChanged(object sender, RoutedEventArgs e)
     {
         if (_suppressEditorEvents || _selected == null) return;
-        _dirty = true;
+        MarkDirty();
         PushEditorToSelected();
         ProfileList.Items.Refresh();
     }
@@ -440,8 +742,9 @@ public partial class MainWindow : Window
     {
         if (_suppressEditorEvents) return;
         UpdateColorLabels();
+        ConfigureGammaRangeForBackend(ReadBackendToggle(TogBackend), SldGamma);
         if (_selected == null) return;
-        _dirty = true;
+        MarkDirty();
         PushEditorToSelected();
     }
 
@@ -449,22 +752,245 @@ public partial class MainWindow : Window
     {
         if (_suppressEditorEvents) return;
         UpdateDefLabels();
+        ConfigureGammaRangeForBackend(ReadBackendToggle(TogDefBackend), SldDefGamma);
+        MarkDirty();
+    }
+
+    private void GlobalEditorChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEditorEvents) return;
+        MarkDirty();
+    }
+
+    private void MarkDirty()
+    {
+        _dirty = true;
+        _autoSaveTimer.Stop();
+        _autoSaveTimer.Start();
+    }
+
+    private void FlushAutosave()
+    {
+        _autoSaveTimer.Stop();
+        if (!_dirty) return;
+        if (_selected != null) PushEditorToSelected();
+        if (_selectedPreset != null) PushPresetEditor();
+        SyncPresetsBackToGame();
+        PersistConfigToDisk(showBusy: false);
     }
 
     private void UpdateColorLabels()
     {
         if (LblBrightness == null) return;
-        LblBrightness.Text = $"Brightness: {SldBrightness.Value:F2}";
-        LblContrast.Text = $"Contrast: {SldContrast.Value:F2}";
-        LblGamma.Text = $"Gamma: {SldGamma.Value:F2}";
+        var tmp = new ColorSettings
+        {
+            Brightness = SldBrightness.Value,
+            Contrast = SldContrast.Value,
+            Gamma = SldGamma.Value,
+            Backend = ReadBackendToggle(TogBackend)
+        };
+        string label = GpuVendorDetect.DriverLabel;
+        if (tmp.Backend == ColorBackend.LowLevel)
+        {
+            var (b, c, g) = tmp.ToRivaTunerUnits();
+            LblBrightness.Text = $"Brightness: {b}  (RT −125..125)";
+            LblContrast.Text = $"Contrast: {c}  (RT −82..82)";
+            LblGamma.Text = $"Gamma: {g:F2}  (RT 0.5..6)";
+        }
+        else
+        {
+            // NVIDIA Control Panel scale (B/C 0..100% mid 50, G 0.4..2.8)
+            int bPct = (int)Math.Round(tmp.Brightness * 100);
+            int cPct = (int)Math.Round(Math.Clamp(tmp.Contrast / 2.0, 0, 1) * 100);
+            LblBrightness.Text = $"Brightness: {bPct}%  ({label} CP)";
+            LblContrast.Text = $"Contrast: {cPct}%  ({label} CP)";
+            LblGamma.Text = $"Gamma: {Math.Clamp(tmp.Gamma, 0.4, 2.8):F2}  ({label} CP)";
+        }
+        if (LblVibrance != null)
+        {
+            LblVibrance.Text = tmp.Backend == ColorBackend.LowLevel
+                ? $"Vibrance: {(int)SldVibrance.Value}"
+                : $"Digital vibrance: {(int)SldVibrance.Value}%  ({label} CP)";
+        }
+        if (LblShadowLift != null) LblShadowLift.Text = $"Shadow lift: {SldShadowLift.Value:F2}";
+        if (LblDeferred != null) LblDeferred.Text = Loc.Tf("session.deferred", (int)SldDeferred.Value);
+        if (LblMonBright != null) LblMonBright.Text = Loc.Tf("session.bright.lbl", (int)SldMonBright.Value);
     }
 
     private void UpdateDefLabels()
     {
         if (LblDefBrightness == null) return;
-        LblDefBrightness.Text = $"Brightness: {SldDefBrightness.Value:F2}";
-        LblDefContrast.Text = $"Contrast: {SldDefContrast.Value:F2}";
-        LblDefGamma.Text = $"Gamma: {SldDefGamma.Value:F2}";
+        var be = ReadBackendToggle(TogDefBackend);
+        string label = GpuVendorDetect.DriverLabel;
+        if (be == ColorBackend.LowLevel)
+        {
+            var tmp = new ColorSettings
+            {
+                Brightness = SldDefBrightness.Value,
+                Contrast = SldDefContrast.Value,
+                Gamma = SldDefGamma.Value,
+                Backend = ColorBackend.LowLevel
+            };
+            var (b, c, g) = tmp.ToRivaTunerUnits();
+            LblDefBrightness.Text = $"Brightness: {b} (RT)";
+            LblDefContrast.Text = $"Contrast: {c} (RT)";
+            LblDefGamma.Text = $"Gamma: {g:F2} (RT)";
+        }
+        else
+        {
+            LblDefBrightness.Text = $"Brightness: {(int)Math.Round(SldDefBrightness.Value * 100)}% ({label})";
+            LblDefContrast.Text = $"Contrast: {(int)Math.Round(Math.Clamp(SldDefContrast.Value / 2.0, 0, 1) * 100)}% ({label})";
+            LblDefGamma.Text = $"Gamma: {Math.Clamp(SldDefGamma.Value, 0.4, 2.8):F2} ({label})";
+        }
+        if (LblDefVibrance != null)
+        {
+            LblDefVibrance.Text = be == ColorBackend.LowLevel
+                ? $"Vibrance: {(int)SldDefVibrance.Value}"
+                : $"Digital vibrance: {(int)SldDefVibrance.Value}% ({label})";
+        }
+        if (LblDefShadow != null) LblDefShadow.Text = $"Shadow lift: {SldDefShadow.Value:F2}";
+    }
+
+    private void BackendToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEditorEvents || _selected == null) return;
+        var next = ReadBackendToggle(TogBackend);
+        if (next == _profileEditorBackend) return;
+
+        // Persist current sliders into the previous backend slot, then load the other set.
+        var prev = ReadColorFromSliders(_profileEditorBackend, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift, ChkLockColor.IsChecked == true);
+        _selected.Color = prev;
+        _selected.SaveActiveToDualSlots();
+        _profileEditorBackend = next;
+        var loaded = _selected.ActivateBackend(next);
+        _suppressEditorEvents = true;
+        ApplyColorSliders(loaded, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
+        ChkLockColor.IsChecked = loaded.LockColor;
+        _suppressEditorEvents = false;
+        UpdateColorLabels();
+        UpdateShadowSliderEnabled();
+        ConfigureGammaRangeForBackend(next, SldGamma);
+        UpdateBackendActiveLabel(TogBackend, ReadBackendToggle(TogBackend) == ColorBackend.LowLevel);
+        MarkDirty();
+        PushEditorToSelected();
+        ProfileList.Items.Refresh();
+    }
+
+    private void PresetBackendToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEditorEvents || _selectedPreset == null) return;
+        var next = ReadBackendToggle(TogPresetBackend);
+        if (next == _presetEditorBackend) return;
+
+        var prev = ReadColorFromSliders(_presetEditorBackend, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, ChkPresetLock.IsChecked == true);
+        _selectedPreset.Color = prev;
+        _selectedPreset.SaveActiveToDualSlots();
+        _presetEditorBackend = next;
+        var loaded = _selectedPreset.ActivateBackend(next);
+        _suppressEditorEvents = true;
+        ApplyColorSliders(loaded, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
+        ChkPresetLock.IsChecked = loaded.LockColor;
+        ConfigureGammaRangeForBackend(next, SldPresetG);
+        _suppressEditorEvents = false;
+        UpdatePresetLabels();
+        UpdateBackendActiveLabel(TogPresetBackend, next == ColorBackend.LowLevel);
+        MarkDirty();
+        PushPresetEditor();
+        RefreshPresetListSafe();
+    }
+
+    private void DefBackendToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEditorEvents) return;
+        var next = ReadBackendToggle(TogDefBackend);
+        if (next == _defEditorBackend) return;
+
+        var defaults = App.Services.Config.Current.Defaults;
+        defaults.EnsureDualColorSlots();
+        var prev = ReadColorFromSliders(_defEditorBackend, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow, true);
+        defaults.Color = prev;
+        defaults.SaveActiveToDualSlots();
+        _defEditorBackend = next;
+        var loaded = defaults.ActivateBackend(next);
+        _suppressEditorEvents = true;
+        ApplyColorSliders(loaded, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow);
+        ConfigureGammaRangeForBackend(next, SldDefGamma);
+        _suppressEditorEvents = false;
+        UpdateDefLabels();
+        UpdateBackendActiveLabel(TogDefBackend, next == ColorBackend.LowLevel);
+        MarkDirty();
+    }
+
+    private void UpdateShadowSliderEnabled()
+    {
+        bool low = ReadBackendToggle(TogBackend) == ColorBackend.LowLevel;
+        if (SldShadowLift != null) SldShadowLift.IsEnabled = low;
+        if (LblShadowLift != null) LblShadowLift.Opacity = low ? 1.0 : 0.45;
+    }
+
+    private void UpdateDriverUiAvailability()
+    {
+        string label = GpuVendorDetect.DriverLabel;
+        foreach (var tog in new[] { TogBackend, TogPresetBackend, TogDefBackend })
+        {
+            if (tog == null) continue;
+            tog.Content = label;
+            tog.IsEnabled = true;
+        }
+        if (LblBackendHint != null)
+        {
+            if (GpuVendorDetect.HasNvidia)
+                LblBackendHint.Text = "NVIDIA (Control Panel B/C/G + Vibrance)  ↔  Low Level (RivaTuner)";
+            else if (GpuVendorDetect.HasAmd)
+                LblBackendHint.Text = "AMD (gamma + saturation)  ↔  Low Level (RivaTuner)";
+            else
+                LblBackendHint.Text = "GPU driver  ↔  Low Level (RivaTuner)";
+        }
+    }
+
+    private static void ApplyColorSliders(
+        ColorSettings c,
+        Slider b, Slider co, Slider g, Slider v, Slider shadow)
+    {
+        ConfigureGammaRangeForBackend(c.Backend, g);
+        b.Value = c.Brightness;
+        co.Value = c.Contrast;
+        g.Value = Math.Clamp(c.Gamma, g.Minimum, g.Maximum);
+        v.Value = c.Vibrance;
+        shadow.Value = c.ShadowLift;
+    }
+
+    /// <summary>Driver/NVIDIA CP gamma is 0.4–2.8; Low Level (RT) keeps 0.5–6.</summary>
+    private static void ConfigureGammaRangeForBackend(ColorBackend backend, Slider gamma)
+    {
+        bool driver = backend is not ColorBackend.LowLevel and not ColorBackend.Gdi;
+        double min = driver ? 0.4 : 0.5;
+        double max = driver ? 2.8 : 6.0;
+        if (Math.Abs(gamma.Minimum - min) < 0.001 && Math.Abs(gamma.Maximum - max) < 0.001)
+            return;
+        double v = gamma.Value;
+        gamma.Minimum = min;
+        gamma.Maximum = max;
+        gamma.Value = Math.Clamp(v, min, max);
+    }
+
+    private static ColorSettings ReadColorFromSliders(
+        ColorBackend backend,
+        Slider b, Slider co, Slider g, Slider v, Slider shadow,
+        bool lockColor)
+    {
+        var c = new ColorSettings
+        {
+            Backend = backend,
+            Brightness = b.Value,
+            Contrast = co.Value,
+            Gamma = g.Value,
+            Vibrance = (int)v.Value,
+            ShadowLift = shadow.Value,
+            LockColor = lockColor
+        };
+        c.Clamp();
+        return c;
     }
 
     private void PushEditorToSelected()
@@ -486,70 +1012,78 @@ public partial class MainWindow : Window
         if (CmbDisplay.SelectedItem is ComboBoxItem di)
             _selected.DisplayDevice = string.IsNullOrWhiteSpace(di.Tag?.ToString()) ? null : di.Tag!.ToString();
 
-        _selected.Color.Brightness = SldBrightness.Value;
-        _selected.Color.Contrast = SldContrast.Value;
-        _selected.Color.Gamma = SldGamma.Value;
-        _selected.Color.Clamp();
+        _selected.Color = ReadColorFromSliders(
+            ReadBackendToggle(TogBackend),
+            SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift,
+            ChkLockColor.IsChecked == true);
+        _profileEditorBackend = _selected.Color.Backend;
+        _selected.SaveActiveToDualSlots();
+
+        _selected.Session ??= new SessionExtras();
+        _selected.Session.DeferredApplySeconds = (int)SldDeferred.Value;
+        _selected.Session.QuietNotifications = ChkQuietToast.IsChecked == true;
+        _selected.Session.DisableNightLight = ChkNoNightLight.IsChecked == true;
+        _selected.Session.DisableAutoHdr = ChkNoAutoHdr.IsChecked == true;
+        _selected.Session.IsolatePrimaryMonitor = ChkIsolateMon.IsChecked == true;
+        _selected.Session.ApplyMonitorBrightness = ChkMonBright.IsChecked == true;
+        _selected.Session.MonitorBrightness = (int)SldMonBright.Value;
+        _selected.Session.SwitchAudioDevice = ChkSwitchAudio.IsChecked == true;
+        _selected.Session.AudioDeviceId = (CmbAudio.SelectedItem as ComboBoxItem)?.Tag?.ToString()
+                                          ?? CmbAudio.SelectedItem?.ToString();
+        if (CmbScaling.SelectedItem is ComboBoxItem sc)
+            _selected.Session.ScalingMode = sc.Tag?.ToString() ?? "default";
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected != null) PushEditorToSelected();
-        if (_selectedPreset != null) PushPresetEditor();
-        SyncPresetsBackToGame();
-
-        var cfg = App.Services.Config.Current;
-        cfg.Profiles = _profiles.Select(CloneProfile).ToList();
-        cfg.Presets = null;
-        cfg.Defaults.Resolution = CmbDefaultRes.SelectedItem?.ToString();
-        cfg.Defaults.PowerPlan = (CmbDefaultPower.SelectedItem as ComboBoxItem)?.Content?.ToString()
-                                 ?? CmbDefaultPower.SelectedItem?.ToString()
-                                 ?? "balanced";
-        cfg.Defaults.Color.Brightness = SldDefBrightness.Value;
-        cfg.Defaults.Color.Contrast = SldDefContrast.Value;
-        cfg.Defaults.Color.Gamma = SldDefGamma.Value;
-        cfg.Defaults.Color.Clamp();
-
-        // Keep factory defaults as the true baseline for Reset settings
-        if (cfg.FactoryDefaults == null || string.IsNullOrWhiteSpace(cfg.FactoryDefaults.Resolution))
-            cfg.FactoryDefaults = ConfigService.CaptureFactoryDefaults();
-        cfg.FactoryDefaults.Color = ColorSettings.Neutral;
-
-        cfg.GlobalHotkeys.BrightnessUp = NormHotkey(HkBrightUp.Text);
-        cfg.GlobalHotkeys.BrightnessDown = NormHotkey(HkBrightDown.Text);
-        cfg.GlobalHotkeys.ContrastUp = NormHotkey(HkContrastUp.Text);
-        cfg.GlobalHotkeys.ContrastDown = NormHotkey(HkContrastDown.Text);
-        cfg.GlobalHotkeys.GammaUp = NormHotkey(HkGammaUp.Text);
-        cfg.GlobalHotkeys.GammaDown = NormHotkey(HkGammaDown.Text);
-        cfg.GlobalHotkeys.ResetColor = NormHotkey(HkReset.Text);
-
-        cfg.StartWithWindows = ChkAutostart.IsChecked == true;
-        cfg.StartMinimized = ChkStartMin.IsChecked == true;
-        cfg.ConfigVersion = ConfigService.CurrentVersion;
-
-        App.Services.Config.Save(cfg);
-        App.Services.Hotkeys.RegisterFromConfig(cfg, App.Services.Monitor.CurrentProfile);
-
-        var exe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
-        if (!string.IsNullOrWhiteSpace(exe))
-            AutostartService.SetEnabled(cfg.StartWithWindows, exe!);
-
-        _dirty = false;
-        AppLog.Info("Configuration saved from UI.");
-        SaveBusy.ShowSaved();
+        FlushAutosave();
+        SaveBusy.ShowSaved(Loc.T("toast.saved"));
         SetStatus("Saved");
+        ShowToast(Loc.T("toast.saved"));
+    }
+
+    private void PreviewColor_Click(object sender, RoutedEventArgs e)
+    {
+        var c = ReadColorFromSliders(
+            ReadBackendToggle(TogBackend),
+            SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift,
+            ChkLockColor.IsChecked == true);
+        App.Services.Display.PreviewColor(c);
+        ShowToast(Loc.T("toast.preview"));
+    }
+
+    private void CompareAb_Click(object sender, RoutedEventArgs e)
+    {
+        if (!App.Services.Display.ToggleAbCompare())
+        {
+            PreviewColor_Click(sender, e);
+            return;
+        }
+        ShowToast(App.Services.Display.IsAbShowingFactory
+            ? Loc.T("toast.ab.factory")
+            : Loc.T("toast.ab.preview"));
     }
 
     private void Apply_Click(object sender, RoutedEventArgs e)
     {
         if (_selected != null) PushEditorToSelected();
         if (_selectedPreset != null) PushPresetEditor();
-        Save_Click_Silent();
+        FlushAutosave();
 
         // Apply targets the active tab — not whatever game happens to be selected in the list
         if (ReferenceEquals(MainTabs.SelectedItem, TabGlobal))
         {
+            if (App.Services.Monitor.HasActivePreset)
+            {
+                SaveBusy.ShowSaved(Loc.T("toast.saved"));
+                ShowToast(Loc.T("toast.global.kept.preset"));
+                SetStatus("Global saved (preset active)");
+                return;
+            }
+
+            App.Services.Monitor.ClearActivePreset();
             App.Services.Display.RestoreDefaults(App.Services.Config.Current.Defaults);
+            SaveBusy.ShowSaved(Loc.T("toast.applied"));
             ShowToast("Applied global defaults");
             SetStatus("Applied global defaults");
             return;
@@ -560,7 +1094,9 @@ public partial class MainWindow : Window
             if (_selectedPreset != null)
             {
                 App.Services.Monitor.ApplyPreset(_selectedPreset);
+                SaveBusy.ShowSaved(Loc.T("toast.applied"));
                 ShowToast($"Applied: {_selectedPreset.Name}");
+                SetStatus($"Preset: {_selectedPreset.Name}");
                 return;
             }
             ThemedDialog.Show(this, "Select a preset first.", "Apply");
@@ -570,20 +1106,22 @@ public partial class MainWindow : Window
         // Profiles (or other)
         if (_selected != null)
         {
+            App.Services.Monitor.ClearActivePreset();
             App.Services.Display.ApplyProfile(_selected, App.Services.Config.Current.Defaults);
+            SaveBusy.ShowSaved(Loc.T("toast.applied"));
             ShowToast($"Applied: {_selected.Name}");
+            SetStatus($"Applied: {_selected.Name}");
             return;
         }
 
+        App.Services.Monitor.ClearActivePreset();
         App.Services.Display.RestoreDefaults(App.Services.Config.Current.Defaults);
+        SaveBusy.ShowSaved(Loc.T("toast.applied"));
         ShowToast("Applied defaults");
     }
 
-    private void Save_Click_Silent()
+    private void PersistConfigToDisk(bool showBusy)
     {
-        if (_selected != null) PushEditorToSelected();
-        if (_selectedPreset != null) PushPresetEditor();
-
         var cfg = App.Services.Config.Current;
         cfg.Profiles = _profiles.Select(CloneProfile).ToList();
         cfg.Presets = null;
@@ -594,7 +1132,12 @@ public partial class MainWindow : Window
         cfg.Defaults.Color.Brightness = SldDefBrightness.Value;
         cfg.Defaults.Color.Contrast = SldDefContrast.Value;
         cfg.Defaults.Color.Gamma = SldDefGamma.Value;
+        cfg.Defaults.Color.Vibrance = (int)SldDefVibrance.Value;
+        cfg.Defaults.Color.ShadowLift = SldDefShadow.Value;
+        cfg.Defaults.Color.Backend = ReadBackendToggle(TogDefBackend);
         cfg.Defaults.Color.Clamp();
+        cfg.Defaults.SaveActiveToDualSlots();
+        _defEditorBackend = cfg.Defaults.Color.Backend;
 
         if (cfg.FactoryDefaults == null || string.IsNullOrWhiteSpace(cfg.FactoryDefaults.Resolution))
             cfg.FactoryDefaults = ConfigService.CaptureFactoryDefaults();
@@ -607,14 +1150,37 @@ public partial class MainWindow : Window
         cfg.GlobalHotkeys.GammaUp = NormHotkey(HkGammaUp.Text);
         cfg.GlobalHotkeys.GammaDown = NormHotkey(HkGammaDown.Text);
         cfg.GlobalHotkeys.ResetColor = NormHotkey(HkReset.Text);
+        if (HkCompareAb != null)
+            cfg.GlobalHotkeys.CompareAb = NormHotkey(HkCompareAb.Text);
 
         cfg.StartWithWindows = ChkAutostart.IsChecked == true;
         cfg.StartMinimized = ChkStartMin.IsChecked == true;
         cfg.ConfigVersion = ConfigService.CurrentVersion;
 
-        App.Services.Config.Save(cfg);
-        App.Services.Hotkeys.RegisterFromConfig(cfg, App.Services.Monitor.CurrentProfile);
+        App.Services.Config.Save(cfg, raiseChanged: false);
+        App.Services.Hotkeys.RegisterFromConfig(
+            cfg,
+            App.Services.Monitor.CurrentProfile,
+            HotkeyPresetFallback);
         _dirty = false;
+
+        if (showBusy)
+        {
+            var exe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+            if (!string.IsNullOrWhiteSpace(exe))
+                AutostartService.SetEnabled(cfg.StartWithWindows, exe!);
+
+            AppLog.Info("Configuration saved from UI.");
+            SaveBusy.ShowSaved();
+            SetStatus("Saved");
+            ShowToast(Loc.T("toast.saved"));
+        }
+        else
+        {
+            var exe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+            if (!string.IsNullOrWhiteSpace(exe))
+                AutostartService.SetEnabled(cfg.StartWithWindows, exe!);
+        }
     }
 
     private void RestoreCoreGames_Click(object sender, RoutedEventArgs e)
@@ -630,7 +1196,7 @@ public partial class MainWindow : Window
         }
         if (added > 0)
         {
-            _dirty = true;
+            MarkDirty();
             ProfileList.SelectedItem = _profiles.Last();
             ProfileList.Items.Refresh();
             PresetGameList.Items.Refresh();
@@ -647,7 +1213,7 @@ public partial class MainWindow : Window
         factory.Color = ColorSettings.Neutral;
         cfg.FactoryDefaults = factory.Clone();
         cfg.Defaults = factory.Clone();
-        App.Services.Config.Save(cfg);
+        App.Services.Config.Save(cfg, raiseChanged: false);
 
         _suppressEditorEvents = true;
         CmbDefaultRes.SelectedItem = factory.Resolution;
@@ -655,6 +1221,9 @@ public partial class MainWindow : Window
         SldDefBrightness.Value = 0.5;
         SldDefContrast.Value = 1.0;
         SldDefGamma.Value = 1.0;
+        SldDefVibrance.Value = 50;
+        SldDefShadow.Value = 0;
+        SetBackendToggle(ColorBackend.LowLevel, TogDefBackend);
         UpdateDefLabels();
         _suppressEditorEvents = false;
 
@@ -679,7 +1248,7 @@ public partial class MainWindow : Window
         _profiles.Add(p);
         GameVisuals.Apply(p);
         ProfileList.SelectedItem = p;
-        _dirty = true;
+        MarkDirty();
     }
 
     private void DupProfile_Click(object sender, RoutedEventArgs e)
@@ -691,7 +1260,7 @@ public partial class MainWindow : Window
         _profiles.Add(copy);
         GameVisuals.Apply(copy);
         ProfileList.SelectedItem = copy;
-        _dirty = true;
+        MarkDirty();
     }
 
     private void DeleteProfile_Click(object sender, RoutedEventArgs e)
@@ -704,7 +1273,7 @@ public partial class MainWindow : Window
         }
         _profiles.Remove(_selected);
         _selected = null;
-        _dirty = true;
+        MarkDirty();
     }
 
     private void BrowseExe_Click(object sender, RoutedEventArgs e)
@@ -728,7 +1297,7 @@ public partial class MainWindow : Window
                 ProfileList.Items.Refresh();
                 PresetGameList.Items.Refresh();
             }
-            _dirty = true;
+            MarkDirty();
         }
     }
 
@@ -742,7 +1311,7 @@ public partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(TxtName.Text) || TxtName.Text == "New Profile")
                 TxtName.Text = GameCatalog.GetFriendlyName(pick.SelectedProcess)
                                ?? System.IO.Path.GetFileNameWithoutExtension(pick.SelectedProcess);
-            _dirty = true;
+            MarkDirty();
             PushEditorToSelected();
         }
     }
@@ -757,7 +1326,7 @@ public partial class MainWindow : Window
             _selected.Companions.Add(c);
             CompanionList.ItemsSource = null;
             CompanionList.ItemsSource = _selected.Companions;
-            _dirty = true;
+            MarkDirty();
         }
     }
 
@@ -770,7 +1339,7 @@ public partial class MainWindow : Window
         {
             CompanionList.ItemsSource = null;
             CompanionList.ItemsSource = _selected.Companions;
-            _dirty = true;
+            MarkDirty();
         }
     }
 
@@ -781,7 +1350,7 @@ public partial class MainWindow : Window
         _selected.Companions.Remove(c);
         CompanionList.ItemsSource = null;
         CompanionList.ItemsSource = _selected.Companions;
-        _dirty = true;
+        MarkDirty();
     }
 
     // -- Presets (per-game) ---------------------------------------------------
@@ -790,6 +1359,8 @@ public partial class MainWindow : Window
 
     private void PresetGameList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressEditorEvents) return;
+
         if (_selectedPreset != null) PushPresetEditor();
         SyncPresetsBackToGame();
 
@@ -811,18 +1382,30 @@ public partial class MainWindow : Window
             LblPresetGame.Text = "Presets";
             LoadPresetEditor(null);
         }
+
+        // Bind this game's preset hotkeys when idle (or keep active game if running).
+        RefreshHotkeyBindings();
     }
 
     private void SyncPresetsBackToGame()
     {
         if (_presetGame == null) return;
-        _presetGame.Presets = _presets.Select(ClonePreset).ToList();
+        // Keep the same QuickPreset instances (do NOT CloneOf) so the list/editor
+        // and the profile stay in sync. Deep-clone only when writing to config.
+        _presetGame.Presets = _presets.ToList();
     }
 
     private void PresetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressEditorEvents) return;
+
+        var next = PresetList.SelectedItem as QuickPreset;
+        // Items.Refresh() can re-fire SelectionChanged for the same item and wipe typing.
+        if (next != null && _selectedPreset != null && next.Id == _selectedPreset.Id)
+            return;
+
         if (_selectedPreset != null) PushPresetEditor();
-        _selectedPreset = PresetList.SelectedItem as QuickPreset;
+        _selectedPreset = next;
         LoadPresetEditor(_selectedPreset);
     }
 
@@ -840,22 +1423,48 @@ public partial class MainWindow : Window
         TxtPresetHotkey.Text = p.Hotkey ?? "";
         ChkPresetRes.IsChecked = p.ApplyResolution;
         ChkPresetColor.IsChecked = p.ApplyColor;
+        p.EnsureDualColorSlots();
+        _presetEditorBackend = p.Color.Backend;
+        SetBackendToggle(p.Color.Backend, TogPresetBackend);
+        ChkPresetLock.IsChecked = p.Color.LockColor;
         if (!string.IsNullOrWhiteSpace(p.Resolution) && CmbPresetRes.Items.Contains(p.Resolution))
             CmbPresetRes.SelectedItem = p.Resolution;
         else if (CmbPresetRes.Items.Count > 0)
             CmbPresetRes.SelectedIndex = 0;
-        SldPresetB.Value = p.Color.Brightness;
-        SldPresetC.Value = p.Color.Contrast;
-        SldPresetG.Value = p.Color.Gamma;
+        ApplyColorSliders(p.Color, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
         UpdatePresetLabels();
+        UpdateBackendActiveLabel(TogPresetBackend, p.Color.Backend == ColorBackend.LowLevel);
         _suppressEditorEvents = false;
+    }
+
+    /// <summary>Name typing must not Refresh the list (that reloads the TextBox and eats characters).</summary>
+    private void PresetName_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressEditorEvents || _selectedPreset == null) return;
+        _selectedPreset.Name = TxtPresetName.Text;
+        MarkDirty();
+    }
+
+    private void PresetName_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_selectedPreset == null) return;
+        _selectedPreset.Name = TxtPresetName.Text.Trim();
+        if (TxtPresetName.Text != _selectedPreset.Name)
+        {
+            _suppressEditorEvents = true;
+            TxtPresetName.Text = _selectedPreset.Name;
+            _suppressEditorEvents = false;
+        }
+        RefreshPresetListSafe();
+        MarkDirty();
     }
 
     private void PresetEditorChanged(object sender, RoutedEventArgs e)
     {
         if (_suppressEditorEvents || _selectedPreset == null) return;
+        MarkDirty();
         PushPresetEditor();
-        PresetList.Items.Refresh();
+        RefreshPresetListSafe();
     }
 
     private void PresetColor_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -863,30 +1472,76 @@ public partial class MainWindow : Window
         if (_suppressEditorEvents) return;
         UpdatePresetLabels();
         if (_selectedPreset == null) return;
+        MarkDirty();
         PushPresetEditor();
+        // Don't refresh list on every slider tick — name/summary flicker isn't needed.
+    }
+
+    private void RefreshPresetListSafe()
+    {
+        var keepId = _selectedPreset?.Id;
+        _suppressEditorEvents = true;
         PresetList.Items.Refresh();
+        if (keepId != null)
+        {
+            var match = _presets.FirstOrDefault(p => p.Id == keepId);
+            if (match != null && !ReferenceEquals(PresetList.SelectedItem, match))
+                PresetList.SelectedItem = match;
+        }
+        _suppressEditorEvents = false;
     }
 
     private void UpdatePresetLabels()
     {
         if (LblPresetB == null) return;
-        LblPresetB.Text = $"Brightness: {SldPresetB.Value:F2}";
-        LblPresetC.Text = $"Contrast: {SldPresetC.Value:F2}";
-        LblPresetG.Text = $"Gamma: {SldPresetG.Value:F2}";
+        var tmp = new ColorSettings
+        {
+            Brightness = SldPresetB.Value,
+            Contrast = SldPresetC.Value,
+            Gamma = SldPresetG.Value,
+            Backend = ReadBackendToggle(TogPresetBackend)
+        };
+        string label = GpuVendorDetect.DriverLabel;
+        if (tmp.Backend == ColorBackend.LowLevel)
+        {
+            var (b, c, g) = tmp.ToRivaTunerUnits();
+            LblPresetB.Text = $"Brightness: {b}  (RT)";
+            LblPresetC.Text = $"Contrast: {c}  (RT)";
+            LblPresetG.Text = $"Gamma: {g:F2}  (RT)";
+        }
+        else
+        {
+            LblPresetB.Text = $"Brightness: {(int)Math.Round(tmp.Brightness * 100)}%  ({label} CP)";
+            LblPresetC.Text = $"Contrast: {(int)Math.Round(Math.Clamp(tmp.Contrast / 2.0, 0, 1) * 100)}%  ({label} CP)";
+            LblPresetG.Text = $"Gamma: {Math.Clamp(tmp.Gamma, 0.4, 2.8):F2}  ({label} CP)";
+        }
+        if (LblPresetV != null)
+        {
+            LblPresetV.Text = tmp.Backend == ColorBackend.LowLevel
+                ? $"Vibrance: {(int)SldPresetV.Value}"
+                : $"Digital vibrance: {(int)SldPresetV.Value}%  ({label} CP)";
+        }
+        if (LblPresetShadow != null) LblPresetShadow.Text = $"Shadow lift: {SldPresetShadow.Value:F2}";
     }
 
     private void PushPresetEditor()
     {
         if (_selectedPreset == null) return;
-        _selectedPreset.Name = TxtPresetName.Text.Trim();
+        // Keep live name from TextBox (trim only on LostFocus) so mid-type spaces aren't eaten.
+        if (!ReferenceEquals(Keyboard.FocusedElement, TxtPresetName))
+            _selectedPreset.Name = TxtPresetName.Text.Trim();
+        else
+            _selectedPreset.Name = TxtPresetName.Text;
         _selectedPreset.Hotkey = string.IsNullOrWhiteSpace(TxtPresetHotkey.Text) ? null : TxtPresetHotkey.Text.Trim();
         _selectedPreset.ApplyResolution = ChkPresetRes.IsChecked == true;
         _selectedPreset.ApplyColor = ChkPresetColor.IsChecked == true;
         _selectedPreset.Resolution = CmbPresetRes.SelectedItem?.ToString();
-        _selectedPreset.Color.Brightness = SldPresetB.Value;
-        _selectedPreset.Color.Contrast = SldPresetC.Value;
-        _selectedPreset.Color.Gamma = SldPresetG.Value;
-        _selectedPreset.Color.Clamp();
+        _selectedPreset.Color = ReadColorFromSliders(
+            ReadBackendToggle(TogPresetBackend),
+            SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow,
+            ChkPresetLock.IsChecked == true);
+        _presetEditorBackend = _selectedPreset.Color.Backend;
+        _selectedPreset.SaveActiveToDualSlots();
         SyncPresetsBackToGame();
     }
 
@@ -905,10 +1560,11 @@ public partial class MainWindow : Window
             Color = ColorSettings.Neutral,
             Hotkey = ""
         };
+        p.EnsureDualColorSlots();
         _presets.Add(p);
         SyncPresetsBackToGame();
         PresetList.SelectedItem = p;
-        _dirty = true;
+        MarkDirty();
     }
 
     private void DeletePreset_Click(object sender, RoutedEventArgs e)
@@ -917,7 +1573,7 @@ public partial class MainWindow : Window
         _presets.Remove(_selectedPreset);
         _selectedPreset = null;
         SyncPresetsBackToGame();
-        _dirty = true;
+        MarkDirty();
     }
 
     private void HotkeyBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -931,13 +1587,13 @@ public partial class MainWindow : Window
         if (key is Key.Escape or Key.Back or Key.Delete)
         {
             box.Text = "";
-            _dirty = true;
+            MarkDirty();
             if (box == TxtPresetHotkey && _selectedPreset != null)
                 PushPresetEditor();
             return;
         }
         box.Text = HotkeyService.GestureFromKeys(Keyboard.Modifiers, key);
-        _dirty = true;
+        MarkDirty();
         if (box == TxtPresetHotkey && _selectedPreset != null)
             PushPresetEditor();
     }
@@ -947,7 +1603,7 @@ public partial class MainWindow : Window
         if (sender is not System.Windows.Controls.Button { Tag: System.Windows.Controls.TextBox box })
             return;
         box.Text = "";
-        _dirty = true;
+        MarkDirty();
         if (box == TxtPresetHotkey && _selectedPreset != null)
             PushPresetEditor();
     }
@@ -980,6 +1636,8 @@ public partial class MainWindow : Window
     {
         if (App.Current is App app && !app.IsExitRequested)
         {
+            FlushAutosave();
+
             if (App.Services.Config.Current.Ui?.MinimizeToTrayOnClose == false)
             {
                 app.ExitApp();
@@ -989,6 +1647,126 @@ public partial class MainWindow : Window
             HideWithFade();
         }
     }
+
+    /// <summary>
+    /// Used by tray Exit. Returns false if the user cancels.
+    /// </summary>
+    public bool PromptUnsavedBeforeExit()
+    {
+        FlushAutosave();
+        return true;
+    }
+
+    /// <returns>false if user chose Cancel / Stay</returns>
+    private bool TryResolveUnsavedChanges()
+    {
+        FlushAutosave();
+        return true;
+    }
+
+    private void SetBackendToggle(ColorBackend backend, System.Windows.Controls.Primitives.ToggleButton tog)
+    {
+        string label = GpuVendorDetect.DriverLabel;
+        tog.Content = label;
+        // Checked = Low Level (right), Unchecked = GPU driver (left)
+        tog.IsChecked = backend == ColorBackend.LowLevel;
+        UpdateBackendActiveLabel(tog, backend == ColorBackend.LowLevel);
+    }
+
+    private void UpdateBackendActiveLabel(System.Windows.Controls.Primitives.ToggleButton tog, bool lowLevel)
+    {
+        string label = GpuVendorDetect.DriverLabel;
+        string active = lowLevel
+            ? "Active: Low Level (RivaTuner)"
+            : $"Active: {label} (Control Panel)";
+
+        if (ReferenceEquals(tog, TogBackend))
+        {
+            if (LblBackendActive != null)
+            {
+                LblBackendActive.Text = active;
+                LblBackendActive.Foreground = (System.Windows.Media.Brush)FindResource("AccentBrush");
+            }
+            if (LblBackendHint != null)
+                LblBackendHint.Text = lowLevel
+                    ? "Switch is on Low Level — B/C/G as RivaTuner Detonator"
+                    : $"Switch is on {label} — B/C/G + Vibrance like the control panel";
+        }
+        else if (ReferenceEquals(tog, TogPresetBackend) && LblPresetBackendActive != null)
+        {
+            LblPresetBackendActive.Text = active;
+        }
+        else if (ReferenceEquals(tog, TogDefBackend) && LblDefBackendActive != null)
+        {
+            LblDefBackendActive.Text = active;
+        }
+    }
+
+    private void FillAudioDevices()
+    {
+        if (CmbAudio == null) return;
+        var prev = (CmbAudio.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+        CmbAudio.Items.Clear();
+        CmbAudio.Items.Add(new ComboBoxItem { Content = "(default / don't change)", Tag = "" });
+        try
+        {
+            foreach (var d in AudioEndpoint.ListDevices())
+                CmbAudio.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Id });
+        }
+        catch { }
+        SelectAudioDevice(prev);
+    }
+
+    private void SelectAudioDevice(string? id)
+    {
+        if (CmbAudio == null) return;
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            CmbAudio.SelectedIndex = 0;
+            return;
+        }
+        foreach (var item in CmbAudio.Items)
+        {
+            if (item is ComboBoxItem ci && string.Equals(ci.Tag?.ToString(), id, StringComparison.OrdinalIgnoreCase))
+            {
+                CmbAudio.SelectedItem = ci;
+                return;
+            }
+        }
+        CmbAudio.SelectedIndex = 0;
+    }
+
+    private void ExportPresets_Click(object sender, RoutedEventArgs e)
+    {
+        if (_presetGame == null)
+        {
+            ThemedDialog.Show(this, "Select a game first.", "Presets");
+            return;
+        }
+        SyncPresetsBackToGame();
+        if (PresetPackService.Export(_presetGame))
+            ShowToast("Preset pack exported");
+    }
+
+    private void ImportPresets_Click(object sender, RoutedEventArgs e)
+    {
+        if (_presetGame == null)
+        {
+            ThemedDialog.Show(this, "Select a game first.", "Presets");
+            return;
+        }
+        int n = PresetPackService.Import(_presetGame);
+        if (n <= 0) return;
+        _presets.Clear();
+        foreach (var p in _presetGame.Presets)
+            _presets.Add(p);
+        PresetList.Items.Refresh();
+        MarkDirty();
+        ShowToast($"Imported {n} preset(s)");
+    }
+
+    private static ColorBackend ReadBackendToggle(System.Windows.Controls.Primitives.ToggleButton tog) =>
+        tog.IsChecked == true ? ColorBackend.LowLevel : ColorBackend.Driver;
 
     private static GameProfile CloneProfile(GameProfile p) => new()
     {
@@ -1005,9 +1783,13 @@ public partial class MainWindow : Window
         ApplyResolution = p.ApplyResolution,
         ApplyPowerPlan = p.ApplyPowerPlan,
         Color = p.Color.Clone(),
+        ColorLowLevel = p.ColorLowLevel?.Clone(),
+        ColorDriver = p.ColorDriver?.Clone(),
+        Session = (p.Session ?? new SessionExtras()).Clone(),
         Companions = p.Companions.Select(c => new CompanionApp
         {
             Path = c.Path,
+            Arguments = c.Arguments,
             LaunchMode = c.LaunchMode,
             TaskName = c.TaskName,
             OnStop = c.OnStop,
@@ -1015,18 +1797,7 @@ public partial class MainWindow : Window
             DismissDialogs = c.DismissDialogs,
             MinimizeToTray = c.MinimizeToTray
         }).ToList(),
-        Presets = (p.Presets ?? new List<QuickPreset>()).Select(ClonePreset).ToList()
-    };
-
-    private static QuickPreset ClonePreset(QuickPreset p) => new()
-    {
-        Id = p.Id,
-        Name = p.Name,
-        Hotkey = p.Hotkey,
-        ApplyResolution = p.ApplyResolution,
-        Resolution = p.Resolution,
-        ApplyColor = p.ApplyColor,
-        Color = p.Color.Clone()
+        Presets = (p.Presets ?? new List<QuickPreset>()).Select(QuickPreset.CloneOf).ToList()
     };
 
     private static void SelectComboByContent(System.Windows.Controls.ComboBox cmb, string value)

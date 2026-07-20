@@ -44,6 +44,8 @@
 
             <Border Grid.Row="2" Background="#140F12" CornerRadius="0,0,10,10" Padding="14,10">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="BtnDiscard" Content="Don't save" Style="{StaticResource GhostButton}"
+                            MinWidth="90" Margin="0,0,8,0" Visibility="Collapsed" Click="Discard_Click"/>
                     <Button x:Name="BtnCancel" Content="Cancel" Style="{StaticResource GhostButton}"
                             MinWidth="80" Margin="0,0,8,0" Visibility="Collapsed" Click="Cancel_Click"/>
                     <Button x:Name="BtnOk" Content="OK" Style="{StaticResource AccentButton}"

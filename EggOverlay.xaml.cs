@@ -59,6 +59,9 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
         {
             bmp = AssetLoader.Image(name);
             if (bmp == null) return;
+            // Cap cache to known scenes — avoid unbounded growth if asset list grows later.
+            if (_cache.Count >= Math.Max(8, Scenes.Length + 2))
+                _cache.Clear();
             _cache[name] = bmp;
         }
 

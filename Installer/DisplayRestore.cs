@@ -42,10 +42,33 @@ internal static class DisplayRestore
 
         try
         {
+            log?.Invoke("Restoring NVIDIA Digital Vibrance…");
+            ResetNvidiaVibrance();
+        }
+        catch { /* best-effort / no NVIDIA */ }
+
+        try
+        {
             log?.Invoke("Restoring power plan…");
             SetBalancedPowerPlan();
         }
         catch { /* best-effort */ }
+    }
+
+    private static void ResetNvidiaVibrance()
+    {
+        try
+        {
+            NvAPIWrapper.NVIDIA.Initialize();
+            var display = NvAPIWrapper.Display.Display.GetDisplays().FirstOrDefault();
+            if (display != null)
+                display.DigitalVibranceControl.NormalizedLevel = 0;
+            NvAPIWrapper.NVIDIA.Unload();
+        }
+        catch
+        {
+            try { NvAPIWrapper.NVIDIA.Unload(); } catch { }
+        }
     }
 
     private static void ApplyNeutralRamp()

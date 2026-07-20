@@ -11,7 +11,7 @@ internal static class InstallerCore
 {
     private const string AppName = "Display Profile Manager";
     private const string AppId = "DisplayProfileManager";
-    private const string Version = "1.4.0";
+    private const string Version = "1.6.0";
     private const string Publisher = "Nakidev";
     private const string ExeName = "DisplayProfileManager.exe";
 
@@ -192,7 +192,20 @@ internal static class InstallerCore
 
         DisplayRestore.RestoreNeutralDisplay(log);
 
-        log?.Invoke("Removing shortcuts…");
+        log?.Invoke("Removing autostart task…");
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                ArgumentList = { "/Delete", "/F", "/TN", "DisplayProfileManager" },
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+            using var p = Process.Start(psi);
+            p?.WaitForExit(5000);
+        }
+        catch { }
         try
         {
             var start = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", AppName + ".lnk");
@@ -276,9 +289,6 @@ internal static class InstallerCore
         }
         catch { }
     }
-
-    [Obsolete("Use PerformUninstall + UninstallWindow")]
-    internal static void Uninstall(bool silent) => PerformUninstall(confirmUi: false, silent: silent);
 
     private static List<string> ExtractPayloadWhitelisted(string dir)
     {

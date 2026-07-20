@@ -57,20 +57,20 @@
                 <Button Style="{StaticResource CaptionButton}" Click="Minimize_Click"
                         ToolTip="Minimize"
                         shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Path Width="10" Height="10" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
-                          Data="M0,5 L10,5"/>
+                    <Path Width="8" Height="8" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1"
+                          Data="M0,4 L8,4"/>
                 </Button>
                 <Button Style="{StaticResource CaptionButton}" Click="Maximize_Click"
                         ToolTip="Maximize"
                         shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Path Width="10" Height="10" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
-                          Data="M1,1 H9 V9 H1 Z" Fill="Transparent"/>
+                    <Path Width="8" Height="8" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1"
+                          Data="M0.5,0.5 H7.5 V7.5 H0.5 Z" Fill="Transparent"/>
                 </Button>
                 <Button Style="{StaticResource CaptionCloseButton}" Click="Close_Click"
                         ToolTip="Close"
                         shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Path Width="10" Height="10" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
-                          Data="M1,1 L9,9 M9,1 L1,9"/>
+                    <Path Width="8" Height="8" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1"
+                          Data="M1,1 L7,7 M7,1 L1,7"/>
                 </Button>
             </StackPanel>
         </Grid>
@@ -85,11 +85,10 @@
 
         <DockPanel Grid.Row="0" Margin="0,0,0,4">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="BtnApply" Content="Apply" Style="{StaticResource AccentButton}" Margin="0,0,8,0" Click="Apply_Click"
-                        ToolTip="Apply Global defaults / selected profile / selected preset (depends on active tab)"/>
-                <Button x:Name="BtnSave" Content="Save" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Save_Click"/>
-                <Button x:Name="BtnReset" Content="Reset settings" Style="{StaticResource GhostButton}" Click="ResetSettings_Click"
-                        ToolTip="Restore factory display settings (resolution + neutral color)"/>
+                <Button x:Name="BtnApply" Content="Apply" Style="{StaticResource AccentButton}" Margin="0,0,8,0" Click="Apply_Click"/>
+                <local:InfoHint x:Name="InfoApply" Margin="0,0,10,0"/>
+                <Button x:Name="BtnReset" Content="Reset settings" Style="{StaticResource GhostButton}" Click="ResetSettings_Click"/>
+                <local:InfoHint x:Name="InfoReset"/>
             </StackPanel>
         </DockPanel>
 
@@ -106,21 +105,27 @@
 
                     <Border Grid.Column="0" Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="10">
                         <DockPanel>
-                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-                                <TextBox x:Name="TxtSearch" Margin="0,0,0,8" TextChanged="Search_Changed"
-                                         ToolTip="Search games…"/>
-                                <Button x:Name="BtnScan" Content="Scan games" Style="{StaticResource AccentButton}"
-                                        HorizontalAlignment="Stretch" Click="ScanGames_Click" Margin="0,0,0,6"
-                                        ToolTip="Find installed and running known games"/>
-                                <Button x:Name="BtnAddManual" Content="Add manually" Style="{StaticResource GhostButton}"
-                                        HorizontalAlignment="Stretch" Click="AddProfile_Click"/>
-                                <Button x:Name="BtnRestore" Content="Restore my games" Style="{StaticResource GhostButton}"
-                                        HorizontalAlignment="Stretch" Margin="0,6,0,0" Click="RestoreCoreGames_Click"
+                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                                <TextBox x:Name="TxtSearch" Margin="0,0,0,6" Height="28" FontSize="12"
+                                         Padding="8,4" VerticalContentAlignment="Center"
+                                         TextChanged="Search_Changed" ToolTip="Search games…"/>
+                                <UniformGrid Columns="2" Margin="0,0,0,4">
+                                    <Button x:Name="BtnScan" Content="Scan" Style="{StaticResource CompactAccentButton}"
+                                            Margin="0,0,3,0" Click="ScanGames_Click"
+                                            ToolTip="Find installed and running known games"/>
+                                    <Button x:Name="BtnAddManual" Content="Add" Style="{StaticResource CompactGhostButton}"
+                                            Margin="3,0,0,0" Click="AddProfile_Click"
+                                            ToolTip="Add a game profile manually"/>
+                                </UniformGrid>
+                                <Button x:Name="BtnRestore" Content="Restore games" Style="{StaticResource CompactGhostButton}"
+                                        HorizontalAlignment="Stretch" Click="RestoreCoreGames_Click"
                                         ToolTip="Add Valorant / PUBG / War Thunder / Tarkov if missing"/>
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button x:Name="BtnDup" Content="Dup" Style="{StaticResource GhostButton}" Margin="0,0,6,0" Click="DupProfile_Click"/>
-                                <Button x:Name="BtnDelete" Content="Delete" Style="{StaticResource GhostButton}" Click="DeleteProfile_Click"/>
+                                <Button x:Name="BtnDup" Content="Dup" Style="{StaticResource CompactGhostButton}" Margin="0,0,6,0"
+                                        MinWidth="48" HorizontalAlignment="Left" Click="DupProfile_Click"/>
+                                <Button x:Name="BtnDelete" Content="Delete" Style="{StaticResource CompactGhostButton}"
+                                        MinWidth="56" HorizontalAlignment="Left" Click="DeleteProfile_Click"/>
                             </StackPanel>
                             <ListBox x:Name="ProfileList" SelectionChanged="ProfileList_SelectionChanged">
                                 <ListBox.ItemTemplate>
@@ -174,17 +179,27 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBox x:Name="TxtProcess" Grid.Column="0" TextChanged="EditorChanged"/>
-                                    <Button Grid.Column="1" Content="Browse" Style="{StaticResource GhostButton}" Margin="6,0,0,0" Click="BrowseExe_Click"/>
-                                    <Button Grid.Column="2" Content="Running..." Style="{StaticResource GhostButton}" Margin="6,0,0,0" Click="PickRunning_Click"/>
+                                    <Button Grid.Column="1" Content="Browse" Style="{StaticResource CompactGhostButton}"
+                                            Margin="6,0,0,0" MinWidth="64" HorizontalAlignment="Left" Click="BrowseExe_Click"/>
+                                    <Button Grid.Column="2" Content="Running..." Style="{StaticResource CompactGhostButton}"
+                                            Margin="6,0,0,0" MinWidth="72" HorizontalAlignment="Left" Click="PickRunning_Click"/>
                                 </Grid>
 
                                 <Separator/>
                                 <TextBlock Text="Display" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                                <CheckBox x:Name="ChkApplyRes" Content="Change resolution" Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                <DockPanel Margin="0,0,0,0">
+                                    <local:InfoHint x:Name="InfoRes" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkApplyRes" Content="Change resolution" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
                                 <ComboBox x:Name="CmbResolution" Margin="0,6,0,0" SelectionChanged="EditorChanged"/>
                                 <TextBlock x:Name="LblDisplay" Text="Monitor" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
                                 <ComboBox x:Name="CmbDisplay" SelectionChanged="EditorChanged"/>
-                                <CheckBox x:Name="ChkApplyPower" Content="Change power plan" Margin="0,12,0,0" Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                <DockPanel Margin="0,12,0,0">
+                                    <local:InfoHint x:Name="InfoPower" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkApplyPower" Content="Change power plan" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
                                 <ComboBox x:Name="CmbPower" Margin="0,6,0,0" SelectionChanged="EditorChanged">
                                     <ComboBoxItem Content="highPerformance" Tag="highPerformance"/>
                                     <ComboBoxItem Content="balanced" Tag="balanced"/>
@@ -193,23 +208,128 @@
 
                                 <Separator/>
                                 <TextBlock Text="Color" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                                <CheckBox x:Name="ChkApplyColor" Content="Apply color with this profile" Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                <TextBlock x:Name="LblBrightness" Text="Brightness: 0.50" Margin="0,10,0,0" Foreground="{DynamicResource MutedBrush}"/>
+                                <DockPanel>
+                                    <local:InfoHint x:Name="InfoApplyColor" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkApplyColor" Content="Apply color with this profile" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,10,0,4">
+                                    <local:InfoHint x:Name="InfoBackend" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblColorBackend" Text="Color backend" Foreground="{DynamicResource MutedBrush}"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <ToggleButton x:Name="TogBackend" Style="{StaticResource BackendSlideToggle}"
+                                              Content="NVIDIA" Checked="BackendToggle_Changed" Unchecked="BackendToggle_Changed"/>
+                                <TextBlock x:Name="LblBackendActive" Text="Active: NVIDIA"
+                                           FontSize="12" FontWeight="SemiBold" Margin="0,8,0,2"
+                                           Foreground="{DynamicResource AccentBrush}"/>
+                                <TextBlock x:Name="LblBackendHint" Text="Slide left/right to switch backend"
+                                           FontSize="11" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <DockPanel Margin="0,4,0,0">
+                                    <local:InfoHint x:Name="InfoLock" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkLockColor" Content="Lock color while game is running" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,10,0,0">
+                                    <local:InfoHint x:Name="InfoBrightness" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblBrightness" Text="Brightness: 0.50" Foreground="{DynamicResource MutedBrush}"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
                                 <Slider x:Name="SldBrightness" Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
                                 <TextBlock x:Name="LblContrast" Text="Contrast: 1.00" Margin="0,8,0,0" Foreground="{DynamicResource MutedBrush}"/>
-                                <Slider x:Name="SldContrast" Minimum="0.5" Maximum="2" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <Slider x:Name="SldContrast" Minimum="0" Maximum="2" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
                                 <TextBlock x:Name="LblGamma" Text="Gamma: 1.00" Margin="0,8,0,0" Foreground="{DynamicResource MutedBrush}"/>
-                                <Slider x:Name="SldGamma" Minimum="0.3" Maximum="3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <Slider x:Name="SldGamma" Minimum="0.5" Maximum="6" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <DockPanel Margin="0,8,0,0">
+                                    <local:InfoHint x:Name="InfoVibrance" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblVibrance" Text="Vibrance: 50" Foreground="{DynamicResource MutedBrush}"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Slider x:Name="SldVibrance" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <DockPanel Margin="0,8,0,0">
+                                    <local:InfoHint x:Name="InfoShadow" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblShadowLift" Text="Shadow lift: 0.00" Foreground="{DynamicResource MutedBrush}"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Slider x:Name="SldShadowLift" Minimum="0" Maximum="0.4" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="BtnPreviewColor" Content="Preview" Style="{StaticResource CompactGhostButton}"
+                                            Margin="0,0,8,0" Click="PreviewColor_Click"
+                                            ToolTip="Apply current sliders to the display without saving"/>
+                                    <Button x:Name="BtnCompareAb" Content="A/B" Style="{StaticResource CompactGhostButton}"
+                                            Click="CompareAb_Click"
+                                            ToolTip="Toggle between last preview and factory gamma"/>
+                                </StackPanel>
+
+                                <Separator/>
+                                <DockPanel Margin="0,0,0,6">
+                                    <local:InfoHint x:Name="InfoSession" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblSessionTitle" Text="Session extras" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <TextBlock x:Name="LblSessionSub" Text="System-only tweaks (no game injection)" FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,6"/>
+                                <DockPanel>
+                                    <local:InfoHint x:Name="InfoDeferred" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblDeferred" Text="Deferred re-apply: 0 s" Foreground="{DynamicResource MutedBrush}"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <Slider x:Name="SldDeferred" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <DockPanel Margin="0,8,0,0">
+                                    <local:InfoHint x:Name="InfoQuiet" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkQuietToast" Content="Quiet notifications" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,4,0,0">
+                                    <local:InfoHint x:Name="InfoNight" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkNoNightLight" Content="Disable Night Light" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,4,0,0">
+                                    <local:InfoHint x:Name="InfoHdr" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkNoAutoHdr" Content="Disable Auto HDR" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,4,0,0">
+                                    <local:InfoHint x:Name="InfoPrimary" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkIsolateMon" Content="Primary monitor only" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,4,0,0">
+                                    <local:InfoHint x:Name="InfoMonBright" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkMonBright" Content="Set monitor brightness (DDC/CI)" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <TextBlock x:Name="LblMonBright" Text="Brightness: 80%" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
+                                <Slider x:Name="SldMonBright" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <DockPanel Margin="0,8,0,0">
+                                    <local:InfoHint x:Name="InfoAudio" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkSwitchAudio" Content="Switch default audio device" VerticalAlignment="Center"
+                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                </DockPanel>
+                                <ComboBox x:Name="CmbAudio" Margin="0,6,0,0" SelectionChanged="EditorChanged"/>
+                                <DockPanel Margin="0,8,0,4">
+                                    <local:InfoHint x:Name="InfoScaling" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblScaling" Text="Scaling mode" Foreground="{DynamicResource MutedBrush}"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <ComboBox x:Name="CmbScaling" SelectionChanged="EditorChanged">
+                                    <ComboBoxItem Content="default" Tag="default" IsSelected="True"/>
+                                    <ComboBoxItem Content="stretch" Tag="stretch"/>
+                                    <ComboBoxItem Content="center" Tag="center"/>
+                                </ComboBox>
 
                                 <Separator/>
                                 <DockPanel Margin="0,0,0,8">
+                                    <local:InfoHint x:Name="InfoCompanions" DockPanel.Dock="Right"/>
+                                    <Button DockPanel.Dock="Right" Content="Add" Style="{StaticResource CompactGhostButton}"
+                                            MinWidth="56" Margin="0,0,4,0" HorizontalAlignment="Right" Click="AddCompanion_Click"/>
                                     <TextBlock Text="Companions" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                    <Button Content="Add" Style="{StaticResource GhostButton}" HorizontalAlignment="Right" Click="AddCompanion_Click"/>
                                 </DockPanel>
-                                <ListBox x:Name="CompanionList" Height="100" DisplayMemberPath="Path"/>
+                                <ListBox x:Name="CompanionList" Height="100" DisplayMemberPath="ListLabel"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                    <Button Content="Edit" Style="{StaticResource GhostButton}" Margin="0,0,6,0" Click="EditCompanion_Click"/>
-                                    <Button Content="Remove" Style="{StaticResource GhostButton}" Click="RemoveCompanion_Click"/>
+                                    <Button Content="Edit" Style="{StaticResource CompactGhostButton}" Margin="0,0,6,0"
+                                            MinWidth="56" HorizontalAlignment="Left" Click="EditCompanion_Click"/>
+                                    <Button Content="Remove" Style="{StaticResource CompactGhostButton}"
+                                            MinWidth="64" HorizontalAlignment="Left" Click="RemoveCompanion_Click"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -265,16 +385,29 @@
                         <DockPanel>
                             <TextBlock DockPanel.Dock="Top" x:Name="LblPresetGame" Text="Presets"
                                        FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button Content="Add" Style="{StaticResource AccentButton}" Margin="0,0,6,0" Click="AddPreset_Click"/>
-                                <Button Content="Delete" Style="{StaticResource GhostButton}" Click="DeletePreset_Click"/>
-                            </StackPanel>
+                            <UniformGrid DockPanel.Dock="Bottom" Columns="2" Rows="2" Margin="0,8,0,0">
+                                <Button x:Name="BtnPresetAdd" Content="Add" Style="{StaticResource CompactAccentButton}"
+                                        Margin="0,0,4,4" Click="AddPreset_Click"/>
+                                <Button x:Name="BtnPresetDelete" Content="Delete" Style="{StaticResource CompactGhostButton}"
+                                        Margin="4,0,0,4" Click="DeletePreset_Click"/>
+                                <Button x:Name="BtnPresetExport" Content="Export" Style="{StaticResource CompactGhostButton}"
+                                        Margin="0,4,4,0" Click="ExportPresets_Click"/>
+                                <Button x:Name="BtnPresetImport" Content="Import" Style="{StaticResource CompactGhostButton}"
+                                        Margin="4,4,0,0" Click="ImportPresets_Click"/>
+                            </UniformGrid>
                             <ListBox x:Name="PresetList" SelectionChanged="PresetList_SelectionChanged">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <StackPanel>
+                                        <StackPanel Margin="0,2">
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-                                            <TextBlock Text="{Binding Summary}" Foreground="#B08A9A" FontSize="11"/>
+                                            <TextBlock FontSize="11" Foreground="{DynamicResource MutedBrush}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0}  ·  {1}">
+                                                        <Binding Path="Summary"/>
+                                                        <Binding Path="Hotkey" TargetNullValue="no hotkey"/>
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
                                         </StackPanel>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
@@ -286,24 +419,43 @@
                         <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                             <StackPanel x:Name="PresetEditor">
                                 <TextBlock Text="Preset for this game" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                                <TextBlock Text="Hotkeys work only while this game is running" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,12"/>
+                                <TextBlock Text="Hotkeys need Ctrl/Alt/Shift (e.g. Ctrl+Alt+1). They bind to the selected game here, and to the running game when it is active."
+                                           Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,12" FontSize="11"/>
 
                                 <TextBlock Text="Name" Foreground="{DynamicResource MutedBrush}"/>
-                                <TextBox x:Name="TxtPresetName" Margin="0,4,0,10" TextChanged="PresetEditorChanged"/>
+                                <TextBox x:Name="TxtPresetName" Margin="0,4,0,10"
+                                         TextChanged="PresetName_TextChanged" LostFocus="PresetName_LostFocus"/>
 
                                 <TextBlock Text="Hotkey (click &amp; press)" Foreground="{DynamicResource MutedBrush}"/>
                                 <TextBox x:Name="TxtPresetHotkey" Margin="0,4,0,10" PreviewKeyDown="HotkeyBox_PreviewKeyDown" TextChanged="PresetEditorChanged"/>
-
                                 <CheckBox x:Name="ChkPresetRes" Content="Set resolution" Checked="PresetEditorChanged" Unchecked="PresetEditorChanged"/>
                                 <ComboBox x:Name="CmbPresetRes" Margin="0,6,0,12" SelectionChanged="PresetEditorChanged"/>
 
                                 <CheckBox x:Name="ChkPresetColor" Content="Set color" Checked="PresetEditorChanged" Unchecked="PresetEditorChanged"/>
+                                <DockPanel Margin="0,8,0,4">
+                                    <local:InfoHint x:Name="InfoPresetBackend" DockPanel.Dock="Right"/>
+                                    <TextBlock Text="Backend" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <ToggleButton x:Name="TogPresetBackend" Style="{StaticResource BackendSlideToggle}"
+                                              Content="NVIDIA" Checked="PresetBackendToggle_Changed" Unchecked="PresetBackendToggle_Changed"/>
+                                <TextBlock x:Name="LblPresetBackendActive" Text="Active: NVIDIA"
+                                           FontSize="12" FontWeight="SemiBold" Margin="0,8,0,8"
+                                           Foreground="{DynamicResource AccentBrush}"/>
+                                <DockPanel Margin="0,8,0,0">
+                                    <local:InfoHint x:Name="InfoPresetLock" DockPanel.Dock="Right"/>
+                                    <CheckBox x:Name="ChkPresetLock" Content="Lock while game running" VerticalAlignment="Center"
+                                              Checked="PresetEditorChanged" Unchecked="PresetEditorChanged"/>
+                                </DockPanel>
                                 <TextBlock x:Name="LblPresetB" Text="Brightness: 0.50" Margin="0,8,0,0" Foreground="{DynamicResource MutedBrush}"/>
                                 <Slider x:Name="SldPresetB" Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                                 <TextBlock x:Name="LblPresetC" Text="Contrast: 1.00" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
-                                <Slider x:Name="SldPresetC" Minimum="0.5" Maximum="2" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
+                                <Slider x:Name="SldPresetC" Minimum="0" Maximum="2" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                                 <TextBlock x:Name="LblPresetG" Text="Gamma: 1.00" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
-                                <Slider x:Name="SldPresetG" Minimum="0.3" Maximum="3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
+                                <Slider x:Name="SldPresetG" Minimum="0.5" Maximum="6" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
+                                <TextBlock x:Name="LblPresetV" Text="Vibrance: 50" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
+                                <Slider x:Name="SldPresetV" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
+                                <TextBlock x:Name="LblPresetShadow" Text="Shadow lift: 0.00" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
+                                <Slider x:Name="SldPresetShadow" Minimum="0" Maximum="0.4" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                             </StackPanel>
                         </Border>
                     </ScrollViewer>
@@ -316,20 +468,31 @@
                         <StackPanel MaxWidth="620" HorizontalAlignment="Left">
                             <TextBlock Text="Defaults (no game running)" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12"/>
                             <TextBlock Text="Default resolution" Foreground="{DynamicResource MutedBrush}"/>
-                            <ComboBox x:Name="CmbDefaultRes" Margin="0,4,0,12"/>
+                            <ComboBox x:Name="CmbDefaultRes" Margin="0,4,0,12" SelectionChanged="GlobalEditorChanged"/>
                             <TextBlock Text="Default power plan" Foreground="{DynamicResource MutedBrush}"/>
-                            <ComboBox x:Name="CmbDefaultPower" Margin="0,4,0,12">
+                            <ComboBox x:Name="CmbDefaultPower" Margin="0,4,0,12" SelectionChanged="GlobalEditorChanged">
                                 <ComboBoxItem Content="balanced" IsSelected="True"/>
                                 <ComboBoxItem Content="highPerformance"/>
                             </ComboBox>
 
                             <TextBlock Text="Default color" FontWeight="SemiBold" Margin="0,4,0,8"/>
+                            <TextBlock Text="Backend" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,4"/>
+                            <ToggleButton x:Name="TogDefBackend" Style="{StaticResource BackendSlideToggle}"
+                                          Content="NVIDIA" Margin="0,0,0,4"
+                                          Checked="DefBackendToggle_Changed" Unchecked="DefBackendToggle_Changed"/>
+                            <TextBlock x:Name="LblDefBackendActive" Text="Active: NVIDIA"
+                                       FontSize="12" FontWeight="SemiBold" Margin="0,0,0,10"
+                                       Foreground="{DynamicResource AccentBrush}"/>
                             <TextBlock x:Name="LblDefBrightness" Text="Brightness: 0.50" Foreground="{DynamicResource MutedBrush}"/>
                             <Slider x:Name="SldDefBrightness" Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
                             <TextBlock x:Name="LblDefContrast" Text="Contrast: 1.00" Foreground="{DynamicResource MutedBrush}"/>
-                            <Slider x:Name="SldDefContrast" Minimum="0.5" Maximum="2" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
+                            <Slider x:Name="SldDefContrast" Minimum="0" Maximum="2" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
                             <TextBlock x:Name="LblDefGamma" Text="Gamma: 1.00" Foreground="{DynamicResource MutedBrush}"/>
-                            <Slider x:Name="SldDefGamma" Minimum="0.3" Maximum="3" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
+                            <Slider x:Name="SldDefGamma" Minimum="0.5" Maximum="6" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
+                            <TextBlock x:Name="LblDefVibrance" Text="Vibrance: 50" Foreground="{DynamicResource MutedBrush}"/>
+                            <Slider x:Name="SldDefVibrance" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
+                            <TextBlock x:Name="LblDefShadow" Text="Shadow lift: 0.00" Foreground="{DynamicResource MutedBrush}"/>
+                            <Slider x:Name="SldDefShadow" Minimum="0" Maximum="0.4" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
 
                             <Separator/>
                             <TextBlock Text="Adjustment hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
@@ -348,37 +511,49 @@
                                 <TextBlock Grid.Row="0" Text="Brightness +" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkBrightUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"
                                          ToolTip="Click, then press keys. Empty = disabled."/>
-                                <Button Grid.Row="0" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkBrightUp}"/>
+                                <Button Grid.Row="0" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkBrightUp}"/>
                                 <TextBlock Grid.Row="1" Text="Brightness -" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkBrightDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="1" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkBrightDown}"/>
+                                <Button Grid.Row="1" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkBrightDown}"/>
                                 <TextBlock Grid.Row="2" Text="Contrast +" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="2" Grid.Column="1" x:Name="HkContrastUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="2" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkContrastUp}"/>
+                                <Button Grid.Row="2" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkContrastUp}"/>
                                 <TextBlock Grid.Row="3" Text="Contrast -" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="3" Grid.Column="1" x:Name="HkContrastDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="3" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkContrastDown}"/>
+                                <Button Grid.Row="3" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkContrastDown}"/>
                                 <TextBlock Grid.Row="4" Text="Gamma +" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="4" Grid.Column="1" x:Name="HkGammaUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="4" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkGammaUp}"/>
+                                <Button Grid.Row="4" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkGammaUp}"/>
                                 <TextBlock Grid.Row="5" Text="Gamma -" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="5" Grid.Column="1" x:Name="HkGammaDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="5" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkGammaDown}"/>
+                                <Button Grid.Row="5" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkGammaDown}"/>
                                 <TextBlock Grid.Row="6" Text="Reset color" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="6" Grid.Column="1" x:Name="HkReset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="6" Grid.Column="2" Content="Clear" Style="{StaticResource GhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkReset}"/>
+                                <Button Grid.Row="6" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkReset}"/>
+                                <TextBlock Grid.Row="7" x:Name="LblHkCompareAb" Text="A/B compare" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="7" Grid.Column="1" x:Name="HkCompareAb" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="7" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkCompareAb}"/>
                             </Grid>
 
                             <Separator/>
-                            <CheckBox x:Name="ChkAutostart" Content="Start with Windows" Margin="0,4"/>
-                            <CheckBox x:Name="ChkStartMin" Content="Start minimized to tray" Margin="0,4"/>
+                            <DockPanel Margin="0,4,0,0">
+                                <local:InfoHint x:Name="InfoAutostart" DockPanel.Dock="Right"/>
+                                <CheckBox x:Name="ChkAutostart" Content="Start with Windows" VerticalAlignment="Center"
+                                          Checked="GlobalEditorChanged" Unchecked="GlobalEditorChanged"/>
+                            </DockPanel>
+                            <DockPanel Margin="0,4,0,0">
+                                <local:InfoHint x:Name="InfoStartMin" DockPanel.Dock="Right"/>
+                                <CheckBox x:Name="ChkStartMin" Content="Start minimized to tray" VerticalAlignment="Center"
+                                          Checked="GlobalEditorChanged" Unchecked="GlobalEditorChanged"/>
+                            </DockPanel>
                         </StackPanel>
                     </Border>
                 </ScrollViewer>

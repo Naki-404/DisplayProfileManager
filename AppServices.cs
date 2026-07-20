@@ -18,8 +18,19 @@ public sealed class AppServices : IDisposable
         Config.LoadOrCreate();
 
         Display = new DisplayEngine();
-        // Capture OS gamma before any profile applies (factory restore).
-        Display.CaptureFactoryGammaRamp();
+
+        // Dirty lock left behind → previous exit crashed/killed; restore identity first.
+        CrashRestored = SessionGuard.WasDirtyShutdown();
+        if (CrashRestored)
+        {
+            Display.RestoreCrashSafe();
+            Display.CaptureFactoryGammaRamp();
+        }
+        else
+        {
+            Display.CaptureFactoryGammaRamp();
+        }
+        SessionGuard.MarkRunning();
 
         Watcher = new ProcessWatcher();
         Companions = new CompanionService();
@@ -27,10 +38,15 @@ public sealed class AppServices : IDisposable
         Hotkeys = new HotkeyService();
     }
 
+    /// <summary>True if this launch applied crash-safe gamma/driver restore.</summary>
+    public bool CrashRestored { get; }
+
     public void Dispose()
     {
         try { Monitor.Dispose(); } catch { }
         try { Hotkeys.Dispose(); } catch { }
+        try { Display.DisposeDriverColor(); } catch { }
         try { Config.Dispose(); } catch { }
+        try { SessionGuard.MarkCleanExit(); } catch { }
     }
 }

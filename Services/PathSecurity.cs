@@ -91,4 +91,48 @@ public static class PathSecurity
         return string.Equals(Path.GetExtension(fullPath), ".exe", StringComparison.OrdinalIgnoreCase)
                && File.Exists(fullPath);
     }
+
+    /// <summary>
+    /// Companion launch args — no shell metacharacters. Empty is allowed.
+    /// Example: -launchapp elkagffjjeonbcmfpdndkckppafabjeklmdidong
+    /// </summary>
+    public static bool IsSafeArguments(string? args)
+    {
+        if (string.IsNullOrWhiteSpace(args)) return true;
+        if (args.Length > 1024) return false;
+        if (args.IndexOfAny(new[] { '&', '|', '>', '<', '^', '\n', '\r', '\0', ';' }) >= 0)
+            return false;
+        return true;
+    }
+
+    /// <summary>Split args for ProcessStartInfo.ArgumentList (handles quoted tokens).</summary>
+    public static List<string> SplitArguments(string? args)
+    {
+        var list = new List<string>();
+        if (string.IsNullOrWhiteSpace(args)) return list;
+
+        var sb = new System.Text.StringBuilder();
+        bool inQuotes = false;
+        foreach (char c in args.Trim())
+        {
+            if (c == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+            if (!inQuotes && char.IsWhiteSpace(c))
+            {
+                if (sb.Length > 0)
+                {
+                    list.Add(sb.ToString());
+                    sb.Clear();
+                }
+                continue;
+            }
+            sb.Append(c);
+        }
+        if (sb.Length > 0)
+            list.Add(sb.ToString());
+        return list;
+    }
 }

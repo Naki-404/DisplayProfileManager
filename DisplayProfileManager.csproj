@@ -10,9 +10,9 @@
     <AssemblyName>DisplayProfileManager</AssemblyName>
     <RootNamespace>DisplayProfileManager</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>1.4.0</Version>
-    <FileVersion>1.4.0.0</FileVersion>
-    <InformationalVersion>1.4.0</InformationalVersion>
+    <Version>1.6.0</Version>
+    <FileVersion>1.6.0.0</FileVersion>
+    <InformationalVersion>1.6.0</InformationalVersion>
     <Product>Display Profile Manager</Product>
     <Company>Nakidev</Company>
     <Authors>Nakidev</Authors>
@@ -33,6 +33,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="NvAPIWrapper.Net" Version="0.8.1.101" />
     <PackageReference Include="System.Management" Version="6.0.2" />
   </ItemGroup>
 

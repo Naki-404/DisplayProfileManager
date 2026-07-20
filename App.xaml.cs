@@ -36,14 +36,15 @@ public partial class App : System.Windows.Application
             _mutex = new Mutex(true, @"Local\DisplayProfileManager.SingleInstance", out created);
             if (!created)
             {
-                Loc.SetLocale("en");
-                try
+                bool silent = e.Args.Any(a =>
+                    a.Equals("--minimized", StringComparison.OrdinalIgnoreCase) ||
+                    a.Equals("/minimized", StringComparison.OrdinalIgnoreCase) ||
+                    a.Equals("--silent", StringComparison.OrdinalIgnoreCase));
+                if (!silent)
                 {
-                    var existing = Services?.Config?.Current?.Ui?.Locale;
-                    // Services not ready — default message bilingual-ish
+                    Loc.SetLocale("en");
+                    ThemedDialog.Show(null, "Display Profile Manager is already running.\nDisplay Profile Manager уже запущен.");
                 }
-                catch { }
-                ThemedDialog.Show(null, "Display Profile Manager is already running.\nDisplay Profile Manager уже запущен.");
                 Shutdown();
                 return;
             }
@@ -90,9 +91,19 @@ public partial class App : System.Windows.Application
                 {
                     var helper = new System.Windows.Interop.WindowInteropHelper(_main);
                     Services.Hotkeys.Attach(helper.Handle);
-                    Services.Hotkeys.RegisterFromConfig(Services.Config.Current, Services.Monitor.CurrentProfile);
+                    Services.Hotkeys.RegisterFromConfig(
+                        Services.Config.Current,
+                        Services.Monitor.CurrentProfile,
+                        _main.HotkeyPresetFallback);
+                    NotifyHotkeyFailures();
                     Services.Hotkeys.HotkeyPressed += action =>
-                        _main.Dispatcher.Invoke(() => Services.Monitor.HandleHotkey(action));
+                        _main.Dispatcher.Invoke(() =>
+                        {
+                            Services.Monitor.HandleHotkey(action);
+                            if (action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase)
+                                && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
+                                _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
+                        });
                 }
                 catch (Exception ex)
                 {
@@ -109,41 +120,79 @@ public partial class App : System.Windows.Application
                         Loc.SetLocale(u.Locale);
                         ThemeService.Apply(u);
                     }
-                    Services.Hotkeys.RegisterFromConfig(Services.Config.Current, Services.Monitor.CurrentProfile);
+                    Services.Hotkeys.RegisterFromConfig(
+                        Services.Config.Current,
+                        Services.Monitor.CurrentProfile,
+                        _main.HotkeyPresetFallback);
                     _main.ReloadFromConfig();
                     _main.ApplyLocalization();
                     RebuildTrayMenu();
                 });
 
             Services.Monitor.ActiveProfileChanged += profile =>
-                _main.Dispatcher.Invoke(() =>
+                _main.Dispatcher.BeginInvoke(() =>
                 {
-                    Services.Hotkeys.RegisterFromConfig(Services.Config.Current, profile);
-                    _main.UpdateActiveHeader(profile);
-                    RebuildTrayMenu();
-                    if (profile != null && (Services.Config.Current.Ui?.NotifyOnGameStart ?? true))
+                    try
                     {
-                        var msg = $"{Loc.T("toast.game")}: {profile.Name}";
-                        if (!string.IsNullOrWhiteSpace(profile.Resolution) && profile.ApplyResolution)
-                            msg += $" · {profile.Resolution}";
-                        _main.ShowToast(msg);
-                        try
+                        Services.Hotkeys.RegisterFromConfig(
+                            Services.Config.Current,
+                            profile,
+                            _main.HotkeyPresetFallback);
+                        NotifyHotkeyFailures();
+                        _main.UpdateActiveHeader(profile);
+                        _main.FocusPresetsForActiveOrSelectedGame(profile);
+                        RebuildTrayMenu();
+                        if (profile != null && (Services.Config.Current.Ui?.NotifyOnGameStart ?? true))
                         {
-                            _tray?.ShowBalloonTip(2500, Loc.T("app.name"), msg,
-                                System.Windows.Forms.ToolTipIcon.Info);
+                            var msg = $"{Loc.T("toast.game")}: {profile.Name}";
+                            if (!string.IsNullOrWhiteSpace(profile.Resolution) && profile.ApplyResolution)
+                                msg += $" · {profile.Resolution}";
+                            _main.ShowToast(msg);
+                            try
+                            {
+                                _tray?.ShowBalloonTip(2500, Loc.T("app.name"), msg,
+                                    System.Windows.Forms.ToolTipIcon.Info);
+                            }
+                            catch { }
                         }
-                        catch { }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLog.Error("ActiveProfileChanged UI: " + ex.Message);
                     }
                 });
 
             Services.Monitor.StatusChanged += status =>
-                _main.Dispatcher.Invoke(() =>
+                _main.Dispatcher.BeginInvoke(() =>
                 {
-                    _main.SetStatus(status);
-                    if (_tray != null) _tray.Text = "DPM: " + status;
+                    try
+                    {
+                        _main.SetStatus(status);
+                        if (_tray != null) _tray.Text = "DPM: " + status;
+                    }
+                    catch { }
                 });
 
-            Services.Monitor.Start();
+            // Start monitoring after the window exists — avoids applying while UI is half-built.
+            _main.Loaded += (_, _) =>
+            {
+                try { Services.Monitor.Start(); }
+                catch (Exception ex) { AppLog.Error("Monitor start failed: " + ex.Message); }
+
+                try
+                {
+                    var gpu = GpuVendorDetect.DriverLabel;
+                    var msg = Loc.Tf("toast.health", gpu);
+                    if (Services.CrashRestored)
+                        msg += " · " + Loc.T("toast.crash.restored");
+                    _main.ShowToast(msg);
+                    AppLog.Info("Startup health: " + msg);
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("Startup health toast: " + ex.Message);
+                }
+            };
 
             try
             {
@@ -189,8 +238,25 @@ public partial class App : System.Windows.Application
         {
             AppLog.Error("Startup failed: " + ex);
             try { ThemedDialog.Show(null, "Startup failed:\n" + ex.Message); } catch { }
+            try { _mutex?.ReleaseMutex(); } catch { }
+            try { _mutex?.Dispose(); } catch { }
+            _mutex = null;
             Shutdown();
         }
+    }
+
+    private void NotifyHotkeyFailures()
+    {
+        try
+        {
+            var fails = Services.Hotkeys.LastFailures;
+            if (fails.Count == 0 || _main == null) return;
+            var msg = fails.Count == 1
+                ? $"Hotkey busy: {fails[0]}"
+                : $"{fails.Count} hotkeys failed (in use?)";
+            _main.Dispatcher.BeginInvoke(() => _main.ShowToast(msg));
+        }
+        catch { }
     }
 
     private void InitTray()
@@ -299,6 +365,15 @@ public partial class App : System.Windows.Application
 
     public void ExitApp()
     {
+        if (_main != null)
+        {
+            // Ensure window can show the dialog
+            if (!_main.IsVisible)
+                _main.ShowWithFade();
+            if (!_main.PromptUnsavedBeforeExit())
+                return;
+        }
+
         _exitRequested = true;
 
         void FinishExit()
@@ -306,7 +381,13 @@ public partial class App : System.Windows.Application
             try
             {
                 Services.Monitor.ResetDisplayNow();
+            }
+            catch { }
+            try
+            {
+                Services.Display.RestoreGammaSafe();
                 Services.Dispose();
+                SessionGuard.MarkCleanExit();
             }
             catch { }
 
@@ -316,8 +397,9 @@ public partial class App : System.Windows.Application
                 _tray.Dispose();
             }
 
-            _mutex?.ReleaseMutex();
-            _mutex?.Dispose();
+            try { _mutex?.ReleaseMutex(); } catch { }
+            try { _mutex?.Dispose(); } catch { }
+            _mutex = null;
             Shutdown();
         }
 

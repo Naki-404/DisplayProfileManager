@@ -94,10 +94,20 @@ public sealed class CompanionService
                 companion.Path = fullPath;
                 string name = Path.GetFileNameWithoutExtension(fullPath);
 
-                if (Process.GetProcessesByName(name).Length > 0)
+                var existing = Process.GetProcessesByName(name);
+                try
                 {
-                    AppLog.Info($"Companion already running: {name}");
-                    return;
+                    // Skip only when already running AND no launch args.
+                    // Launchers like Overwolf need a second start with -launchapp ….
+                    if (existing.Length > 0 && string.IsNullOrWhiteSpace(companion.Arguments))
+                    {
+                        AppLog.Info($"Companion already running: {name}");
+                        return;
+                    }
+                }
+                finally
+                {
+                    foreach (var p in existing) p.Dispose();
                 }
 
                 var psi = new ProcessStartInfo
@@ -108,12 +118,31 @@ public sealed class CompanionService
                     CreateNoWindow = false
                 };
 
+                if (!PathSecurity.IsSafeArguments(companion.Arguments))
+                {
+                    AppLog.Error("Companion rejected: unsafe arguments.");
+                    return;
+                }
+
+                foreach (var arg in PathSecurity.SplitArguments(companion.Arguments))
+                    psi.ArgumentList.Add(arg);
+
                 var proc = Process.Start(psi);
                 if (proc != null)
                 {
                     TrackPid(key, proc.Id);
                     proc.Dispose();
                 }
+
+                AppLog.Info(string.IsNullOrWhiteSpace(companion.Arguments)
+                    ? $"Companion launched: {name}"
+                    : $"Companion launched: {name} {companion.Arguments.Trim()}");
+                // skip the generic "Companion launched." below for direct path
+                if (companion.DismissDialogs || companion.MinimizeToTray)
+                {
+                    Task.Run(() => DismissAndTray(name, companion));
+                }
+                return;
             }
 
             AppLog.Info("Companion launched.");

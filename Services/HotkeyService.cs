@@ -17,12 +17,16 @@ public sealed class HotkeyService : IDisposable
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private readonly Dictionary<int, string> _idToAction = new();
+    private readonly List<string> _lastFailures = new();
     private IntPtr _hwnd;
     private int _nextId = 1;
     private HwndSourceHook? _hook;
     private HwndSource? _source;
 
     public event Action<string>? HotkeyPressed;
+
+    /// <summary>Gestures that failed to register on the last RegisterFromConfig call.</summary>
+    public IReadOnlyList<string> LastFailures => _lastFailures;
 
     public void Attach(IntPtr hwnd)
     {
@@ -44,9 +48,10 @@ public sealed class HotkeyService : IDisposable
         _hwnd = IntPtr.Zero;
     }
 
-    public void RegisterFromConfig(AppConfig config, GameProfile? activeProfile = null)
+    public void RegisterFromConfig(AppConfig config, GameProfile? activeProfile = null, GameProfile? fallbackProfile = null)
     {
         UnregisterAll();
+        _lastFailures.Clear();
         var hk = config.GlobalHotkeys;
         TryRegister("brightnessUp", hk.BrightnessUp);
         TryRegister("brightnessDown", hk.BrightnessDown);
@@ -55,14 +60,23 @@ public sealed class HotkeyService : IDisposable
         TryRegister("gammaUp", hk.GammaUp);
         TryRegister("gammaDown", hk.GammaDown);
         TryRegister("resetColor", hk.ResetColor);
+        TryRegister("compareAb", hk.CompareAb);
 
-        // Per-game presets: only active profile's hotkeys are live
-        var presets = activeProfile?.Presets ?? new List<QuickPreset>();
-        foreach (var preset in presets)
+        // Prefer live game; otherwise the game selected on Presets / Profiles so hotkeys work before launch.
+        var source = activeProfile ?? fallbackProfile;
+        if (source != null)
+            source = config.Profiles.FirstOrDefault(p => p.Id == source.Id) ?? source;
+
+        foreach (var preset in source?.Presets ?? Enumerable.Empty<QuickPreset>())
         {
             if (!string.IsNullOrWhiteSpace(preset.Hotkey))
                 TryRegister("preset:" + preset.Id, preset.Hotkey);
         }
+
+        if (_lastFailures.Count > 0)
+            AppLog.Error($"Hotkey register failed for {_lastFailures.Count} binding(s): {string.Join(", ", _lastFailures)}");
+        else if (source != null)
+            AppLog.Info($"Preset hotkeys scoped to: {source.Name} ({source.Presets?.Count(p => !string.IsNullOrWhiteSpace(p.Hotkey)) ?? 0} bound)");
     }
 
     public void TryRegister(string action, string? gesture)
@@ -80,10 +94,19 @@ public sealed class HotkeyService : IDisposable
             return;
         }
 
+        // Reject bare keys (esp. NumPad) — they fire while typing / in-game and feel like "ghost presets".
+        if (mods == 0)
+        {
+            AppLog.Info($"Skipped hotkey '{gesture}' for {action} — need Ctrl/Alt/Shift/Win.");
+            _lastFailures.Add($"{action}={gesture} (need modifier)");
+            return;
+        }
+
         int id = _nextId++;
         if (!RegisterHotKey(_hwnd, id, mods, vk))
         {
             AppLog.Error($"Failed to register hotkey '{gesture}' for {action}");
+            _lastFailures.Add($"{action}={gesture}");
             return;
         }
 
@@ -155,6 +178,16 @@ public sealed class HotkeyService : IDisposable
             "numpad7" => 0x67,
             "numpad8" => 0x68,
             "numpad9" => 0x69,
+            "d0" or "0" => 0x30,
+            "d1" or "1" => 0x31,
+            "d2" or "2" => 0x32,
+            "d3" or "3" => 0x33,
+            "d4" or "4" => 0x34,
+            "d5" or "5" => 0x35,
+            "d6" or "6" => 0x36,
+            "d7" or "7" => 0x37,
+            "d8" or "8" => 0x38,
+            "d9" or "9" => 0x39,
             "f1" => 0x70,
             "f2" => 0x71,
             "f3" => 0x72,
@@ -200,6 +233,16 @@ public sealed class HotkeyService : IDisposable
             Key.NumPad7 => "NumPad7",
             Key.NumPad8 => "NumPad8",
             Key.NumPad9 => "NumPad9",
+            Key.D0 => "0",
+            Key.D1 => "1",
+            Key.D2 => "2",
+            Key.D3 => "3",
+            Key.D4 => "4",
+            Key.D5 => "5",
+            Key.D6 => "6",
+            Key.D7 => "7",
+            Key.D8 => "8",
+            Key.D9 => "9",
             _ => key.ToString()
         };
         sb.Append(k);
