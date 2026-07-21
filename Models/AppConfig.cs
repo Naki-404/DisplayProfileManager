@@ -48,8 +48,9 @@ public sealed class UiPreferences
     public bool OverlayExpanded { get; set; } = true;
     /// <summary>0.55..1 panel opacity</summary>
     public double OverlayPanelOpacity { get; set; } = 0.92;
-    public double OverlayLeft { get; set; } = double.NaN;
-    public double OverlayTop { get; set; } = double.NaN;
+    /// <summary>null = place overlay at default screen corner.</summary>
+    public double? OverlayLeft { get; set; }
+    public double? OverlayTop { get; set; }
 
     public UiPreferences Clone() => new()
     {

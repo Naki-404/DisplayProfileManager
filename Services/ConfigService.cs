@@ -8,12 +8,14 @@ public sealed class ConfigService : IDisposable
 {
     public const int CurrentVersion = 14;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true
+        AllowTrailingCommas = true,
+        // OverlayLeft/Top used to default to NaN — never write Infinity/NaN as JSON numbers.
+        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals
     };
 
     public string ConfigDirectory { get; }
@@ -167,6 +169,7 @@ public sealed class ConfigService : IDisposable
 
     private void SaveInternal(AppConfig config)
     {
+        SanitizeForJson(config);
         _ignoreWatcherUntil = DateTime.UtcNow.AddMilliseconds(5000);
         if (config.Ui?.BackupOnSave != false && File.Exists(ConfigPath))
         {
@@ -194,6 +197,19 @@ public sealed class ConfigService : IDisposable
             try { File.Delete(tmp); } catch { }
         }
         TryRestrictFileAcl(ConfigPath);
+    }
+
+    /// <summary>JSON cannot encode NaN/Infinity as bare numbers — clear them before serialize.</summary>
+    private static void SanitizeForJson(AppConfig config)
+    {
+        var ui = config.Ui;
+        if (ui == null) return;
+        if (ui.OverlayLeft is double ol && (double.IsNaN(ol) || double.IsInfinity(ol)))
+            ui.OverlayLeft = null;
+        if (ui.OverlayTop is double ot && (double.IsNaN(ot) || double.IsInfinity(ot)))
+            ui.OverlayTop = null;
+        if (double.IsNaN(ui.OverlayPanelOpacity) || double.IsInfinity(ui.OverlayPanelOpacity))
+            ui.OverlayPanelOpacity = 0.92;
     }
 
     private void EnsureWatcher()

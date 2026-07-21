@@ -33,10 +33,12 @@ public partial class GameOverlayWindow : Window
             ApplyPanelOpacityFromConfig();
             ApplyLocalization();
             var ui = App.Services.Config.Current.Ui;
-            if (ui != null && !double.IsNaN(ui.OverlayLeft) && !double.IsNaN(ui.OverlayTop))
+            if (ui != null && ui.OverlayLeft.HasValue && ui.OverlayTop.HasValue
+                && !double.IsNaN(ui.OverlayLeft.Value) && !double.IsNaN(ui.OverlayTop.Value)
+                && !double.IsInfinity(ui.OverlayLeft.Value) && !double.IsInfinity(ui.OverlayTop.Value))
             {
-                Left = ui.OverlayLeft;
-                Top = ui.OverlayTop;
+                Left = ui.OverlayLeft.Value;
+                Top = ui.OverlayTop.Value;
             }
             else
             {
