@@ -82,8 +82,16 @@ public partial class App : System.Windows.Application
 
             _main = new MainWindow();
             MainWindow = _main;
-            _overlay = new GameOverlayWindow();
-            _overlay.ApplyLocalization();
+            try
+            {
+                _overlay = new GameOverlayWindow();
+                _overlay.ApplyLocalization();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Overlay create failed: " + ex);
+                _overlay = null;
+            }
 
             InitTray();
             RebuildTrayMenu();

@@ -20,7 +20,10 @@ public partial class GameOverlayWindow : Window
 
     public GameOverlayWindow()
     {
+        _suppress = true;
         InitializeComponent();
+        _suppress = false;
+
         _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
         _liveTimer.Tick += (_, _) =>
         {
@@ -30,23 +33,33 @@ public partial class GameOverlayWindow : Window
 
         Loaded += (_, _) =>
         {
-            ApplyPanelOpacityFromConfig();
-            ApplyLocalization();
-            var ui = App.Services.Config.Current.Ui;
-            if (ui != null && ui.OverlayLeft.HasValue && ui.OverlayTop.HasValue
-                && !double.IsNaN(ui.OverlayLeft.Value) && !double.IsNaN(ui.OverlayTop.Value)
-                && !double.IsInfinity(ui.OverlayLeft.Value) && !double.IsInfinity(ui.OverlayTop.Value))
+            try
             {
-                Left = ui.OverlayLeft.Value;
-                Top = ui.OverlayTop.Value;
+                _suppress = true;
+                ApplyPanelOpacityFromConfig();
+                ApplyLocalization();
+                var ui = App.Services.Config.Current.Ui;
+                if (ui != null && ui.OverlayLeft.HasValue && ui.OverlayTop.HasValue
+                    && !double.IsNaN(ui.OverlayLeft.Value) && !double.IsNaN(ui.OverlayTop.Value)
+                    && !double.IsInfinity(ui.OverlayLeft.Value) && !double.IsInfinity(ui.OverlayTop.Value))
+                {
+                    Left = ui.OverlayLeft.Value;
+                    Top = ui.OverlayTop.Value;
+                }
+                else
+                {
+                    ColorUiHelper.PlaceOverlayDefault(this);
+                }
+                SetExpanded(ui?.OverlayExpanded ?? false, save: false);
+                _suppress = false;
+                if (ui?.OverlayVisible == true)
+                    ShowOverlay(expanded: ui.OverlayExpanded);
             }
-            else
+            catch (Exception ex)
             {
-                ColorUiHelper.PlaceOverlayDefault(this);
+                _suppress = false;
+                AppLog.Error("Overlay Loaded: " + ex.Message);
             }
-            SetExpanded(ui?.OverlayExpanded ?? false, save: false);
-            if (ui?.OverlayVisible == true)
-                ShowOverlay(expanded: ui.OverlayExpanded);
         };
 
         SourceInitialized += (_, _) =>
@@ -158,17 +171,19 @@ public partial class GameOverlayWindow : Window
 
     private void RefreshLabels()
     {
+        if (LblB == null || LblS == null || ValS == null || SldB == null || SldS == null) return;
         ColorUiHelper.UpdateLabels(LblB, LblC, LblG, LblV, SldB, SldC, SldG, SldV, _backend);
-        ValB.Text = LblB.Text.Replace("B ", "");
-        ValC.Text = LblC.Text.Replace("C ", "");
-        ValG.Text = LblG.Text.Replace("G ", "");
-        ValV.Text = LblV.Text.Replace("V ", "");
+        if (ValB != null) ValB.Text = LblB.Text.Replace("B ", "");
+        if (ValC != null) ValC.Text = LblC.Text.Replace("C ", "");
+        if (ValG != null) ValG.Text = LblG.Text.Replace("G ", "");
+        if (ValV != null && LblV != null) ValV.Text = LblV.Text.Replace("V ", "");
         LblS.Text = $"S {(int)SldS.Value}";
         ValS.Text = $"{(int)SldS.Value}";
     }
 
     private void UpdateShadowEnabled()
     {
+        if (SldS == null || LblS == null || ValS == null) return;
         bool low = _backend is ColorBackend.LowLevel or ColorBackend.Gdi;
         SldS.IsEnabled = low;
         LblS.Opacity = low ? 1 : 0.45;
@@ -249,17 +264,18 @@ public partial class GameOverlayWindow : Window
 
     private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_suppress) return;
+        if (_suppress || !IsInitialized) return;
         RefreshLabels();
         ScheduleLivePreview();
     }
 
     private void PanelOpacity_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_suppress || PanelRoot == null) return;
+        if (_suppress || !IsInitialized || PanelRoot == null || LblPanelOpacity == null) return;
         double op = SldPanelOpacity.Value;
         PanelRoot.Opacity = op;
         LblPanelOpacity.Text = $"{(int)Math.Round(op * 100)}%";
+        if (!IsLoaded) return;
         var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
         ui.OverlayPanelOpacity = op;
         App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
@@ -416,16 +432,17 @@ public partial class GameOverlayWindow : Window
 
     public void ApplyLocalization()
     {
+        if (TxtTitle == null) return;
         TxtTitle.Text = Loc.T("overlay.title");
-        LblLiveHint.Text = Loc.T("overlay.live.hint");
-        BtnApply.Content = Loc.T("overlay.apply");
-        BtnSavePreset.Content = Loc.T("overlay.save.preset");
-        BtnUpdatePreset.Content = Loc.T("overlay.update.preset");
-        BtnReset.Content = Loc.T("overlay.reset");
-        BtnEmergency.Content = Loc.T("overlay.emergency");
-        BtnCollapse.ToolTip = Loc.T("overlay.collapse");
-        BtnHide.ToolTip = Loc.T("overlay.hide");
-        TxtMini.Text = Loc.T("overlay.mini");
+        if (LblLiveHint != null) LblLiveHint.Text = Loc.T("overlay.live.hint");
+        if (BtnApply != null) BtnApply.Content = Loc.T("overlay.apply");
+        if (BtnSavePreset != null) BtnSavePreset.Content = Loc.T("overlay.save.preset");
+        if (BtnUpdatePreset != null) BtnUpdatePreset.Content = Loc.T("overlay.update.preset");
+        if (BtnReset != null) BtnReset.Content = Loc.T("overlay.reset");
+        if (BtnEmergency != null) BtnEmergency.Content = Loc.T("overlay.emergency");
+        if (BtnCollapse != null) BtnCollapse.ToolTip = Loc.T("overlay.collapse");
+        if (BtnHide != null) BtnHide.ToolTip = Loc.T("overlay.hide");
+        if (TxtMini != null) TxtMini.Text = Loc.T("overlay.mini");
         if (LblPanelOpacityTitle != null) LblPanelOpacityTitle.Text = Loc.T("overlay.panelOpacity");
     }
 }

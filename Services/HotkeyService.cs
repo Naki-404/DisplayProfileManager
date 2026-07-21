@@ -52,7 +52,13 @@ public sealed class HotkeyService : IDisposable
     {
         UnregisterAll();
         _lastFailures.Clear();
-        var hk = config.GlobalHotkeys;
+        if (_hwnd == IntPtr.Zero)
+        {
+            // MainWindow may reload config before SourceInitialized attaches HWND.
+            return;
+        }
+
+        var hk = config.GlobalHotkeys ?? new GlobalHotkeys();
         TryRegister("brightnessUp", hk.BrightnessUp);
         TryRegister("brightnessDown", hk.BrightnessDown);
         TryRegister("contrastUp", hk.ContrastUp);

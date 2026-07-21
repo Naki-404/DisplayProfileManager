@@ -513,6 +513,7 @@ public partial class MainWindow : Window
         UpdateDefLabels();
         UpdateDriverUiAvailability();
 
+        cfg.GlobalHotkeys ??= new GlobalHotkeys();
         HkBrightUp.Text = cfg.GlobalHotkeys.BrightnessUp ?? "";
         HkBrightDown.Text = cfg.GlobalHotkeys.BrightnessDown ?? "";
         HkContrastUp.Text = cfg.GlobalHotkeys.ContrastUp ?? "";
@@ -1154,6 +1155,7 @@ public partial class MainWindow : Window
             cfg.FactoryDefaults = ConfigService.CaptureFactoryDefaults();
         cfg.FactoryDefaults.Color = ColorSettings.Neutral;
 
+        cfg.GlobalHotkeys ??= new GlobalHotkeys();
         cfg.GlobalHotkeys.BrightnessUp = NormHotkey(HkBrightUp.Text);
         cfg.GlobalHotkeys.BrightnessDown = NormHotkey(HkBrightDown.Text);
         cfg.GlobalHotkeys.ContrastUp = NormHotkey(HkContrastUp.Text);
