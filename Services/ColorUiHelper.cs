@@ -29,6 +29,7 @@ public static class ColorUiHelper
         ColorSettings c,
         Slider b, Slider co, Slider g, Slider v, Slider? shadowBoost = null)
     {
+        c.Clamp();
         ConfigureGammaRangeForBackend(c.Backend, g);
         b.Value = c.Brightness;
         co.Value = c.Contrast;

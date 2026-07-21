@@ -233,8 +233,9 @@ public sealed class ColorSettings
         Brightness = Math.Clamp(Brightness, 0.0, 1.0);
         // Full RivaTuner contrast span (−82..82 → 0..2)
         Contrast = Math.Clamp(Contrast, 0.0, 2.0);
-        // Full RivaTuner gamma span (0.5..6)
-        Gamma = Math.Clamp(Gamma, 0.5, 6.0);
+        bool driver = Backend is ColorBackend.Driver or ColorBackend.Nvidia or ColorBackend.Amd;
+        // Driver CP gamma is 0.4..2.8; Low Level / GDI keep RivaTuner 0.5..6
+        Gamma = Math.Clamp(Gamma, driver ? 0.4 : 0.5, driver ? 2.8 : 6.0);
         Vibrance = Math.Clamp(Vibrance, 0, 100);
         ShadowLift = Math.Clamp(ShadowLift, 0.0, 0.4);
         if (!Enum.IsDefined(typeof(ColorBackend), Backend))
@@ -402,7 +403,7 @@ public static class DualColorSlots
         color ??= ColorSettings.Neutral;
         color.Clamp();
 
-        if (low == null)
+        if (low == null || LooksCorrupt(low))
         {
             low = IsDriver(color.Backend)
                 ? ColorSettings.Neutral.Clone()
@@ -411,7 +412,7 @@ public static class DualColorSlots
             low.Clamp();
         }
 
-        if (driver == null)
+        if (driver == null || LooksCorrupt(driver))
         {
             driver = IsDriver(color.Backend)
                 ? color.Clone()
@@ -420,21 +421,39 @@ public static class DualColorSlots
             driver.ShadowLift = 0;
             driver.Clamp();
         }
+
+        // Active Color itself can be a corrupt leftover from reading unloaded sliders (0/0/0/0).
+        if (LooksCorrupt(color))
+        {
+            color = IsDriver(color.Backend)
+                ? ColorSettings.DriverNeutral.Clone()
+                : ColorSettings.Neutral.Clone();
+            color.Clamp();
+        }
     }
 
     public static void SaveActive(ColorSettings color, ref ColorSettings? low, ref ColorSettings? driver)
     {
         var active = color.Clone();
+        // Never persist an unloaded-slider zero dump into a dual slot.
+        if (LooksCorrupt(active))
+        {
+            Ensure(ref active, ref low, ref driver);
+            return;
+        }
+
         Ensure(ref active, ref low, ref driver);
         if (IsDriver(active.Backend))
         {
             active.Backend = ColorBackend.Driver;
             active.ShadowLift = 0;
+            active.Clamp();
             driver = active;
         }
         else
         {
             active.Backend = ColorBackend.LowLevel;
+            active.Clamp();
             low = active;
         }
     }
@@ -446,18 +465,30 @@ public static class DualColorSlots
         if (IsDriver(want))
         {
             var c = driver!.Clone();
+            if (LooksCorrupt(c))
+                c = ColorSettings.DriverNeutral.Clone();
             c.Backend = ColorBackend.Driver;
+            c.ShadowLift = 0;
             c.Clamp();
             return c;
         }
         else
         {
             var c = low!.Clone();
+            if (LooksCorrupt(c))
+                c = ColorSettings.Neutral.Clone();
             c.Backend = ColorBackend.LowLevel;
             c.Clamp();
             return c;
         }
     }
+
+    /// <summary>
+    /// Unloaded WPF sliders default to 0 — if that was saved, backend switch shows 0/0/0/0.
+    /// Treat near-zero B/C with V=0 as corrupt (real profiles almost never look like this).
+    /// </summary>
+    private static bool LooksCorrupt(ColorSettings c) =>
+        c.Brightness <= 0.02 && c.Contrast <= 0.02 && c.Vibrance == 0;
 
     private static bool IsDriver(ColorBackend b) =>
         b is ColorBackend.Driver or ColorBackend.Nvidia or ColorBackend.Amd;

@@ -44,7 +44,8 @@ public partial class MainWindow : Window
         {
             _autoSaveTimer.Stop();
             if (!_dirty) return;
-            PersistConfigToDisk(showBusy: false);
+            // Always push editors first — otherwise dual-slot / slider state can save as 0/0/0/0.
+            FlushAutosave();
             SetStatus("Autosaved");
         };
         ProfileList.ItemsSource = _profiles;
@@ -877,24 +878,46 @@ public partial class MainWindow : Window
 
     private void BackendToggle_Changed(object sender, RoutedEventArgs e)
     {
-        if (_suppressEditorEvents || _selected == null) return;
+        if (_suppressEditorEvents) return;
         var next = ReadBackendToggle(TogBackend);
-        if (next == _profileEditorBackend) return;
+        if (_selected == null)
+        {
+            UpdateBackendActiveLabel(TogBackend, next == ColorBackend.LowLevel);
+            UpdateColorLabels();
+            UpdateShadowSliderEnabled();
+            return;
+        }
 
-        // Persist current sliders into the previous backend slot, then load the other set.
+        if (next == _profileEditorBackend)
+        {
+            UpdateBackendActiveLabel(TogBackend, next == ColorBackend.LowLevel);
+            UpdateColorLabels();
+            UpdateShadowSliderEnabled();
+            return;
+        }
+
+        _selected.EnsureDualColorSlots();
         var prev = ColorUiHelper.ReadColorFromSliders(_profileEditorBackend, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift, ChkLockColor.IsChecked == true);
         _selected.Color = prev;
         _selected.SaveActiveToDualSlots();
         _profileEditorBackend = next;
         var loaded = _selected.ActivateBackend(next);
+
         _suppressEditorEvents = true;
-        ColorUiHelper.ApplyColorSliders(loaded, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
-        ChkLockColor.IsChecked = loaded.LockColor;
-        _suppressEditorEvents = false;
+        try
+        {
+            ColorUiHelper.ApplyColorSliders(loaded, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
+            ChkLockColor.IsChecked = loaded.LockColor;
+            ColorUiHelper.ConfigureGammaRangeForBackend(next, SldGamma);
+        }
+        finally
+        {
+            _suppressEditorEvents = false;
+        }
+
         UpdateColorLabels();
         UpdateShadowSliderEnabled();
-        ColorUiHelper.ConfigureGammaRangeForBackend(next, SldGamma);
-        UpdateBackendActiveLabel(TogBackend, ReadBackendToggle(TogBackend) == ColorBackend.LowLevel);
+        UpdateBackendActiveLabel(TogBackend, next == ColorBackend.LowLevel);
         MarkDirty();
         PushEditorToSelected();
         ProfileList.Items.Refresh();
@@ -902,21 +925,47 @@ public partial class MainWindow : Window
 
     private void PresetBackendToggle_Changed(object sender, RoutedEventArgs e)
     {
-        if (_suppressEditorEvents || _selectedPreset == null) return;
+        if (_suppressEditorEvents) return;
         var next = ReadBackendToggle(TogPresetBackend);
-        if (next == _presetEditorBackend) return;
 
+        if (_selectedPreset == null)
+        {
+            // Keep chrome in sync even with no preset selected.
+            UpdateBackendActiveLabel(TogPresetBackend, next == ColorBackend.LowLevel);
+            UpdatePresetLabels();
+            UpdatePresetShadowEnabled();
+            return;
+        }
+
+        if (next == _presetEditorBackend)
+        {
+            UpdateBackendActiveLabel(TogPresetBackend, next == ColorBackend.LowLevel);
+            UpdatePresetLabels();
+            UpdatePresetShadowEnabled();
+            return;
+        }
+
+        _selectedPreset.EnsureDualColorSlots();
         var prev = ColorUiHelper.ReadColorFromSliders(_presetEditorBackend, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, ChkPresetLock.IsChecked == true);
         _selectedPreset.Color = prev;
         _selectedPreset.SaveActiveToDualSlots();
         _presetEditorBackend = next;
         var loaded = _selectedPreset.ActivateBackend(next);
+
         _suppressEditorEvents = true;
-        ColorUiHelper.ApplyColorSliders(loaded, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
-        ChkPresetLock.IsChecked = loaded.LockColor;
-        ColorUiHelper.ConfigureGammaRangeForBackend(next, SldPresetG);
-        _suppressEditorEvents = false;
+        try
+        {
+            ColorUiHelper.ApplyColorSliders(loaded, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
+            ChkPresetLock.IsChecked = loaded.LockColor;
+            ColorUiHelper.ConfigureGammaRangeForBackend(next, SldPresetG);
+        }
+        finally
+        {
+            _suppressEditorEvents = false;
+        }
+
         UpdatePresetLabels();
+        UpdatePresetShadowEnabled();
         UpdateBackendActiveLabel(TogPresetBackend, next == ColorBackend.LowLevel);
         MarkDirty();
         PushPresetEditor();
@@ -927,7 +976,12 @@ public partial class MainWindow : Window
     {
         if (_suppressEditorEvents) return;
         var next = ReadBackendToggle(TogDefBackend);
-        if (next == _defEditorBackend) return;
+        if (next == _defEditorBackend)
+        {
+            UpdateBackendActiveLabel(TogDefBackend, next == ColorBackend.LowLevel);
+            UpdateDefLabels();
+            return;
+        }
 
         var defaults = App.Services.Config.Current.Defaults;
         defaults.EnsureDualColorSlots();
@@ -936,10 +990,18 @@ public partial class MainWindow : Window
         defaults.SaveActiveToDualSlots();
         _defEditorBackend = next;
         var loaded = defaults.ActivateBackend(next);
+
         _suppressEditorEvents = true;
-        ColorUiHelper.ApplyColorSliders(loaded, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow);
-        ColorUiHelper.ConfigureGammaRangeForBackend(next, SldDefGamma);
-        _suppressEditorEvents = false;
+        try
+        {
+            ColorUiHelper.ApplyColorSliders(loaded, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow);
+            ColorUiHelper.ConfigureGammaRangeForBackend(next, SldDefGamma);
+        }
+        finally
+        {
+            _suppressEditorEvents = false;
+        }
+
         UpdateDefLabels();
         UpdateBackendActiveLabel(TogDefBackend, next == ColorBackend.LowLevel);
         MarkDirty();
@@ -950,6 +1012,13 @@ public partial class MainWindow : Window
         bool low = ReadBackendToggle(TogBackend) == ColorBackend.LowLevel;
         if (SldShadowLift != null) SldShadowLift.IsEnabled = low;
         if (LblShadowLift != null) LblShadowLift.Opacity = low ? 1.0 : 0.45;
+    }
+
+    private void UpdatePresetShadowEnabled()
+    {
+        bool low = ReadBackendToggle(TogPresetBackend) == ColorBackend.LowLevel;
+        if (SldPresetShadow != null) SldPresetShadow.IsEnabled = low;
+        if (LblPresetShadow != null) LblPresetShadow.Opacity = low ? 1.0 : 0.45;
     }
 
     private void UpdateDriverUiAvailability()
@@ -1423,29 +1492,36 @@ public partial class MainWindow : Window
     private void LoadPresetEditor(QuickPreset? p)
     {
         _suppressEditorEvents = true;
-        if (p == null)
+        try
         {
-            TxtPresetName.Text = "";
-            TxtPresetHotkey.Text = "";
-            _suppressEditorEvents = false;
-            return;
+            if (p == null)
+            {
+                TxtPresetName.Text = "";
+                TxtPresetHotkey.Text = "";
+                return;
+            }
+
+            TxtPresetName.Text = p.Name;
+            TxtPresetHotkey.Text = p.Hotkey ?? "";
+            ChkPresetRes.IsChecked = p.ApplyResolution;
+            ChkPresetColor.IsChecked = p.ApplyColor;
+            p.EnsureDualColorSlots();
+            _presetEditorBackend = p.Color.Backend;
+            SetBackendToggle(p.Color.Backend, TogPresetBackend);
+            ChkPresetLock.IsChecked = p.Color.LockColor;
+            if (!string.IsNullOrWhiteSpace(p.Resolution) && CmbPresetRes.Items.Contains(p.Resolution))
+                CmbPresetRes.SelectedItem = p.Resolution;
+            else if (CmbPresetRes.Items.Count > 0)
+                CmbPresetRes.SelectedIndex = 0;
+            ColorUiHelper.ApplyColorSliders(p.Color, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
+            UpdatePresetLabels();
+            UpdatePresetShadowEnabled();
+            UpdateBackendActiveLabel(TogPresetBackend, p.Color.Backend == ColorBackend.LowLevel);
         }
-        TxtPresetName.Text = p.Name;
-        TxtPresetHotkey.Text = p.Hotkey ?? "";
-        ChkPresetRes.IsChecked = p.ApplyResolution;
-        ChkPresetColor.IsChecked = p.ApplyColor;
-        p.EnsureDualColorSlots();
-        _presetEditorBackend = p.Color.Backend;
-        SetBackendToggle(p.Color.Backend, TogPresetBackend);
-        ChkPresetLock.IsChecked = p.Color.LockColor;
-        if (!string.IsNullOrWhiteSpace(p.Resolution) && CmbPresetRes.Items.Contains(p.Resolution))
-            CmbPresetRes.SelectedItem = p.Resolution;
-        else if (CmbPresetRes.Items.Count > 0)
-            CmbPresetRes.SelectedIndex = 0;
-        ColorUiHelper.ApplyColorSliders(p.Color, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
-        UpdatePresetLabels();
-        UpdateBackendActiveLabel(TogPresetBackend, p.Color.Backend == ColorBackend.LowLevel);
-        _suppressEditorEvents = false;
+        finally
+        {
+            _suppressEditorEvents = false;
+        }
     }
 
     /// <summary>Name typing must not Refresh the list (that reloads the TextBox and eats characters).</summary>
@@ -1547,10 +1623,21 @@ public partial class MainWindow : Window
         _selectedPreset.ApplyResolution = ChkPresetRes.IsChecked == true;
         _selectedPreset.ApplyColor = ChkPresetColor.IsChecked == true;
         _selectedPreset.Resolution = CmbPresetRes.SelectedItem?.ToString();
-        _selectedPreset.Color = ColorUiHelper.ReadColorFromSliders(
+
+        var c = ColorUiHelper.ReadColorFromSliders(
             ReadBackendToggle(TogPresetBackend),
             SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow,
             ChkPresetLock.IsChecked == true);
+        // Guard against saving unloaded slider defaults (0/0/0/0) over a good preset.
+        if (c.Brightness <= 0.02 && c.Contrast <= 0.02 && c.Vibrance == 0
+            && _selectedPreset.Color != null
+            && !(_selectedPreset.Color.Brightness <= 0.02 && _selectedPreset.Color.Contrast <= 0.02 && _selectedPreset.Color.Vibrance == 0))
+        {
+            c = _selectedPreset.Color.Clone();
+            c.Backend = ReadBackendToggle(TogPresetBackend);
+        }
+
+        _selectedPreset.Color = c;
         _presetEditorBackend = _selectedPreset.Color.Backend;
         _selectedPreset.SaveActiveToDualSlots();
         SyncPresetsBackToGame();

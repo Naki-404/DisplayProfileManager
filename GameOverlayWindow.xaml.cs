@@ -250,7 +250,12 @@ public partial class GameOverlayWindow : Window
     {
         if (_suppress) return;
         var next = ColorUiHelper.ReadBackendToggle(TogBackend);
-        if (next == _backend) return;
+        if (next == _backend)
+        {
+            UpdateShadowEnabled();
+            RefreshLabels();
+            return;
+        }
 
         if (_boundProfile != null)
         {
@@ -262,8 +267,14 @@ public partial class GameOverlayWindow : Window
             _backend = next;
             var loaded = _boundProfile.ActivateBackend(next);
             _suppress = true;
-            ColorUiHelper.ApplyColorSliders(loaded, SldB, SldC, SldG, SldV, SldS);
-            _suppress = false;
+            try
+            {
+                ColorUiHelper.ApplyColorSliders(loaded, SldB, SldC, SldG, SldV, SldS);
+            }
+            finally
+            {
+                _suppress = false;
+            }
         }
         else
         {
