@@ -279,8 +279,6 @@ public partial class MainWindow : Window
             System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
             new RoutedEventHandler(OnAnyButtonClick),
             handledEventsToo: true);
-
-        UiSound.Open();
     }
 
     private static DateTime _lastClickSoundUtc = DateTime.MinValue;
@@ -294,7 +292,7 @@ public partial class MainWindow : Window
             || btn.Name == "BtnSettingsCaption")
             return;
         var now = DateTime.UtcNow;
-        if ((now - _lastClickSoundUtc).TotalMilliseconds < 70) return;
+        if ((now - _lastClickSoundUtc).TotalMilliseconds < 160) return;
         _lastClickSoundUtc = now;
         UiSound.Click();
     }
@@ -326,6 +324,7 @@ public partial class MainWindow : Window
                 UseShellExecute = true
             });
             ShowToast($"Launching {profile.Name}");
+            UiSound.Launch();
         }
         catch (Exception ex)
         {
@@ -366,6 +365,8 @@ public partial class MainWindow : Window
 
         var win = new SettingsWindow { Owner = this };
         win.ShowDialog();
+        // Live preview in Settings may have changed runtime sound state — restore from saved config if cancelled
+        UiSound.ApplyFromConfig(App.Services.Config.Current.Ui);
         ApplyLocalization();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
         if (win.Imported)
@@ -653,6 +654,7 @@ public partial class MainWindow : Window
     {
         ScanBusy.ShowAnimated();
         ScanBusy.SetStatus("Looking through disks…");
+        UiSound.BeginWork();
 
         var minDelay = Task.Delay(1600);
         List<GameScanner.FoundGame> found;
@@ -663,6 +665,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            UiSound.EndWork(UiWorkResult.Cancel);
             ScanBusy.HideAnimated();
             ThemedDialog.Show(this, "Scan failed:\n" + ex.Message, "Scan");
             return;
@@ -673,11 +676,14 @@ public partial class MainWindow : Window
 
         if (found.Count == 0)
         {
+            UiSound.EndWork(UiWorkResult.Empty);
             ThemedDialog.Show(this,
                 "No known games found on this PC.\nUse Add manually or Running… to pick any .exe.",
                 "Scan");
             return;
         }
+
+        UiSound.EndWork(UiWorkResult.Done);
 
         if (confirmIfAny)
         {
@@ -1055,6 +1061,9 @@ public partial class MainWindow : Window
         _dirty = false;
 
         if (showBusy)
+            UiSound.Save();
+
+        if (showBusy)
         {
             var exe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
             if (!string.IsNullOrWhiteSpace(exe))
@@ -1090,6 +1099,11 @@ public partial class MainWindow : Window
             ProfileList.SelectedItem = _profiles.Last();
             ProfileList.Items.Refresh();
             PresetGameList.Items.Refresh();
+            UiSound.Done();
+        }
+        else
+        {
+            UiSound.Empty();
         }
         ThemedDialog.Show(this, added == 0
             ? "Valorant / PUBG / War Thunder / Tarkov already in the list."
@@ -1320,7 +1334,6 @@ public partial class MainWindow : Window
             TxtPresetName.Text = p.Name;
             TxtPresetHotkey.Text = p.Hotkey ?? "";
             ChkPresetRes.IsChecked = p.ApplyResolution;
-            ChkPresetColor.IsChecked = p.ApplyColor;
             p.EnsureDualColorSlots();
             _presetEditorBackend = p.Color.Backend;
             SetBackendToggle(p.Color.Backend, TogPresetBackend);
@@ -1437,7 +1450,7 @@ public partial class MainWindow : Window
             _selectedPreset.Name = TxtPresetName.Text;
         _selectedPreset.Hotkey = string.IsNullOrWhiteSpace(TxtPresetHotkey.Text) ? null : TxtPresetHotkey.Text.Trim();
         _selectedPreset.ApplyResolution = ChkPresetRes.IsChecked == true;
-        _selectedPreset.ApplyColor = ChkPresetColor.IsChecked == true;
+        _selectedPreset.ApplyColor = true;
         _selectedPreset.Resolution = CmbPresetRes.SelectedItem?.ToString();
 
         var c = ColorUiHelper.ReadColorFromSliders(
@@ -1520,7 +1533,6 @@ public partial class MainWindow : Window
             box.Text = HotkeyService.GestureFromKeys(Keyboard.Modifiers, key);
             if (_selectedPreset != null)
             {
-                ChkPresetColor.IsChecked = true;
                 MarkDirty();
                 PushPresetEditor();
                 FlushAutosave();

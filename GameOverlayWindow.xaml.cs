@@ -112,21 +112,26 @@ public partial class GameOverlayWindow : Window
         ColorSettings source;
         string ctx;
         string presetLabel = "";
-        if (_boundProfile != null && _boundProfile.ApplyColor)
+        if (_boundProfile != null)
         {
             _boundProfile.EnsureDualColorSlots();
             var presetId = App.Services.Monitor.ActivePresetId;
             var preset = presetId == null
                 ? null
                 : _boundProfile.Presets?.FirstOrDefault(p => p.Id == presetId);
-            if (preset != null && preset.ApplyColor)
+            if (preset != null)
             {
                 source = preset.Color.Clone();
                 presetLabel = Loc.Tf("overlay.preset", preset.Name);
             }
+            else if (_boundProfile.Presets is { Count: > 0 } presets)
+            {
+                source = presets[0].Color.Clone();
+                presetLabel = Loc.Tf("overlay.preset", presets[0].Name);
+            }
             else
             {
-                source = _boundProfile.Color.Clone();
+                source = App.Services.Display.LiveColor.Clone();
             }
             _backend = source.Backend;
             ctx = _boundProfile.Name;

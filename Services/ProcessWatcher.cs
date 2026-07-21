@@ -30,6 +30,7 @@ public sealed class ProcessWatcher : IDisposable
     {
         lock (_gate)
         {
+            var previous = new HashSet<string>(_watch, StringComparer.OrdinalIgnoreCase);
             _watch.Clear();
             foreach (var raw in processNames)
             {
@@ -38,11 +39,14 @@ public sealed class ProcessWatcher : IDisposable
                     _watch.Add(n);
             }
 
-            // Reseed seen for poll reconcile
+            // Reseed _seen only for names that were already watched.
+            // Newly added names that are already running stay out of _seen so Poll
+            // fires ProcessStarted (autosave watch-list refresh).
             _seen.Clear();
             foreach (var name in _watch)
             {
-                if (IsBareRunning(Bare(name)))
+                if (!IsBareRunning(Bare(name))) continue;
+                if (previous.Contains(name))
                     _seen.Add(name);
             }
         }

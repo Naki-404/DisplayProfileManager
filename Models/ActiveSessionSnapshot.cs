@@ -28,9 +28,24 @@ public sealed class ActiveSessionSnapshot
     public int? MonitorBrightness { get; set; }
 
     public bool TopologySaved { get; set; }
+    /// <summary>CCD path array (base64) so crash restart can restore isolate.</summary>
+    public string? TopologyPathsB64 { get; set; }
+    public string? TopologyModesB64 { get; set; }
+    public int TopologyPathCount { get; set; }
+    public int TopologyModeCount { get; set; }
+
     public bool ScalingSaved { get; set; }
     public string? ScalingDevice { get; set; }
     public int? ScalingFixedOutput { get; set; }
     public int? ScalingWidth { get; set; }
     public int? ScalingHeight { get; set; }
+
+    /// <summary>Pre-game GPU driver vibrance/sat (crash-safe).</summary>
+    public bool HasDriverColor { get; set; }
+    public string? DriverVendor { get; set; }
+    public int? DriverVibranceLevel { get; set; }
+    public float? DriverNormalizedVibrance { get; set; }
+    public int? DriverBrightness { get; set; }
+    public int? DriverContrast { get; set; }
+    public int? DriverSaturation { get; set; }
 }

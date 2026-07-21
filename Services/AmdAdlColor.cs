@@ -271,7 +271,7 @@ internal sealed class AmdAdlColor : IDisposable
     }
 }
 
-internal sealed class DriverColorSnapshot
+public sealed class DriverColorSnapshot
 {
     public string Vendor { get; set; } = "";
     public int? Brightness { get; set; }

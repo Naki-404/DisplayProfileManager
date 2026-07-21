@@ -52,6 +52,25 @@ public sealed class SessionSnapshotService
             snap.GammaBlueB64 = EncodeRamp(b);
         }
 
+        try
+        {
+            var drv = _engine.CaptureDriverColorCurrent();
+            if (drv != null)
+            {
+                snap.HasDriverColor = true;
+                snap.DriverVendor = drv.Vendor;
+                snap.DriverVibranceLevel = drv.VibranceLevel;
+                snap.DriverNormalizedVibrance = drv.NormalizedVibrance;
+                snap.DriverBrightness = drv.Brightness;
+                snap.DriverContrast = drv.Contrast;
+                snap.DriverSaturation = drv.Saturation;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Snapshot driver color: " + ex.Message);
+        }
+
         session.FillSnapshotExtras(snap);
         _memory = snap;
         SaveToDisk(snap);
@@ -81,7 +100,27 @@ public sealed class SessionSnapshotService
             if (!string.IsNullOrWhiteSpace(snap.Resolution))
                 _engine.SetResolution(snap.Resolution!, snap.RefreshRate, snap.DisplayDevice);
 
-            try { _engine.ResetDriverColorNeutral(); } catch { }
+            // Restore pre-game vibrance — never force neutral 50 (that was wiping desktop DV).
+            if (snap.HasDriverColor && !string.IsNullOrWhiteSpace(snap.DriverVendor))
+            {
+                try
+                {
+                    _engine.RestoreDriverColorSnapshot(new DriverColorSnapshot
+                    {
+                        Vendor = snap.DriverVendor!,
+                        VibranceLevel = snap.DriverVibranceLevel,
+                        NormalizedVibrance = snap.DriverNormalizedVibrance,
+                        Brightness = snap.DriverBrightness,
+                        Contrast = snap.DriverContrast,
+                        Saturation = snap.DriverSaturation
+                    });
+                }
+                catch { }
+            }
+            else
+            {
+                try { _engine.ClearDriverTweaksIfActive(); } catch { }
+            }
 
             if (snap.HasGammaRamp
                 && TryDecodeRamp(snap.GammaRedB64, out var r)

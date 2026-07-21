@@ -52,6 +52,11 @@ public sealed class UiPreferences
     public double? OverlayLeft { get; set; }
     public double? OverlayTop { get; set; }
 
+    /// <summary>Soft UI chimes (open / click / save / launch).</summary>
+    public bool UiSoundsEnabled { get; set; } = true;
+    /// <summary>0..100 master volume for UI sounds.</summary>
+    public int UiSoundVolume { get; set; } = 70;
+
     public UiPreferences Clone() => new()
     {
         Locale = Locale,
@@ -71,7 +76,9 @@ public sealed class UiPreferences
         OverlayExpanded = OverlayExpanded,
         OverlayPanelOpacity = OverlayPanelOpacity,
         OverlayLeft = OverlayLeft,
-        OverlayTop = OverlayTop
+        OverlayTop = OverlayTop,
+        UiSoundsEnabled = UiSoundsEnabled,
+        UiSoundVolume = UiSoundVolume
     };
 }
 

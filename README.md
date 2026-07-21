@@ -25,22 +25,6 @@
 
 ---
 
-## Preview
-
-<p align="center">
-  <img src="docs/screenshots/main-window.png" width="820" alt="Profiles tab">
-</p>
-
-<p align="center"><em>Profiles — pick a game, tune resolution / power / color, then Save.</em></p>
-
-<p align="center">
-  <img src="docs/screenshots/settings.png" width="820" alt="Settings window">
-</p>
-
-<p align="center"><em>Settings — language, theme, monitor, tray and startup options.</em></p>
-
----
-
 ## Download
 
 | File | What it is |
@@ -147,7 +131,6 @@ DisplayProfileManager/
 ├── Assets/                 # Embedded images and icon
 ├── Services/               # Display engine, watcher, config, themes
 ├── Installer/              # Compact Windows setup project
-├── docs/screenshots/       # README images
 ├── build-release.ps1       # One-shot publish script
 └── DisplayProfileManager.csproj
 ```

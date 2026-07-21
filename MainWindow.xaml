@@ -183,13 +183,19 @@
                                     <TextBox x:Name="TxtProcess" Grid.Column="0" TextChanged="EditorChanged"/>
                                     <Button Grid.Column="1" Content="Browse" Style="{StaticResource CompactGhostButton}"
                                             Margin="6,0,0,0" MinWidth="64" HorizontalAlignment="Left" Click="BrowseExe_Click"/>
-                                    <Button Grid.Column="2" Content="Running..." Style="{StaticResource CompactGhostButton}"
-                                            Margin="6,0,0,0" MinWidth="72" HorizontalAlignment="Left" Click="PickRunning_Click"/>
+                                    <Button Grid.Column="2" Content="Running" Style="{StaticResource CompactGhostButton}"
+                                            Margin="6,0,0,0" MinWidth="72" HorizontalAlignment="Left" Click="PickRunning_Click"
+                                            ToolTip="Pick a process that is already running"/>
                                 </Grid>
-                                <Button x:Name="BtnLaunchGame" Content="Launch game" Style="{StaticResource CompactAccentButton}"
-                                        Margin="0,8,0,0" HorizontalAlignment="Left" MinWidth="120"
-                                        Click="LaunchGame_Click"
-                                        ToolTip="Start this game's exe (set ExePath via Browse or Scan)"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="BtnLaunchGame" Content="Launch game" Style="{StaticResource CompactAccentButton}"
+                                            Margin="0,0,8,0" MinWidth="120"
+                                            Click="LaunchGame_Click"
+                                            ToolTip="Start this game's exe (set path via Browse or Scan)"/>
+                                    <Button x:Name="BtnOverlay" Content="Live overlay" Style="{StaticResource CompactGhostButton}"
+                                            Click="Overlay_Click"
+                                            ToolTip="Floating panel over the game — tune presets live"/>
+                                </StackPanel>
 
                                 <Separator/>
                                 <TextBlock Text="Display" FontWeight="SemiBold" Margin="0,0,0,8"/>
@@ -221,15 +227,6 @@
                                     <ComboBoxItem Content="Restore Global Defaults" Tag="GlobalDefaults"/>
                                     <ComboBoxItem Content="Do nothing" Tag="DoNothing"/>
                                 </ComboBox>
-
-                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                    <Button x:Name="BtnOverlay" Content="Live overlay" Style="{StaticResource CompactAccentButton}"
-                                            Margin="0,0,8,0" Click="Overlay_Click"
-                                            ToolTip="Floating panel over the game — tune presets live"/>
-                                    <Button x:Name="BtnLaunchGamePreset" Content="Launch game" Style="{StaticResource CompactGhostButton}"
-                                            Click="LaunchGame_Click"
-                                            ToolTip="Start this game's exe"/>
-                                </StackPanel>
 
                                 <Separator/>
                                 <DockPanel Margin="0,0,0,6">
@@ -355,16 +352,21 @@
                         <DockPanel>
                             <TextBlock DockPanel.Dock="Top" x:Name="LblPresetGame" Text="Presets"
                                        FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <UniformGrid DockPanel.Dock="Bottom" Columns="2" Rows="2" Margin="0,8,0,0">
-                                <Button x:Name="BtnPresetAdd" Content="Add" Style="{StaticResource CompactAccentButton}"
-                                        Margin="0,0,4,4" Click="AddPreset_Click"/>
-                                <Button x:Name="BtnPresetDelete" Content="Delete" Style="{StaticResource CompactGhostButton}"
-                                        Margin="4,0,0,4" Click="DeletePreset_Click"/>
-                                <Button x:Name="BtnPresetExport" Content="Export" Style="{StaticResource CompactGhostButton}"
-                                        Margin="0,4,4,0" Click="ExportPresets_Click"/>
-                                <Button x:Name="BtnPresetImport" Content="Import" Style="{StaticResource CompactGhostButton}"
-                                        Margin="4,4,0,0" Click="ImportPresets_Click"/>
-                            </UniformGrid>
+                            <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                                <UniformGrid Columns="2" Rows="2" Margin="0,0,0,6">
+                                    <Button x:Name="BtnPresetAdd" Content="Add" Style="{StaticResource CompactAccentButton}"
+                                            Margin="0,0,4,4" Click="AddPreset_Click"/>
+                                    <Button x:Name="BtnPresetDelete" Content="Delete" Style="{StaticResource CompactGhostButton}"
+                                            Margin="4,0,0,4" Click="DeletePreset_Click"/>
+                                    <Button x:Name="BtnPresetExport" Content="Export" Style="{StaticResource CompactGhostButton}"
+                                            Margin="0,4,4,0" Click="ExportPresets_Click"/>
+                                    <Button x:Name="BtnPresetImport" Content="Import" Style="{StaticResource CompactGhostButton}"
+                                            Margin="4,4,0,0" Click="ImportPresets_Click"/>
+                                </UniformGrid>
+                                <Button x:Name="BtnLaunchGamePreset" Content="Launch game" Style="{StaticResource CompactAccentButton}"
+                                        HorizontalAlignment="Stretch" Click="LaunchGame_Click"
+                                        ToolTip="Start the selected game's exe"/>
+                            </StackPanel>
                             <ListBox x:Name="PresetList" SelectionChanged="PresetList_SelectionChanged">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
@@ -402,8 +404,10 @@
                                 <CheckBox x:Name="ChkPresetRes" Content="Set resolution" Checked="PresetEditorChanged" Unchecked="PresetEditorChanged"/>
                                 <ComboBox x:Name="CmbPresetRes" Margin="0,6,0,12" SelectionChanged="PresetEditorChanged"/>
 
-                                <CheckBox x:Name="ChkPresetColor" Content="Set color" Checked="PresetEditorChanged" Unchecked="PresetEditorChanged"/>
-                                <DockPanel Margin="0,8,0,4">
+                                <TextBlock Text="Color" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock Text="Applied when this preset is selected (hotkey or overlay)."
+                                           Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <DockPanel Margin="0,0,0,4">
                                     <local:InfoHint x:Name="InfoPresetBackend" DockPanel.Dock="Right"/>
                                     <TextBlock Text="Backend" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
                                 </DockPanel>

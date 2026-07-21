@@ -55,6 +55,7 @@ public partial class App : System.Windows.Application
             var ui = Services.Config.Current.Ui ?? new Models.UiPreferences();
             Loc.SetLocale(ui.Locale);
             ThemeService.Apply(ui);
+            UiSound.ApplyFromConfig(ui);
             AppLog.Info("Application starting.");
 
             bool startMinimized = e.Args.Any(a =>
@@ -71,6 +72,7 @@ public partial class App : System.Windows.Application
                     ui = Services.Config.Current.Ui ?? ui;
                     Loc.SetLocale(ui.Locale);
                     ThemeService.Apply(ui);
+                    UiSound.ApplyFromConfig(ui);
                 }
                 catch (Exception ex)
                 {
@@ -264,6 +266,8 @@ public partial class App : System.Windows.Application
                 _main.ShowInTaskbar = true;
                 _main.WindowState = WindowState.Normal;
                 _main.ShowWithFade();
+                // Splash first, then soft welcome chime (after fade starts)
+                UiSound.PlayWelcome(delayMs: 320);
             }
         }
         catch (Exception ex)

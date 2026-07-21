@@ -54,6 +54,11 @@ public partial class SettingsWindow : Window
         ChkConfirmDelete.IsChecked = ui.ConfirmDelete;
         ChkShowActive.IsChecked = ui.ShowActiveInHeader;
         ChkOverlayAuto.IsChecked = ui.OverlayAutoShowOnGame;
+        ChkUiSounds.IsChecked = ui.UiSoundsEnabled;
+        SldSoundVol.Value = Math.Clamp(ui.UiSoundVolume, 0, 100);
+        LblSoundVolVal.Text = $"{(int)SldSoundVol.Value}%";
+        SldSoundVol.IsEnabled = ui.UiSoundsEnabled;
+        BtnPreviewSound.IsEnabled = ui.UiSoundsEnabled;
     }
 
     private void ApplyLabels()
@@ -76,6 +81,10 @@ public partial class SettingsWindow : Window
         if (LblOverlay != null) LblOverlay.Text = Loc.T("overlay.open");
         if (ChkOverlayAuto != null) ChkOverlayAuto.Content = Loc.T("overlay.auto");
         if (LblOverlayHint != null) LblOverlayHint.Text = Loc.T("overlay.auto.hint");
+        if (LblSound != null) LblSound.Text = Loc.T("settings.sound");
+        if (ChkUiSounds != null) ChkUiSounds.Content = Loc.T("settings.sound.enable");
+        if (LblSoundVol != null) LblSoundVol.Text = Loc.T("settings.sound.volume");
+        if (BtnPreviewSound != null) BtnPreviewSound.Content = Loc.T("settings.sound.preview");
         BtnEditPalette.Content = Loc.T("setup.editPalette");
         BtnExport.Content = Loc.T("btn.export");
         BtnImport.Content = Loc.T("btn.import");
@@ -166,7 +175,9 @@ public partial class SettingsWindow : Window
             ConfirmDelete = ChkConfirmDelete.IsChecked == true,
             ShowActiveInHeader = ChkShowActive.IsChecked == true,
             PreferredDisplayDevice = string.IsNullOrWhiteSpace(mon) ? null : mon,
-            OverlayAutoShowOnGame = ChkOverlayAuto.IsChecked == true
+            OverlayAutoShowOnGame = ChkOverlayAuto.IsChecked == true,
+            UiSoundsEnabled = ChkUiSounds.IsChecked == true,
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
         };
         if (theme == "custom")
         {
@@ -185,7 +196,9 @@ public partial class SettingsWindow : Window
         cfg.StartMinimized = ChkStartMin.IsChecked == true;
         Loc.SetLocale(cfg.Ui.Locale);
         ThemeService.Apply(cfg.Ui);
+        UiSound.ApplyFromConfig(cfg.Ui);
         App.Services.Config.Save(cfg);
+        UiSound.Save();
 
         var exe = Environment.ProcessPath ?? "";
         if (!string.IsNullOrWhiteSpace(exe))
@@ -193,6 +206,41 @@ public partial class SettingsWindow : Window
 
         DialogResult = true;
         Close();
+    }
+
+    private void UiSound_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        bool on = ChkUiSounds.IsChecked == true;
+        SldSoundVol.IsEnabled = on;
+        BtnPreviewSound.IsEnabled = on;
+        UiSound.ApplyFromConfig(new UiPreferences
+        {
+            UiSoundsEnabled = on,
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
+        });
+    }
+
+    private void SoundVol_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LblSoundVolVal == null) return;
+        LblSoundVolVal.Text = $"{(int)Math.Round(SldSoundVol.Value)}%";
+        if (!IsLoaded) return;
+        UiSound.ApplyFromConfig(new UiPreferences
+        {
+            UiSoundsEnabled = ChkUiSounds.IsChecked == true,
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
+        });
+    }
+
+    private void PreviewSound_Click(object sender, RoutedEventArgs e)
+    {
+        UiSound.ApplyFromConfig(new UiPreferences
+        {
+            UiSoundsEnabled = true,
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
+        });
+        UiSound.Open();
     }
 
     private void Export_Click(object sender, RoutedEventArgs e)
@@ -253,6 +301,7 @@ public partial class SettingsWindow : Window
         var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
         Loc.SetLocale(ui.Locale);
         ThemeService.Apply(ui);
+        UiSound.ApplyFromConfig(ui);
         DialogResult = false;
         Close();
     }
