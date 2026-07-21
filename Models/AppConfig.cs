@@ -297,18 +297,6 @@ public sealed class ColorSettings
         c.Clamp();
         return c;
     }
-
-    /// <summary>
-    /// RivaTuner registry gamma byte (50 = 1.0, 55 = 1.5, 70 = 3.0, 100 = 6.0)
-    /// → UI float. Lower half 0..50 maps 0.5..1.0.
-    /// </summary>
-    public static double GammaFromRivaRegistry(int reg)
-    {
-        reg = Math.Clamp(reg, 0, 100);
-        if (reg >= 50)
-            return 1.0 + (reg - 50) / 50.0 * 5.0;
-        return 0.5 + reg / 50.0 * 0.5;
-    }
 }
 
 public sealed class GlobalHotkeys

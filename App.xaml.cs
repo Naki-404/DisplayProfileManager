@@ -45,7 +45,7 @@ public partial class App : System.Windows.Application
                 if (!silent)
                 {
                     Loc.SetLocale("en");
-                    ThemedDialog.Show(null, "Display Profile Manager is already running.\nDisplay Profile Manager уже запущен.");
+                    ThemedDialog.Show(null, Loc.T("alreadyRunning"));
                 }
                 Shutdown();
                 return;
@@ -353,7 +353,7 @@ public partial class App : System.Windows.Application
                 Services.Monitor.IsPaused = !Services.Monitor.IsPaused;
                 RebuildTrayMenu();
             }));
-        menu.Items.Add(MakeItem(Loc.T("tray.reset"), (_, _) => Services.Monitor.ResetDisplayNow()));
+        menu.Items.Add(MakeItem(Loc.T("tray.reset"), (_, _) => Services.Monitor.EmergencyRestore()));
 
         var active = Services.Monitor.CurrentProfile;
         var presets = active?.Presets?.Where(p => !string.IsNullOrWhiteSpace(p.Name)).Take(5).ToList();
@@ -478,12 +478,12 @@ public partial class App : System.Windows.Application
         {
             try
             {
-                Services.Monitor.ResetDisplayNow();
+                // Snapshot / factory restore already set the intended gamma.
+                Services.Monitor.EmergencyRestore();
             }
             catch { }
             try
             {
-                Services.Display.RestoreGammaSafe();
                 Services.Dispose();
                 SessionGuard.MarkCleanExit();
             }

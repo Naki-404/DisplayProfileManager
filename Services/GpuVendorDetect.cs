@@ -40,11 +40,6 @@ public static class GpuVendorDetect
         get { Ensure(); return _hasAmd; }
     }
 
-    public static bool HasDriverGpu
-    {
-        get { Ensure(); return _hasNvidia || _hasAmd; }
-    }
-
     public static bool IsDriverSide(ColorBackend backend) =>
         backend is ColorBackend.Driver or ColorBackend.Nvidia or ColorBackend.Amd;
 

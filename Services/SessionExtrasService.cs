@@ -148,7 +148,7 @@ public sealed class SessionExtrasService : IDisposable
             if (snap.MonitorBrightness.HasValue)
                 MonitorBrightness.Set(snap.MonitorBrightness.Value);
             if (snap.TopologySaved)
-                DisplayTopology.Restore();
+                DisplayTopology.RestoreFromSnapshot(snap);
             if (snap.ScalingSaved && snap.ScalingWidth.HasValue && snap.ScalingHeight.HasValue)
             {
                 ScalingModeHelper.Restore(
@@ -175,6 +175,14 @@ public sealed class SessionExtrasService : IDisposable
         if (_snap.TopologySaved)
         {
             target.TopologySaved = true;
+            if (DisplayTopology.TryExport(
+                    out var paths, out var modes, out int pc, out int mc))
+            {
+                target.TopologyPathsB64 = Convert.ToBase64String(paths);
+                target.TopologyModesB64 = Convert.ToBase64String(modes);
+                target.TopologyPathCount = pc;
+                target.TopologyModeCount = mc;
+            }
         }
         if (_snap.ScalingSaved)
         {
@@ -291,7 +299,7 @@ public sealed class SessionExtrasService : IDisposable
         }
     }
 
-    public void Dispose() => Restore();
+    public void Dispose() => _snap = null; // restore already done by EmergencyRestore / ApplyRestoreMode
 
     private sealed class SessionSnapshot
     {
@@ -581,6 +589,56 @@ internal static class DisplayTopology
         {
             _savedPaths = null;
             _savedModes = null;
+        }
+    }
+
+    public static bool TryExport(out byte[] paths, out byte[] modes, out int pathCount, out int modeCount)
+    {
+        paths = Array.Empty<byte>();
+        modes = Array.Empty<byte>();
+        pathCount = 0;
+        modeCount = 0;
+        if (_savedPaths == null || _savedModes == null) return false;
+        paths = (byte[])_savedPaths.Clone();
+        modes = (byte[])_savedModes.Clone();
+        pathCount = _pathCount;
+        modeCount = _modeCount;
+        return true;
+    }
+
+    /// <summary>
+    /// Restore from in-memory isolate snapshot, or from persisted CCD blobs after crash.
+    /// </summary>
+    public static void RestoreFromSnapshot(Models.ActiveSessionSnapshot snap)
+    {
+        if (_savedPaths != null && _savedModes != null)
+        {
+            Restore();
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(snap.TopologyPathsB64)
+            || string.IsNullOrWhiteSpace(snap.TopologyModesB64)
+            || snap.TopologyPathCount <= 0
+            || snap.TopologyModeCount <= 0)
+        {
+            AppLog.Info("TopologySaved but no CCD blob — cannot restore after crash.");
+            return;
+        }
+
+        try
+        {
+            var paths = Convert.FromBase64String(snap.TopologyPathsB64!);
+            var modes = Convert.FromBase64String(snap.TopologyModesB64!);
+            int r = SetDisplayConfig(
+                snap.TopologyPathCount, paths,
+                snap.TopologyModeCount, modes,
+                SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES);
+            AppLog.Info($"Display topology restored from snapshot blob result={r}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Topology restore from blob: " + ex.Message);
         }
     }
 }

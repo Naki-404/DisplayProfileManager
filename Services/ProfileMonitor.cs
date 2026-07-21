@@ -113,11 +113,6 @@ public sealed class ProfileMonitor : IDisposable
             RunOnUi(() => ActivateProfile(pick, relaunchCompanions: true));
     }
 
-    public void Stop() => _watcher.Stop();
-
-    /// <summary>Legacy alias — full Emergency Restore.</summary>
-    public void ResetDisplayNow() => EmergencyRestore();
-
     public void EmergencyRestore()
     {
         RunOnUi(() =>
@@ -263,6 +258,8 @@ public sealed class ProfileMonitor : IDisposable
                     return;
                 case "resetColor":
                     ClearActivePreset();
+                    StopColorLock();
+                    _engine.ClearAbCompare();
                     _engine.ResetColorToFactoryOrNeutral(cfg.FactoryDefaults?.Color);
                     break;
                 case "compareAb":
@@ -373,6 +370,34 @@ public sealed class ProfileMonitor : IDisposable
         _watcher.SetWatchList(names);
     }
 
+    /// <summary>
+    /// Call after in-app autosave (raiseChanged: false) so watch-list and active
+    /// profile stay in sync without a full ConfigChanged UI reload.
+    /// </summary>
+    public void NotifyConfigSaved()
+    {
+        RefreshWatchList();
+        RunOnUi(() =>
+        {
+            GameProfile? cur;
+            lock (_gate) cur = _currentProfile;
+            if (cur == null) return;
+
+            var fresh = _config.Current.Profiles.FirstOrDefault(p => p.Id == cur.Id);
+            if (fresh == null || !fresh.Enabled)
+            {
+                AppLog.Info("Active profile removed/disabled after save — Emergency Restore.");
+                EmergencyRestore();
+                return;
+            }
+
+            lock (_gate) _currentProfile = fresh;
+            // Soft re-apply so color/res edits take effect while the game is running.
+            try { ApplyProfileCore(fresh); }
+            catch (Exception ex) { AppLog.Error("NotifyConfigSaved re-apply: " + ex.Message); }
+        });
+    }
+
     private void OnProcessStarted(string processName)
     {
         var profile = FindProfile(processName);
@@ -443,7 +468,7 @@ public sealed class ProfileMonitor : IDisposable
         switch (mode)
         {
             case RestoreMode.DoNothing:
-                try { _session.Restore(); } catch { }
+                // Leave tuned color/display; also leave session extras as applied.
                 _snapshots.Clear();
                 AppLog.Info("RestoreMode=DoNothing — left tuned state.");
                 break;
@@ -491,6 +516,20 @@ public sealed class ProfileMonitor : IDisposable
 
         if (same)
         {
+            // Soft re-apply: config may have changed, or a second start event arrived.
+            // Do NOT capture a new snapshot (would overwrite pre-game PC state).
+            AppLog.Info($"Re-applying active profile: {profile.Name}");
+            try { ApplyProfileCore(profile); }
+            catch (Exception ex) { AppLog.Error("Same-profile re-apply: " + ex.Message); }
+
+            try
+            {
+                var delay = profile.Session?.DeferredApplySeconds ?? 0;
+                if (delay > 0)
+                    ScheduleDeferred(profile, delay);
+            }
+            catch { }
+
             if (relaunchCompanions && _currentCompanionsKey != profile.Id)
             {
                 foreach (var c in profile.Companions)

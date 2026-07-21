@@ -16,9 +16,6 @@ public sealed class DriverColorService : IDisposable
     private bool _driverTweaksActive;
 
     public string ActiveVendor => _activeVendor;
-    public bool DriverTweaksActive => _driverTweaksActive;
-    public bool NvidiaAvailable => _nvidia.IsAvailable || _nvidia.TryInit();
-    public bool AmdAvailable => _amd.IsAvailable || _amd.TryInit();
 
     public void CaptureBaselineIfNeeded()
     {
@@ -141,6 +138,44 @@ public sealed class DriverColorService : IDisposable
         catch (Exception ex)
         {
             AppLog.Error("Driver color restore failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>Best-effort capture of current driver vibrance (may init NvAPI/ADL).</summary>
+    public DriverColorSnapshot? CaptureCurrent()
+    {
+        try
+        {
+            if (_nvidia.TryInit())
+                return _nvidia.Capture();
+            if (_amd.TryInit())
+                return _amd.Capture();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Driver color capture: " + ex.Message);
+        }
+        return null;
+    }
+
+    public void RestoreFromSnapshot(DriverColorSnapshot snap)
+    {
+        try
+        {
+            if (snap.Vendor == "nvidia" && _nvidia.TryInit())
+                _nvidia.Restore(snap);
+            else if (snap.Vendor == "amd" && _amd.TryInit())
+                _amd.Restore(snap);
+            else
+                return;
+
+            _baseline = snap;
+            _driverTweaksActive = false;
+            AppLog.Info($"Driver color restored from session snapshot ({snap.Vendor}).");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Driver snapshot restore: " + ex.Message);
         }
     }
 

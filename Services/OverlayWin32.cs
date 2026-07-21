@@ -7,7 +7,6 @@ namespace DisplayProfileManager.Services;
 internal static class OverlayWin32
 {
     private const int GwlExstyle = -20;
-    private const int WsExTransparent = 0x00000020;
     private const int WsExToolwindow = 0x00000080;
     private const int WsExNoActivate = 0x08000000;
 
@@ -46,19 +45,6 @@ internal static class OverlayWin32
         if (hwnd == IntPtr.Zero) return;
         int style = GetWindowLong(hwnd, GwlExstyle);
         style |= WsExToolwindow | WsExNoActivate;
-        SetWindowLong(hwnd, GwlExstyle, style);
-    }
-
-    /// <summary>Let mouse clicks pass through to the game (unused — breaks mini-pill hit testing).</summary>
-    public static void SetClickThrough(Window window, bool enabled)
-    {
-        var hwnd = new WindowInteropHelper(window).Handle;
-        if (hwnd == IntPtr.Zero) return;
-        int style = GetWindowLong(hwnd, GwlExstyle);
-        if (enabled)
-            style |= WsExTransparent | WsExToolwindow | WsExNoActivate;
-        else
-            style &= ~WsExTransparent;
         SetWindowLong(hwnd, GwlExstyle, style);
     }
 

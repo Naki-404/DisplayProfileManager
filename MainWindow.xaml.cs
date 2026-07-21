@@ -727,7 +727,7 @@ public partial class MainWindow : Window
         _profileEditorBackend = p.Color.Backend;
         SetBackendToggle(p.Color.Backend, TogBackend);
         ChkLockColor.IsChecked = p.Color.LockColor;
-        ApplyColorSliders(p.Color, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
+        ColorUiHelper.ApplyColorSliders(p.Color, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
         var sx = p.Session ?? new SessionExtras();
         SldDeferred.Value = sx.DeferredApplySeconds;
         ChkQuietToast.IsChecked = sx.QuietNotifications;
@@ -766,7 +766,7 @@ public partial class MainWindow : Window
     {
         if (_suppressEditorEvents) return;
         UpdateColorLabels();
-        ConfigureGammaRangeForBackend(ReadBackendToggle(TogBackend), SldGamma);
+        ColorUiHelper.ConfigureGammaRangeForBackend(ReadBackendToggle(TogBackend), SldGamma);
         if (_selected == null) return;
         MarkDirty();
         PushEditorToSelected();
@@ -776,7 +776,7 @@ public partial class MainWindow : Window
     {
         if (_suppressEditorEvents) return;
         UpdateDefLabels();
-        ConfigureGammaRangeForBackend(ReadBackendToggle(TogDefBackend), SldDefGamma);
+        ColorUiHelper.ConfigureGammaRangeForBackend(ReadBackendToggle(TogDefBackend), SldDefGamma);
         MarkDirty();
     }
 
@@ -882,18 +882,18 @@ public partial class MainWindow : Window
         if (next == _profileEditorBackend) return;
 
         // Persist current sliders into the previous backend slot, then load the other set.
-        var prev = ReadColorFromSliders(_profileEditorBackend, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift, ChkLockColor.IsChecked == true);
+        var prev = ColorUiHelper.ReadColorFromSliders(_profileEditorBackend, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift, ChkLockColor.IsChecked == true);
         _selected.Color = prev;
         _selected.SaveActiveToDualSlots();
         _profileEditorBackend = next;
         var loaded = _selected.ActivateBackend(next);
         _suppressEditorEvents = true;
-        ApplyColorSliders(loaded, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
+        ColorUiHelper.ApplyColorSliders(loaded, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
         ChkLockColor.IsChecked = loaded.LockColor;
         _suppressEditorEvents = false;
         UpdateColorLabels();
         UpdateShadowSliderEnabled();
-        ConfigureGammaRangeForBackend(next, SldGamma);
+        ColorUiHelper.ConfigureGammaRangeForBackend(next, SldGamma);
         UpdateBackendActiveLabel(TogBackend, ReadBackendToggle(TogBackend) == ColorBackend.LowLevel);
         MarkDirty();
         PushEditorToSelected();
@@ -906,15 +906,15 @@ public partial class MainWindow : Window
         var next = ReadBackendToggle(TogPresetBackend);
         if (next == _presetEditorBackend) return;
 
-        var prev = ReadColorFromSliders(_presetEditorBackend, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, ChkPresetLock.IsChecked == true);
+        var prev = ColorUiHelper.ReadColorFromSliders(_presetEditorBackend, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, ChkPresetLock.IsChecked == true);
         _selectedPreset.Color = prev;
         _selectedPreset.SaveActiveToDualSlots();
         _presetEditorBackend = next;
         var loaded = _selectedPreset.ActivateBackend(next);
         _suppressEditorEvents = true;
-        ApplyColorSliders(loaded, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
+        ColorUiHelper.ApplyColorSliders(loaded, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
         ChkPresetLock.IsChecked = loaded.LockColor;
-        ConfigureGammaRangeForBackend(next, SldPresetG);
+        ColorUiHelper.ConfigureGammaRangeForBackend(next, SldPresetG);
         _suppressEditorEvents = false;
         UpdatePresetLabels();
         UpdateBackendActiveLabel(TogPresetBackend, next == ColorBackend.LowLevel);
@@ -931,14 +931,14 @@ public partial class MainWindow : Window
 
         var defaults = App.Services.Config.Current.Defaults;
         defaults.EnsureDualColorSlots();
-        var prev = ReadColorFromSliders(_defEditorBackend, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow, true);
+        var prev = ColorUiHelper.ReadColorFromSliders(_defEditorBackend, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow, true);
         defaults.Color = prev;
         defaults.SaveActiveToDualSlots();
         _defEditorBackend = next;
         var loaded = defaults.ActivateBackend(next);
         _suppressEditorEvents = true;
-        ApplyColorSliders(loaded, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow);
-        ConfigureGammaRangeForBackend(next, SldDefGamma);
+        ColorUiHelper.ApplyColorSliders(loaded, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow);
+        ColorUiHelper.ConfigureGammaRangeForBackend(next, SldDefGamma);
         _suppressEditorEvents = false;
         UpdateDefLabels();
         UpdateBackendActiveLabel(TogDefBackend, next == ColorBackend.LowLevel);
@@ -972,23 +972,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void ApplyColorSliders(
-        ColorSettings c,
-        Slider b, Slider co, Slider g, Slider v, Slider shadowBoost)
-    {
-        ColorUiHelper.ApplyColorSliders(c, b, co, g, v, shadowBoost);
-    }
-
-    /// <summary>Driver/NVIDIA CP gamma is 0.4–2.8; Low Level (RT) keeps 0.5–6.</summary>
-    private static void ConfigureGammaRangeForBackend(ColorBackend backend, Slider gamma) =>
-        ColorUiHelper.ConfigureGammaRangeForBackend(backend, gamma);
-
-    private static ColorSettings ReadColorFromSliders(
-        ColorBackend backend,
-        Slider b, Slider co, Slider g, Slider v, Slider shadowBoost,
-        bool lockColor) =>
-        ColorUiHelper.ReadColorFromSliders(backend, b, co, g, v, shadowBoost, lockColor);
-
     private void PushEditorToSelected()
     {
         if (_selected == null) return;
@@ -1012,7 +995,7 @@ public partial class MainWindow : Window
             && Enum.TryParse<RestoreMode>(rm.Tag?.ToString(), out var restoreMode))
             _selected.RestoreMode = restoreMode;
 
-        _selected.Color = ReadColorFromSliders(
+        _selected.Color = ColorUiHelper.ReadColorFromSliders(
             ReadBackendToggle(TogBackend),
             SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift,
             ChkLockColor.IsChecked == true);
@@ -1044,7 +1027,7 @@ public partial class MainWindow : Window
 
     private void PreviewColor_Click(object sender, RoutedEventArgs e)
     {
-        var c = ReadColorFromSliders(
+        var c = ColorUiHelper.ReadColorFromSliders(
             ReadBackendToggle(TogBackend),
             SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift,
             ChkLockColor.IsChecked == true);
@@ -1189,6 +1172,7 @@ public partial class MainWindow : Window
             cfg,
             App.Services.Monitor.CurrentProfile,
             HotkeyPresetFallback);
+        App.Services.Monitor.NotifyConfigSaved();
         _dirty = false;
 
         if (showBusy)
@@ -1254,7 +1238,7 @@ public partial class MainWindow : Window
         UpdateDefLabels();
         _suppressEditorEvents = false;
 
-        App.Services.Monitor.ResetDisplayNow();
+        App.Services.Monitor.EmergencyRestore();
         ShowToast("Factory settings restored");
         ThemedDialog.Show(this,
             "Restored initial settings:\n• Resolution: " + factory.Resolution + "\n• Color: neutral\n• Power: " + factory.PowerPlan,
@@ -1458,7 +1442,7 @@ public partial class MainWindow : Window
             CmbPresetRes.SelectedItem = p.Resolution;
         else if (CmbPresetRes.Items.Count > 0)
             CmbPresetRes.SelectedIndex = 0;
-        ApplyColorSliders(p.Color, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
+        ColorUiHelper.ApplyColorSliders(p.Color, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
         UpdatePresetLabels();
         UpdateBackendActiveLabel(TogPresetBackend, p.Color.Backend == ColorBackend.LowLevel);
         _suppressEditorEvents = false;
@@ -1563,7 +1547,7 @@ public partial class MainWindow : Window
         _selectedPreset.ApplyResolution = ChkPresetRes.IsChecked == true;
         _selectedPreset.ApplyColor = ChkPresetColor.IsChecked == true;
         _selectedPreset.Resolution = CmbPresetRes.SelectedItem?.ToString();
-        _selectedPreset.Color = ReadColorFromSliders(
+        _selectedPreset.Color = ColorUiHelper.ReadColorFromSliders(
             ReadBackendToggle(TogPresetBackend),
             SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow,
             ChkPresetLock.IsChecked == true);

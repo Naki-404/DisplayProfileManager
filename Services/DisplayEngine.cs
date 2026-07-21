@@ -122,7 +122,6 @@ public sealed class DisplayEngine
     private readonly DriverColorService _driverColor = new();
 
     public ColorSettings LiveColor => _liveColor.Clone();
-    public string DriverVendor => _driverColor.ActiveVendor;
 
     private ColorSettings? _abPreview;
     private bool _abShowingFactory;
@@ -173,7 +172,6 @@ public sealed class DisplayEngine
     }
 
     public bool IsAbShowingFactory => _abShowingFactory;
-    public bool HasAbPreview => _abPreview != null;
 
     /// <summary>Call once at startup before any ApplyColor — stores OS gamma for RestoreFactory.</summary>
     public void CaptureFactoryGammaRamp()
@@ -268,7 +266,7 @@ public sealed class DisplayEngine
                 AppLog.Error("SetDeviceGammaRamp rejected or failed (Windows may clip extreme curves).");
 
             var (b, c, g) = color.ToRivaTunerUnits();
-            AppLog.Info($"Color applied (RT Low Level): B={b} C={c} G={g:F2} shadow={color.ShadowLift:F2}");
+            AppLog.Info($"Color applied (Low Level): B={b} C={c} G={g:F2}");
         }
         else
         {
@@ -285,9 +283,7 @@ public sealed class DisplayEngine
 
             try { _driverColor.Apply(color); }
             catch (Exception ex) { AppLog.Error("Driver color apply: " + ex.Message); }
-            AppLog.Info(
-                $"Color applied (driver CP): B={color.Brightness:F2} C={color.Contrast:F2} G={color.Gamma:F2} " +
-                $"V={color.Vibrance} backend={color.Backend} vendor={_driverColor.ActiveVendor}");
+            AppLog.Info($"Color applied (Driver): V={color.Vibrance} {_driverColor.ActiveVendor}");
         }
     }
 
@@ -334,15 +330,14 @@ public sealed class DisplayEngine
         }
     }
 
-    public void SyncLiveColor(ColorSettings color)
-    {
-        color.Clamp();
-        _liveColor = color.Clone();
-    }
+    public DriverColorSnapshot? CaptureDriverColorCurrent() => _driverColor.CaptureCurrent();
 
-    public void ResetDriverColorNeutral() => _driverColor.ResetDriverToNeutral();
+    public void RestoreDriverColorSnapshot(DriverColorSnapshot snap) =>
+        _driverColor.RestoreFromSnapshot(snap);
 
-    public void AdjustBrightness(double delta, ColorSettings? fallbackDefaults = null)
+    public void ClearDriverTweaksIfActive() => _driverColor.ClearDriverTweaksIfActive();
+
+    public void AdjustBrightness(double delta)
     {
         var c = _liveColor.Clone();
         c.Brightness += delta;
@@ -789,29 +784,9 @@ public sealed class DisplayEngine
 
     public void DisposeDriverColor()
     {
-        try { RestoreGammaSafe(); } catch { }
+        // Restore driver vibrance baseline only — do not force factory gamma here.
+        // Exit / EmergencyRestore already restored the intended display state.
+        try { _driverColor.RestoreBaseline(); } catch { }
         try { _driverColor.Dispose(); } catch { }
-    }
-
-    /// <summary>Best-effort restore of factory/neutral ramp + driver baseline (shutdown / dispose).</summary>
-    public void RestoreGammaSafe()
-    {
-        try
-        {
-            _driverColor.RestoreBaseline();
-            if (_hasFactoryRamp && _factoryRamp.HasValue)
-            {
-                ApplyRamp(_factoryRamp.Value);
-                _liveColor = ColorSettings.Neutral;
-            }
-            else
-            {
-                ApplyColor(ColorSettings.Neutral);
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("RestoreGammaSafe: " + ex.Message);
-        }
     }
 }
