@@ -163,7 +163,8 @@
                         </DockPanel>
                     </Border>
 
-                    <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Hidden">
+                    <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False" PanningMode="VerticalOnly">
                         <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                             <StackPanel x:Name="EditorPanel">
                                 <TextBlock Text="Profile" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
@@ -429,11 +430,12 @@
                         </DockPanel>
                     </Border>
 
-                    <ScrollViewer Grid.Column="4" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Hidden">
+                    <ScrollViewer Grid.Column="4" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False" PanningMode="VerticalOnly">
                         <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                             <StackPanel x:Name="PresetEditor">
                                 <TextBlock Text="Preset for this game" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                                <TextBlock Text="Hotkeys need Ctrl/Alt/Shift (e.g. Ctrl+Alt+1). They bind to the selected game here, and to the running game when it is active."
+                                <TextBlock Text="Hotkeys need Ctrl/Alt/Shift (e.g. Ctrl+Alt+1). Bound to this game; while it runs, they apply to the active profile."
                                            Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,12" FontSize="11"/>
 
                                 <TextBlock Text="Name" Foreground="{DynamicResource MutedBrush}"/>
@@ -477,7 +479,8 @@
             </TabItem>
 
             <TabItem x:Name="TabGlobal" Header="Global">
-                <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Hidden">
+                <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False" PanningMode="VerticalOnly">
                     <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                         <StackPanel MaxWidth="620" HorizontalAlignment="Left">
                             <TextBlock Text="Defaults (no game running)" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12"/>
