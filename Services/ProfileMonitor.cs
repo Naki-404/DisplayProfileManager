@@ -156,19 +156,28 @@ public sealed class ProfileMonitor : IDisposable
         {
             lock (_gate) _activePresetId = preset.Id;
 
+            try { _engine.ClearAbCompare(); } catch { }
+
             if (preset.ApplyResolution && !string.IsNullOrWhiteSpace(preset.Resolution))
                 _engine.SetResolution(preset.Resolution!);
 
-            if (preset.ApplyColor)
+            // Presets are the only color path — always push color (ignore ApplyColor flag).
+            var color = (preset.Color ?? ColorSettings.Neutral).Clone();
+            color.Clamp();
+            try
             {
-                _engine.ApplyColor(preset.Color.Clone());
-                if (preset.Color.LockColor)
-                    StartColorLock(preset.Color);
+                _engine.ApplyColor(color);
+                if (color.LockColor)
+                    StartColorLock(color);
                 else
                     StopColorLock();
             }
+            catch (Exception ex)
+            {
+                AppLog.Error("Preset color apply failed: " + ex.Message);
+            }
 
-            AppLog.Info($"Preset applied: {preset.Name}");
+            AppLog.Info($"Preset applied: {preset.Name} (backend={color.Backend}, lock={color.LockColor})");
             StatusChanged?.Invoke($"Preset: {preset.Name}");
         });
     }
@@ -208,11 +217,6 @@ public sealed class ProfileMonitor : IDisposable
     {
         RunOnUi(() =>
         {
-            var cfg = _config.Current;
-            double step = cfg.HotkeyStep <= 0 ? 0.05 : cfg.HotkeyStep;
-            // Shadow Boost UI is 0..100; internal ShadowLift is 0..0.4 → step ≈ 5 Boost units.
-            double shadowStep = 0.4 * 0.05;
-
             if (action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase))
             {
                 var id = action["preset:".Length..];
@@ -235,14 +239,6 @@ public sealed class ProfileMonitor : IDisposable
 
             switch (action)
             {
-                case "brightnessUp": _engine.AdjustBrightness(step); break;
-                case "brightnessDown": _engine.AdjustBrightness(-step); break;
-                case "contrastUp": _engine.AdjustContrast(step); break;
-                case "contrastDown": _engine.AdjustContrast(-step); break;
-                case "gammaUp": _engine.AdjustGamma(step); break;
-                case "gammaDown": _engine.AdjustGamma(-step); break;
-                case "shadowBoostUp": _engine.AdjustShadowLift(shadowStep); break;
-                case "shadowBoostDown": _engine.AdjustShadowLift(-shadowStep); break;
                 case "nextPreset":
                     CyclePreset(+1);
                     return;
@@ -255,21 +251,6 @@ public sealed class ProfileMonitor : IDisposable
                     return;
                 case "emergencyRestore":
                     EmergencyRestore();
-                    return;
-                case "resetColor":
-                    ClearActivePreset();
-                    StopColorLock();
-                    _engine.ClearAbCompare();
-                    _engine.ResetColorToFactoryOrNeutral(cfg.FactoryDefaults?.Color);
-                    break;
-                case "compareAb":
-                    if (!_engine.ToggleAbCompare())
-                        StatusChanged?.Invoke("A/B: apply Preview color first");
-                    else
-                    {
-                        SetColorLockPaused(_engine.IsAbShowingFactory);
-                        StatusChanged?.Invoke(_engine.IsAbShowingFactory ? "A/B: Factory" : "A/B: Preview");
-                    }
                     return;
             }
 
@@ -336,27 +317,28 @@ public sealed class ProfileMonitor : IDisposable
                 if (preset == null)
                 {
                     lock (_gate) _activePresetId = null;
+                    try { StopColorLock(); } catch { }
+                    return;
                 }
-                else if (preset.ApplyColor)
+
+                try
                 {
-                    _engine.ApplyColor(preset.Color.Clone());
-                    if (preset.Color.LockColor)
-                        StartColorLock(preset.Color);
+                    var color = (preset.Color ?? ColorSettings.Neutral).Clone();
+                    color.Clamp();
+                    _engine.ApplyColor(color);
+                    if (color.LockColor)
+                        StartColorLock(color);
                     else
                         StopColorLock();
-                    return;
                 }
-                else
+                catch (Exception ex)
                 {
-                    return;
+                    AppLog.Error("ConfigChanged preset re-apply: " + ex.Message);
                 }
+                return;
             }
 
-            if (fresh.ApplyColor)
-            {
-                _engine.ApplyColor(fresh.Color.Clone());
-                StartColorLockIfNeeded(fresh);
-            }
+            // No active preset — leave display alone (color is presets-only).
         });
         AppLog.Info("Profile monitor noted config change.");
         StatusChanged?.Invoke("Config reloaded");
@@ -616,33 +598,27 @@ public sealed class ProfileMonitor : IDisposable
         if (keep != null)
         {
             lock (_gate) _activePresetId = keep.Id;
-            if (keep.ApplyColor)
+            try
             {
-                try
-                {
-                    _engine.ApplyColor(keep.Color.Clone());
-                    if (keep.Color.LockColor)
-                        StartColorLock(keep.Color);
-                    else
-                        StopColorLock();
-                    AppLog.Info($"Kept active preset after profile apply: {keep.Name}");
-                }
-                catch (Exception ex)
-                {
-                    AppLog.Error("Preset re-apply after profile: " + ex.Message);
-                }
-                return;
+                var color = (keep.Color ?? ColorSettings.Neutral).Clone();
+                color.Clamp();
+                _engine.ApplyColor(color);
+                if (color.LockColor)
+                    StartColorLock(color);
+                else
+                    StopColorLock();
+                AppLog.Info($"Kept active preset after profile apply: {keep.Name}");
             }
+            catch (Exception ex)
+            {
+                AppLog.Error("Preset re-apply after profile: " + ex.Message);
+            }
+            return;
         }
 
-        try
-        {
-            StartColorLockIfNeeded(profile);
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("Color lock start: " + ex.Message);
-        }
+        // Color is presets-only — do not lock/re-apply profile color.
+        try { StopColorLock(); }
+        catch (Exception ex) { AppLog.Error("Color lock stop: " + ex.Message); }
     }
 
     private void ScheduleDeferred(GameProfile profile, int seconds)
@@ -672,14 +648,6 @@ public sealed class ProfileMonitor : IDisposable
         if (_deferredTimer == null) return;
         _deferredTimer.Stop();
         _deferredTimer = null;
-    }
-
-    private void StartColorLockIfNeeded(GameProfile profile)
-    {
-        if (profile.ApplyColor && profile.Color.LockColor)
-            StartColorLock(profile.Color);
-        else
-            StopColorLock();
     }
 
     private void StartColorLock(ColorSettings color)

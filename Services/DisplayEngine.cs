@@ -213,12 +213,7 @@ public sealed class DisplayEngine
             SetResolution(profile.Resolution!, profile.RefreshRate, device);
         }
 
-        if (profile.ApplyColor)
-        {
-            _liveColor = profile.Color.Clone();
-            _liveColor.Clamp();
-            ApplyColor(_liveColor);
-        }
+        // Color is applied only via presets / overlay — never from the profile baseline.
     }
 
     private static string? AppConfigPreferredDevice()

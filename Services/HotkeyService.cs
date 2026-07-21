@@ -59,16 +59,7 @@ public sealed class HotkeyService : IDisposable
         }
 
         var hk = config.GlobalHotkeys ?? new GlobalHotkeys();
-        TryRegister("brightnessUp", hk.BrightnessUp);
-        TryRegister("brightnessDown", hk.BrightnessDown);
-        TryRegister("contrastUp", hk.ContrastUp);
-        TryRegister("contrastDown", hk.ContrastDown);
-        TryRegister("gammaUp", hk.GammaUp);
-        TryRegister("gammaDown", hk.GammaDown);
-        TryRegister("resetColor", hk.ResetColor);
-        TryRegister("compareAb", hk.CompareAb);
-        TryRegister("shadowBoostUp", hk.ShadowBoostUp);
-        TryRegister("shadowBoostDown", hk.ShadowBoostDown);
+        // Preset workflow only — no global B/C/G adjustment binds.
         TryRegister("nextPreset", hk.NextPreset);
         TryRegister("previousPreset", hk.PreviousPreset);
         TryRegister("toggleOverlay", hk.ToggleOverlay);

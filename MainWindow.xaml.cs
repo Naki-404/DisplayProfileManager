@@ -31,9 +31,7 @@ public partial class MainWindow : Window
     private bool _dirty;
     private bool _ignoreTabChange;
     private int _lastTabIndex;
-    private ColorBackend _profileEditorBackend = ColorBackend.LowLevel;
     private ColorBackend _presetEditorBackend = ColorBackend.LowLevel;
-    private ColorBackend _defEditorBackend = ColorBackend.LowLevel;
 
     public MainWindow()
     {
@@ -337,9 +335,6 @@ public partial class MainWindow : Window
         TxtSearch.ToolTip = Loc.T("search.placeholder");
         LblDisplay.Text = Loc.T("display");
 
-        if (LblColorBackend != null) LblColorBackend.Text = Loc.T("color.backend");
-        if (ChkLockColor != null) ChkLockColor.Content = Loc.T("color.lock");
-        if (ChkApplyColor != null) ChkApplyColor.Content = Loc.T("color.apply");
         if (LblSessionTitle != null) LblSessionTitle.Text = Loc.T("session.title");
         if (LblSessionSub != null) LblSessionSub.Text = Loc.T("session.sub");
         if (ChkQuietToast != null) ChkQuietToast.Content = Loc.T("session.quiet");
@@ -355,13 +350,10 @@ public partial class MainWindow : Window
         if (BtnPresetExport != null) BtnPresetExport.Content = Loc.T("presets.export");
         if (BtnPresetImport != null) BtnPresetImport.Content = Loc.T("presets.import");
 
-        if (BtnPreviewColor != null) BtnPreviewColor.Content = Loc.T("btn.preview");
-        if (BtnCompareAb != null) BtnCompareAb.Content = Loc.T("btn.compareAb");
         if (BtnOverlay != null) BtnOverlay.Content = Loc.T("btn.overlay");
-        if (LblHkCompareAb != null) LblHkCompareAb.Text = Loc.T("hotkey.compareAb");
 
         ApplyInfoTips();
-        UpdateColorLabels();
+        UpdateSessionLabels();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
     }
 
@@ -372,12 +364,6 @@ public partial class MainWindow : Window
         if (BtnOverlay != null) BtnOverlay.ToolTip = Loc.T("btn.overlay.tip");
         SetTip(InfoRes, "display.res.tip");
         SetTip(InfoPower, "display.power.tip");
-        SetTip(InfoApplyColor, "color.apply.tip");
-        SetTip(InfoBackend, "color.backend.tip");
-        SetTip(InfoLock, "color.lock.tip");
-        SetTip(InfoBrightness, "color.brightness.tip");
-        SetTip(InfoVibrance, "color.vibrance.tip");
-        SetTip(InfoShadow, "color.shadow.tip");
         if (InfoRestoreMode != null) SetTip(InfoRestoreMode, "restore.mode.tip");
         if (LblRestoreMode != null) LblRestoreMode.Text = Loc.T("restore.mode.lbl");
         SetTip(InfoSession, "session.sub");
@@ -505,28 +491,10 @@ public partial class MainWindow : Window
         CmbDefaultRes.SelectedItem = cfg.Defaults.Resolution ?? DisplayEngine.GetCurrentResolution();
         SelectComboByContent(CmbDefaultPower, cfg.Defaults.PowerPlan ?? "balanced");
 
-        SldDefBrightness.Value = cfg.Defaults.Color.Brightness;
-        SldDefContrast.Value = cfg.Defaults.Color.Contrast;
-        SldDefGamma.Value = cfg.Defaults.Color.Gamma;
-        SldDefVibrance.Value = cfg.Defaults.Color.Vibrance;
-        SldDefShadow.Value = ColorUiHelper.ShadowBoostFromLift(cfg.Defaults.Color.ShadowLift);
-        cfg.Defaults.EnsureDualColorSlots();
-        _defEditorBackend = cfg.Defaults.Color.Backend;
-        SetBackendToggle(cfg.Defaults.Color.Backend, TogDefBackend);
-        UpdateDefLabels();
+        cfg.Defaults.Color = ColorSettings.Neutral;
         UpdateDriverUiAvailability();
 
         cfg.GlobalHotkeys ??= new GlobalHotkeys();
-        HkBrightUp.Text = cfg.GlobalHotkeys.BrightnessUp ?? "";
-        HkBrightDown.Text = cfg.GlobalHotkeys.BrightnessDown ?? "";
-        HkContrastUp.Text = cfg.GlobalHotkeys.ContrastUp ?? "";
-        HkContrastDown.Text = cfg.GlobalHotkeys.ContrastDown ?? "";
-        HkGammaUp.Text = cfg.GlobalHotkeys.GammaUp ?? "";
-        HkGammaDown.Text = cfg.GlobalHotkeys.GammaDown ?? "";
-        HkReset.Text = cfg.GlobalHotkeys.ResetColor ?? "";
-        if (HkCompareAb != null) HkCompareAb.Text = cfg.GlobalHotkeys.CompareAb ?? "";
-        if (HkShadowUp != null) HkShadowUp.Text = cfg.GlobalHotkeys.ShadowBoostUp ?? "";
-        if (HkShadowDown != null) HkShadowDown.Text = cfg.GlobalHotkeys.ShadowBoostDown ?? "";
         if (HkNextPreset != null) HkNextPreset.Text = cfg.GlobalHotkeys.NextPreset ?? "";
         if (HkPrevPreset != null) HkPrevPreset.Text = cfg.GlobalHotkeys.PreviousPreset ?? "";
         if (HkToggleOverlay != null) HkToggleOverlay.Text = cfg.GlobalHotkeys.ToggleOverlay ?? "";
@@ -712,7 +680,7 @@ public partial class MainWindow : Window
         TxtProcess.Text = p.ProcessName;
         ChkApplyRes.IsChecked = p.ApplyResolution;
         ChkApplyPower.IsChecked = p.ApplyPowerPlan;
-        ChkApplyColor.IsChecked = p.ApplyColor;
+        p.ApplyColor = false;
 
         if (string.IsNullOrWhiteSpace(p.Resolution)) CmbResolution.SelectedIndex = 0;
         else
@@ -724,11 +692,6 @@ public partial class MainWindow : Window
         SelectComboByTag(CmbPower, p.PowerPlan ?? "");
         SelectComboByTag(CmbDisplay, p.DisplayDevice ?? "");
         SelectComboByTag(CmbRestoreMode, p.RestoreMode.ToString());
-        p.EnsureDualColorSlots();
-        _profileEditorBackend = p.Color.Backend;
-        SetBackendToggle(p.Color.Backend, TogBackend);
-        ChkLockColor.IsChecked = p.Color.LockColor;
-        ColorUiHelper.ApplyColorSliders(p.Color, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
         var sx = p.Session ?? new SessionExtras();
         SldDeferred.Value = sx.DeferredApplySeconds;
         ChkQuietToast.IsChecked = sx.QuietNotifications;
@@ -740,8 +703,7 @@ public partial class MainWindow : Window
         ChkSwitchAudio.IsChecked = sx.SwitchAudioDevice;
         SelectAudioDevice(sx.AudioDeviceId);
         SelectComboByTag(CmbScaling, string.IsNullOrWhiteSpace(sx.ScalingMode) ? "default" : sx.ScalingMode!);
-        UpdateColorLabels();
-        UpdateShadowSliderEnabled();
+        UpdateSessionLabels();
         CompanionList.ItemsSource = null;
         CompanionList.ItemsSource = p.Companions;
         _suppressEditorEvents = false;
@@ -766,19 +728,10 @@ public partial class MainWindow : Window
     private void ColorSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_suppressEditorEvents) return;
-        UpdateColorLabels();
-        ColorUiHelper.ConfigureGammaRangeForBackend(ReadBackendToggle(TogBackend), SldGamma);
+        UpdateSessionLabels();
         if (_selected == null) return;
         MarkDirty();
         PushEditorToSelected();
-    }
-
-    private void DefColor_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_suppressEditorEvents) return;
-        UpdateDefLabels();
-        ColorUiHelper.ConfigureGammaRangeForBackend(ReadBackendToggle(TogDefBackend), SldDefGamma);
-        MarkDirty();
     }
 
     private void GlobalEditorChanged(object sender, RoutedEventArgs e)
@@ -804,123 +757,10 @@ public partial class MainWindow : Window
         PersistConfigToDisk(showBusy: false);
     }
 
-    private void UpdateColorLabels()
+    private void UpdateSessionLabels()
     {
-        if (LblBrightness == null) return;
-        var tmp = new ColorSettings
-        {
-            Brightness = SldBrightness.Value,
-            Contrast = SldContrast.Value,
-            Gamma = SldGamma.Value,
-            Backend = ReadBackendToggle(TogBackend)
-        };
-        string label = GpuVendorDetect.DriverLabel;
-        if (tmp.Backend == ColorBackend.LowLevel)
-        {
-            var (b, c, g) = tmp.ToRivaTunerUnits();
-            LblBrightness.Text = $"Brightness: {b}  (RT −125..125)";
-            LblContrast.Text = $"Contrast: {c}  (RT −82..82)";
-            LblGamma.Text = $"Gamma: {g:F2}  (RT 0.5..6)";
-        }
-        else
-        {
-            // NVIDIA Control Panel scale (B/C 0..100% mid 50, G 0.4..2.8)
-            int bPct = (int)Math.Round(tmp.Brightness * 100);
-            int cPct = (int)Math.Round(Math.Clamp(tmp.Contrast / 2.0, 0, 1) * 100);
-            LblBrightness.Text = $"Brightness: {bPct}%  ({label} CP)";
-            LblContrast.Text = $"Contrast: {cPct}%  ({label} CP)";
-            LblGamma.Text = $"Gamma: {Math.Clamp(tmp.Gamma, 0.4, 2.8):F2}  ({label} CP)";
-        }
-        if (LblVibrance != null)
-        {
-            LblVibrance.Text = tmp.Backend == ColorBackend.LowLevel
-                ? $"Vibrance: {(int)SldVibrance.Value}"
-                : $"Digital vibrance: {(int)SldVibrance.Value}%  ({label} CP)";
-        }
-        if (LblShadowLift != null) LblShadowLift.Text = $"Shadow Boost: {(int)Math.Round(SldShadowLift.Value)}";
         if (LblDeferred != null) LblDeferred.Text = Loc.Tf("session.deferred", (int)SldDeferred.Value);
         if (LblMonBright != null) LblMonBright.Text = Loc.Tf("session.bright.lbl", (int)SldMonBright.Value);
-    }
-
-    private void UpdateDefLabels()
-    {
-        if (LblDefBrightness == null) return;
-        var be = ReadBackendToggle(TogDefBackend);
-        string label = GpuVendorDetect.DriverLabel;
-        if (be == ColorBackend.LowLevel)
-        {
-            var tmp = new ColorSettings
-            {
-                Brightness = SldDefBrightness.Value,
-                Contrast = SldDefContrast.Value,
-                Gamma = SldDefGamma.Value,
-                Backend = ColorBackend.LowLevel
-            };
-            var (b, c, g) = tmp.ToRivaTunerUnits();
-            LblDefBrightness.Text = $"Brightness: {b} (RT)";
-            LblDefContrast.Text = $"Contrast: {c} (RT)";
-            LblDefGamma.Text = $"Gamma: {g:F2} (RT)";
-        }
-        else
-        {
-            LblDefBrightness.Text = $"Brightness: {(int)Math.Round(SldDefBrightness.Value * 100)}% ({label})";
-            LblDefContrast.Text = $"Contrast: {(int)Math.Round(Math.Clamp(SldDefContrast.Value / 2.0, 0, 1) * 100)}% ({label})";
-            LblDefGamma.Text = $"Gamma: {Math.Clamp(SldDefGamma.Value, 0.4, 2.8):F2} ({label})";
-        }
-        if (LblDefVibrance != null)
-        {
-            LblDefVibrance.Text = be == ColorBackend.LowLevel
-                ? $"Vibrance: {(int)SldDefVibrance.Value}"
-                : $"Digital vibrance: {(int)SldDefVibrance.Value}% ({label})";
-        }
-        if (LblDefShadow != null) LblDefShadow.Text = $"Shadow Boost: {(int)Math.Round(SldDefShadow.Value)}";
-    }
-
-    private void BackendToggle_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_suppressEditorEvents) return;
-        var next = ReadBackendToggle(TogBackend);
-        if (_selected == null)
-        {
-            UpdateBackendActiveLabel(TogBackend, next == ColorBackend.LowLevel);
-            UpdateColorLabels();
-            UpdateShadowSliderEnabled();
-            return;
-        }
-
-        if (next == _profileEditorBackend)
-        {
-            UpdateBackendActiveLabel(TogBackend, next == ColorBackend.LowLevel);
-            UpdateColorLabels();
-            UpdateShadowSliderEnabled();
-            return;
-        }
-
-        _selected.EnsureDualColorSlots();
-        var prev = ColorUiHelper.ReadColorFromSliders(_profileEditorBackend, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift, ChkLockColor.IsChecked == true);
-        _selected.Color = prev;
-        _selected.SaveActiveToDualSlots();
-        _profileEditorBackend = next;
-        var loaded = _selected.ActivateBackend(next);
-
-        _suppressEditorEvents = true;
-        try
-        {
-            ColorUiHelper.ApplyColorSliders(loaded, SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift);
-            ChkLockColor.IsChecked = loaded.LockColor;
-            ColorUiHelper.ConfigureGammaRangeForBackend(next, SldGamma);
-        }
-        finally
-        {
-            _suppressEditorEvents = false;
-        }
-
-        UpdateColorLabels();
-        UpdateShadowSliderEnabled();
-        UpdateBackendActiveLabel(TogBackend, next == ColorBackend.LowLevel);
-        MarkDirty();
-        PushEditorToSelected();
-        ProfileList.Items.Refresh();
     }
 
     private void PresetBackendToggle_Changed(object sender, RoutedEventArgs e)
@@ -972,48 +812,6 @@ public partial class MainWindow : Window
         RefreshPresetListSafe();
     }
 
-    private void DefBackendToggle_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_suppressEditorEvents) return;
-        var next = ReadBackendToggle(TogDefBackend);
-        if (next == _defEditorBackend)
-        {
-            UpdateBackendActiveLabel(TogDefBackend, next == ColorBackend.LowLevel);
-            UpdateDefLabels();
-            return;
-        }
-
-        var defaults = App.Services.Config.Current.Defaults;
-        defaults.EnsureDualColorSlots();
-        var prev = ColorUiHelper.ReadColorFromSliders(_defEditorBackend, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow, true);
-        defaults.Color = prev;
-        defaults.SaveActiveToDualSlots();
-        _defEditorBackend = next;
-        var loaded = defaults.ActivateBackend(next);
-
-        _suppressEditorEvents = true;
-        try
-        {
-            ColorUiHelper.ApplyColorSliders(loaded, SldDefBrightness, SldDefContrast, SldDefGamma, SldDefVibrance, SldDefShadow);
-            ColorUiHelper.ConfigureGammaRangeForBackend(next, SldDefGamma);
-        }
-        finally
-        {
-            _suppressEditorEvents = false;
-        }
-
-        UpdateDefLabels();
-        UpdateBackendActiveLabel(TogDefBackend, next == ColorBackend.LowLevel);
-        MarkDirty();
-    }
-
-    private void UpdateShadowSliderEnabled()
-    {
-        bool low = ReadBackendToggle(TogBackend) == ColorBackend.LowLevel;
-        if (SldShadowLift != null) SldShadowLift.IsEnabled = low;
-        if (LblShadowLift != null) LblShadowLift.Opacity = low ? 1.0 : 0.45;
-    }
-
     private void UpdatePresetShadowEnabled()
     {
         bool low = ReadBackendToggle(TogPresetBackend) == ColorBackend.LowLevel;
@@ -1024,21 +822,9 @@ public partial class MainWindow : Window
     private void UpdateDriverUiAvailability()
     {
         string label = GpuVendorDetect.DriverLabel;
-        foreach (var tog in new[] { TogBackend, TogPresetBackend, TogDefBackend })
-        {
-            if (tog == null) continue;
-            tog.Content = label;
-            tog.IsEnabled = true;
-        }
-        if (LblBackendHint != null)
-        {
-            if (GpuVendorDetect.HasNvidia)
-                LblBackendHint.Text = "NVIDIA (Control Panel B/C/G + Vibrance)  ↔  Low Level (RivaTuner)";
-            else if (GpuVendorDetect.HasAmd)
-                LblBackendHint.Text = "AMD (gamma + saturation)  ↔  Low Level (RivaTuner)";
-            else
-                LblBackendHint.Text = "GPU driver  ↔  Low Level (RivaTuner)";
-        }
+        if (TogPresetBackend == null) return;
+        TogPresetBackend.Content = label;
+        TogPresetBackend.IsEnabled = true;
     }
 
     private void PushEditorToSelected()
@@ -1049,7 +835,7 @@ public partial class MainWindow : Window
         _selected.ProcessName = TxtProcess.Text.Trim();
         _selected.ApplyResolution = ChkApplyRes.IsChecked == true;
         _selected.ApplyPowerPlan = ChkApplyPower.IsChecked == true;
-        _selected.ApplyColor = ChkApplyColor.IsChecked == true;
+        _selected.ApplyColor = false;
 
         var res = CmbResolution.SelectedItem?.ToString();
         _selected.Resolution = res == "(don't change)" || string.IsNullOrWhiteSpace(res) ? null : res;
@@ -1063,13 +849,6 @@ public partial class MainWindow : Window
         if (CmbRestoreMode.SelectedItem is ComboBoxItem rm
             && Enum.TryParse<RestoreMode>(rm.Tag?.ToString(), out var restoreMode))
             _selected.RestoreMode = restoreMode;
-
-        _selected.Color = ColorUiHelper.ReadColorFromSliders(
-            ReadBackendToggle(TogBackend),
-            SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift,
-            ChkLockColor.IsChecked == true);
-        _profileEditorBackend = _selected.Color.Backend;
-        _selected.SaveActiveToDualSlots();
 
         _selected.Session ??= new SessionExtras();
         _selected.Session.DeferredApplySeconds = (int)SldDeferred.Value;
@@ -1092,29 +871,6 @@ public partial class MainWindow : Window
         SaveBusy.ShowSaved(Loc.T("toast.saved"));
         SetStatus("Saved");
         ShowToast(Loc.T("toast.saved"));
-    }
-
-    private void PreviewColor_Click(object sender, RoutedEventArgs e)
-    {
-        var c = ColorUiHelper.ReadColorFromSliders(
-            ReadBackendToggle(TogBackend),
-            SldBrightness, SldContrast, SldGamma, SldVibrance, SldShadowLift,
-            ChkLockColor.IsChecked == true);
-        App.Services.Display.PreviewColor(c);
-        ShowToast(Loc.T("toast.preview"));
-    }
-
-    private void CompareAb_Click(object sender, RoutedEventArgs e)
-    {
-        if (!App.Services.Display.ToggleAbCompare())
-        {
-            PreviewColor_Click(sender, e);
-            return;
-        }
-        App.Services.Monitor.SetColorLockPaused(App.Services.Display.IsAbShowingFactory);
-        ShowToast(App.Services.Display.IsAbShowingFactory
-            ? Loc.T("toast.ab.factory")
-            : Loc.T("toast.ab.preview"));
     }
 
     private void Overlay_Click(object sender, RoutedEventArgs e)
@@ -1190,39 +946,30 @@ public partial class MainWindow : Window
     {
         var cfg = App.Services.Config.Current;
         cfg.Profiles = _profiles.Select(CloneProfile).ToList();
+        foreach (var p in cfg.Profiles)
+            p.ApplyColor = false;
         cfg.Presets = null;
         cfg.Defaults.Resolution = CmbDefaultRes.SelectedItem?.ToString();
         cfg.Defaults.PowerPlan = (CmbDefaultPower.SelectedItem as ComboBoxItem)?.Content?.ToString()
                                  ?? CmbDefaultPower.SelectedItem?.ToString()
                                  ?? "balanced";
-        cfg.Defaults.Color.Brightness = SldDefBrightness.Value;
-        cfg.Defaults.Color.Contrast = SldDefContrast.Value;
-        cfg.Defaults.Color.Gamma = SldDefGamma.Value;
-        cfg.Defaults.Color.Vibrance = (int)SldDefVibrance.Value;
-        cfg.Defaults.Color.ShadowLift = ColorUiHelper.ShadowLiftFromBoost(SldDefShadow.Value);
-        cfg.Defaults.Color.Backend = ReadBackendToggle(TogDefBackend);
-        cfg.Defaults.Color.Clamp();
-        cfg.Defaults.SaveActiveToDualSlots();
-        _defEditorBackend = cfg.Defaults.Color.Backend;
+        cfg.Defaults.Color = ColorSettings.Neutral;
 
         if (cfg.FactoryDefaults == null || string.IsNullOrWhiteSpace(cfg.FactoryDefaults.Resolution))
             cfg.FactoryDefaults = ConfigService.CaptureFactoryDefaults();
         cfg.FactoryDefaults.Color = ColorSettings.Neutral;
 
         cfg.GlobalHotkeys ??= new GlobalHotkeys();
-        cfg.GlobalHotkeys.BrightnessUp = NormHotkey(HkBrightUp.Text);
-        cfg.GlobalHotkeys.BrightnessDown = NormHotkey(HkBrightDown.Text);
-        cfg.GlobalHotkeys.ContrastUp = NormHotkey(HkContrastUp.Text);
-        cfg.GlobalHotkeys.ContrastDown = NormHotkey(HkContrastDown.Text);
-        cfg.GlobalHotkeys.GammaUp = NormHotkey(HkGammaUp.Text);
-        cfg.GlobalHotkeys.GammaDown = NormHotkey(HkGammaDown.Text);
-        cfg.GlobalHotkeys.ResetColor = NormHotkey(HkReset.Text);
-        if (HkCompareAb != null)
-            cfg.GlobalHotkeys.CompareAb = NormHotkey(HkCompareAb.Text);
-        if (HkShadowUp != null)
-            cfg.GlobalHotkeys.ShadowBoostUp = NormHotkey(HkShadowUp.Text);
-        if (HkShadowDown != null)
-            cfg.GlobalHotkeys.ShadowBoostDown = NormHotkey(HkShadowDown.Text);
+        cfg.GlobalHotkeys.BrightnessUp = null;
+        cfg.GlobalHotkeys.BrightnessDown = null;
+        cfg.GlobalHotkeys.ContrastUp = null;
+        cfg.GlobalHotkeys.ContrastDown = null;
+        cfg.GlobalHotkeys.GammaUp = null;
+        cfg.GlobalHotkeys.GammaDown = null;
+        cfg.GlobalHotkeys.ResetColor = null;
+        cfg.GlobalHotkeys.CompareAb = null;
+        cfg.GlobalHotkeys.ShadowBoostUp = null;
+        cfg.GlobalHotkeys.ShadowBoostDown = null;
         if (HkNextPreset != null)
             cfg.GlobalHotkeys.NextPreset = NormHotkey(HkNextPreset.Text);
         if (HkPrevPreset != null)
@@ -1298,13 +1045,6 @@ public partial class MainWindow : Window
         _suppressEditorEvents = true;
         CmbDefaultRes.SelectedItem = factory.Resolution;
         SelectComboByContent(CmbDefaultPower, factory.PowerPlan ?? "balanced");
-        SldDefBrightness.Value = 0.5;
-        SldDefContrast.Value = 1.0;
-        SldDefGamma.Value = 1.0;
-        SldDefVibrance.Value = 50;
-        SldDefShadow.Value = 0;
-        SetBackendToggle(ColorBackend.LowLevel, TogDefBackend);
-        UpdateDefLabels();
         _suppressEditorEvents = false;
 
         App.Services.Monitor.EmergencyRestore();
@@ -1687,13 +1427,37 @@ public partial class MainWindow : Window
             box.Text = "";
             MarkDirty();
             if (box == TxtPresetHotkey && _selectedPreset != null)
+            {
                 PushPresetEditor();
+                FlushAutosave();
+            }
             return;
         }
+
+        if (box == TxtPresetHotkey)
+        {
+            if (Keyboard.Modifiers == ModifierKeys.None)
+            {
+                ShowToast("Hotkey needs Ctrl, Alt, Shift, or Win");
+                return;
+            }
+            box.Text = HotkeyService.GestureFromKeys(Keyboard.Modifiers, key);
+            if (_selectedPreset != null)
+            {
+                ChkPresetColor.IsChecked = true;
+                MarkDirty();
+                PushPresetEditor();
+                FlushAutosave();
+            }
+            else
+            {
+                MarkDirty();
+            }
+            return;
+        }
+
         box.Text = HotkeyService.GestureFromKeys(Keyboard.Modifiers, key);
         MarkDirty();
-        if (box == TxtPresetHotkey && _selectedPreset != null)
-            PushPresetEditor();
     }
 
     private void ClearHotkey_Click(object sender, RoutedEventArgs e)
@@ -1703,7 +1467,10 @@ public partial class MainWindow : Window
         box.Text = "";
         MarkDirty();
         if (box == TxtPresetHotkey && _selectedPreset != null)
+        {
             PushPresetEditor();
+            FlushAutosave();
+        }
     }
 
     private static string? NormHotkey(string? text)
@@ -1778,26 +1545,8 @@ public partial class MainWindow : Window
             ? "Active: Low Level (RivaTuner)"
             : $"Active: {label} (Control Panel)";
 
-        if (ReferenceEquals(tog, TogBackend))
-        {
-            if (LblBackendActive != null)
-            {
-                LblBackendActive.Text = active;
-                LblBackendActive.Foreground = (System.Windows.Media.Brush)FindResource("AccentBrush");
-            }
-            if (LblBackendHint != null)
-                LblBackendHint.Text = lowLevel
-                    ? "Switch is on Low Level — B/C/G as RivaTuner Detonator"
-                    : $"Switch is on {label} — B/C/G + Vibrance like the control panel";
-        }
-        else if (ReferenceEquals(tog, TogPresetBackend) && LblPresetBackendActive != null)
-        {
+        if (ReferenceEquals(tog, TogPresetBackend) && LblPresetBackendActive != null)
             LblPresetBackendActive.Text = active;
-        }
-        else if (ReferenceEquals(tog, TogDefBackend) && LblDefBackendActive != null)
-        {
-            LblDefBackendActive.Text = active;
-        }
     }
 
     private void FillAudioDevices()
