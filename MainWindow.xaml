@@ -87,6 +87,8 @@
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="BtnApply" Content="Apply" Style="{StaticResource AccentButton}" Margin="0,0,8,0" Click="Apply_Click"/>
                 <local:InfoHint x:Name="InfoApply" Margin="0,0,10,0"/>
+                <Button x:Name="BtnEmergency" Content="Emergency Restore" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="EmergencyRestore_Click"
+                        ToolTip="Restores display, color, power, and session settings to a safe state."/>
                 <Button x:Name="BtnReset" Content="Reset settings" Style="{StaticResource GhostButton}" Click="ResetSettings_Click"/>
                 <local:InfoHint x:Name="InfoReset"/>
             </StackPanel>
@@ -205,6 +207,16 @@
                                     <ComboBoxItem Content="balanced" Tag="balanced"/>
                                     <ComboBoxItem Content="(don't change)" Tag=""/>
                                 </ComboBox>
+                                <DockPanel Margin="0,12,0,4">
+                                    <local:InfoHint x:Name="InfoRestoreMode" DockPanel.Dock="Right"/>
+                                    <TextBlock x:Name="LblRestoreMode" Text="On game exit" Foreground="{DynamicResource MutedBrush}"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <ComboBox x:Name="CmbRestoreMode" SelectionChanged="EditorChanged">
+                                    <ComboBoxItem Content="Restore previous snapshot" Tag="PreviousSnapshot" IsSelected="True"/>
+                                    <ComboBoxItem Content="Restore Global Defaults" Tag="GlobalDefaults"/>
+                                    <ComboBoxItem Content="Do nothing" Tag="DoNothing"/>
+                                </ComboBox>
 
                                 <Separator/>
                                 <TextBlock Text="Color" FontWeight="SemiBold" Margin="0,0,0,6"/>
@@ -248,17 +260,20 @@
                                 <Slider x:Name="SldVibrance" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
                                 <DockPanel Margin="0,8,0,0">
                                     <local:InfoHint x:Name="InfoShadow" DockPanel.Dock="Right"/>
-                                    <TextBlock x:Name="LblShadowLift" Text="Shadow lift: 0.00" Foreground="{DynamicResource MutedBrush}"
+                                    <TextBlock x:Name="LblShadowLift" Text="Shadow Boost: 0" Foreground="{DynamicResource MutedBrush}"
                                                VerticalAlignment="Center"/>
                                 </DockPanel>
-                                <Slider x:Name="SldShadowLift" Minimum="0" Maximum="0.4" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                <Slider x:Name="SldShadowLift" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                     <Button x:Name="BtnPreviewColor" Content="Preview" Style="{StaticResource CompactGhostButton}"
                                             Margin="0,0,8,0" Click="PreviewColor_Click"
                                             ToolTip="Apply current sliders to the display without saving"/>
                                     <Button x:Name="BtnCompareAb" Content="A/B" Style="{StaticResource CompactGhostButton}"
-                                            Click="CompareAb_Click"
+                                            Margin="0,0,8,0" Click="CompareAb_Click"
                                             ToolTip="Toggle between last preview and factory gamma"/>
+                                    <Button x:Name="BtnOverlay" Content="Live overlay" Style="{StaticResource CompactAccentButton}"
+                                            Click="Overlay_Click"
+                                            ToolTip="Floating panel over the game — sliders apply color live"/>
                                 </StackPanel>
 
                                 <Separator/>
@@ -454,8 +469,8 @@
                                 <Slider x:Name="SldPresetG" Minimum="0.5" Maximum="6" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                                 <TextBlock x:Name="LblPresetV" Text="Vibrance: 50" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
                                 <Slider x:Name="SldPresetV" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
-                                <TextBlock x:Name="LblPresetShadow" Text="Shadow lift: 0.00" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
-                                <Slider x:Name="SldPresetShadow" Minimum="0" Maximum="0.4" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
+                                <TextBlock x:Name="LblPresetShadow" Text="Shadow Boost: 0" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
+                                <Slider x:Name="SldPresetShadow" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                             </StackPanel>
                         </Border>
                     </ScrollViewer>
@@ -491,22 +506,24 @@
                             <Slider x:Name="SldDefGamma" Minimum="0.5" Maximum="6" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
                             <TextBlock x:Name="LblDefVibrance" Text="Vibrance: 50" Foreground="{DynamicResource MutedBrush}"/>
                             <Slider x:Name="SldDefVibrance" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
-                            <TextBlock x:Name="LblDefShadow" Text="Shadow lift: 0.00" Foreground="{DynamicResource MutedBrush}"/>
-                            <Slider x:Name="SldDefShadow" Minimum="0" Maximum="0.4" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
+                            <TextBlock x:Name="LblDefShadow" Text="Shadow Boost: 0" Foreground="{DynamicResource MutedBrush}"/>
+                            <Slider x:Name="SldDefShadow" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="DefColor_ValueChanged"/>
 
                             <Separator/>
                             <TextBlock Text="Adjustment hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Click a field and press a key combo. Esc / Backspace / Delete or Clear removes it."
+                            <TextBlock Text="Click a field and press a key combo. Esc / Backspace / Delete or Clear removes it. Modifiers required."
                                        Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="160"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                                    <RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <TextBlock Grid.Row="0" Text="Brightness +" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkBrightUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"
@@ -533,13 +550,37 @@
                                 <TextBox Grid.Row="5" Grid.Column="1" x:Name="HkGammaDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                                 <Button Grid.Row="5" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkGammaDown}"/>
-                                <TextBlock Grid.Row="6" Text="Reset color" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="6" Grid.Column="1" x:Name="HkReset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBlock Grid.Row="6" Text="Shadow Boost +" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="6" Grid.Column="1" x:Name="HkShadowUp" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                                 <Button Grid.Row="6" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkReset}"/>
-                                <TextBlock Grid.Row="7" x:Name="LblHkCompareAb" Text="A/B compare" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="7" Grid.Column="1" x:Name="HkCompareAb" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkShadowUp}"/>
+                                <TextBlock Grid.Row="7" Text="Shadow Boost -" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="7" Grid.Column="1" x:Name="HkShadowDown" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                                 <Button Grid.Row="7" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkShadowDown}"/>
+                                <TextBlock Grid.Row="8" Text="Next preset" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="8" Grid.Column="1" x:Name="HkNextPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="8" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkNextPreset}"/>
+                                <TextBlock Grid.Row="9" Text="Previous preset" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="9" Grid.Column="1" x:Name="HkPrevPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="9" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkPrevPreset}"/>
+                                <TextBlock Grid.Row="10" Text="Toggle overlay" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="10" Grid.Column="1" x:Name="HkToggleOverlay" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="10" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkToggleOverlay}"/>
+                                <TextBlock Grid.Row="11" Text="Emergency Restore" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="11" Grid.Column="1" x:Name="HkEmergency" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="11" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkEmergency}"/>
+                                <TextBlock Grid.Row="12" Text="Reset color" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="12" Grid.Column="1" x:Name="HkReset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="12" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkReset}"/>
+                                <TextBlock Grid.Row="13" x:Name="LblHkCompareAb" Text="A/B compare" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="13" Grid.Column="1" x:Name="HkCompareAb" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="13" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkCompareAb}"/>
                             </Grid>
 

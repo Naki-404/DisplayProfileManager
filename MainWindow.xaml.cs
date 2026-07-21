@@ -314,6 +314,11 @@ public partial class MainWindow : Window
         TitleAppName.Text = Loc.T("app.name");
         Title = Loc.T("app.name");
         BtnApply.Content = Loc.T("btn.apply");
+        if (BtnEmergency != null)
+        {
+            BtnEmergency.Content = Loc.T("btn.emergency");
+            BtnEmergency.ToolTip = Loc.T("btn.emergency.tip");
+        }
         BtnReset.Content = Loc.T("btn.reset");
         BtnScan.Content = Loc.T("btn.scan");
         BtnAddManual.Content = Loc.T("btn.addManual");
@@ -349,6 +354,7 @@ public partial class MainWindow : Window
 
         if (BtnPreviewColor != null) BtnPreviewColor.Content = Loc.T("btn.preview");
         if (BtnCompareAb != null) BtnCompareAb.Content = Loc.T("btn.compareAb");
+        if (BtnOverlay != null) BtnOverlay.Content = Loc.T("btn.overlay");
         if (LblHkCompareAb != null) LblHkCompareAb.Text = Loc.T("hotkey.compareAb");
 
         ApplyInfoTips();
@@ -360,6 +366,7 @@ public partial class MainWindow : Window
     {
         SetTip(InfoApply, "btn.apply.tip");
         SetTip(InfoReset, "btn.reset.tip");
+        if (BtnOverlay != null) BtnOverlay.ToolTip = Loc.T("btn.overlay.tip");
         SetTip(InfoRes, "display.res.tip");
         SetTip(InfoPower, "display.power.tip");
         SetTip(InfoApplyColor, "color.apply.tip");
@@ -368,6 +375,8 @@ public partial class MainWindow : Window
         SetTip(InfoBrightness, "color.brightness.tip");
         SetTip(InfoVibrance, "color.vibrance.tip");
         SetTip(InfoShadow, "color.shadow.tip");
+        if (InfoRestoreMode != null) SetTip(InfoRestoreMode, "restore.mode.tip");
+        if (LblRestoreMode != null) LblRestoreMode.Text = Loc.T("restore.mode.lbl");
         SetTip(InfoSession, "session.sub");
         SetTip(InfoDeferred, "session.deferred.tip");
         SetTip(InfoQuiet, "session.quiet.tip");
@@ -409,6 +418,11 @@ public partial class MainWindow : Window
 
     /// <summary>Game whose preset hotkeys stay registered when no match is running.</summary>
     public GameProfile? HotkeyPresetFallback => _presetGame ?? _selected;
+
+    /// <summary>Selected profile for overlay when no game is running.</summary>
+    public GameProfile? SelectedProfileForOverlay => _selected;
+
+    public void NotifyOverlayApplied() => ShowToast(Loc.T("overlay.applied"));
 
     private void RefreshHotkeyBindings()
     {
@@ -492,7 +506,7 @@ public partial class MainWindow : Window
         SldDefContrast.Value = cfg.Defaults.Color.Contrast;
         SldDefGamma.Value = cfg.Defaults.Color.Gamma;
         SldDefVibrance.Value = cfg.Defaults.Color.Vibrance;
-        SldDefShadow.Value = cfg.Defaults.Color.ShadowLift;
+        SldDefShadow.Value = ColorUiHelper.ShadowBoostFromLift(cfg.Defaults.Color.ShadowLift);
         cfg.Defaults.EnsureDualColorSlots();
         _defEditorBackend = cfg.Defaults.Color.Backend;
         SetBackendToggle(cfg.Defaults.Color.Backend, TogDefBackend);
@@ -507,6 +521,12 @@ public partial class MainWindow : Window
         HkGammaDown.Text = cfg.GlobalHotkeys.GammaDown ?? "";
         HkReset.Text = cfg.GlobalHotkeys.ResetColor ?? "";
         if (HkCompareAb != null) HkCompareAb.Text = cfg.GlobalHotkeys.CompareAb ?? "";
+        if (HkShadowUp != null) HkShadowUp.Text = cfg.GlobalHotkeys.ShadowBoostUp ?? "";
+        if (HkShadowDown != null) HkShadowDown.Text = cfg.GlobalHotkeys.ShadowBoostDown ?? "";
+        if (HkNextPreset != null) HkNextPreset.Text = cfg.GlobalHotkeys.NextPreset ?? "";
+        if (HkPrevPreset != null) HkPrevPreset.Text = cfg.GlobalHotkeys.PreviousPreset ?? "";
+        if (HkToggleOverlay != null) HkToggleOverlay.Text = cfg.GlobalHotkeys.ToggleOverlay ?? "";
+        if (HkEmergency != null) HkEmergency.Text = cfg.GlobalHotkeys.EmergencyRestore ?? "";
 
         ChkAutostart.IsChecked = cfg.StartWithWindows;
         ChkStartMin.IsChecked = cfg.StartMinimized;
@@ -699,6 +719,7 @@ public partial class MainWindow : Window
 
         SelectComboByTag(CmbPower, p.PowerPlan ?? "");
         SelectComboByTag(CmbDisplay, p.DisplayDevice ?? "");
+        SelectComboByTag(CmbRestoreMode, p.RestoreMode.ToString());
         p.EnsureDualColorSlots();
         _profileEditorBackend = p.Color.Backend;
         SetBackendToggle(p.Color.Backend, TogBackend);
@@ -812,7 +833,7 @@ public partial class MainWindow : Window
                 ? $"Vibrance: {(int)SldVibrance.Value}"
                 : $"Digital vibrance: {(int)SldVibrance.Value}%  ({label} CP)";
         }
-        if (LblShadowLift != null) LblShadowLift.Text = $"Shadow lift: {SldShadowLift.Value:F2}";
+        if (LblShadowLift != null) LblShadowLift.Text = $"Shadow Boost: {(int)Math.Round(SldShadowLift.Value)}";
         if (LblDeferred != null) LblDeferred.Text = Loc.Tf("session.deferred", (int)SldDeferred.Value);
         if (LblMonBright != null) LblMonBright.Text = Loc.Tf("session.bright.lbl", (int)SldMonBright.Value);
     }
@@ -848,7 +869,7 @@ public partial class MainWindow : Window
                 ? $"Vibrance: {(int)SldDefVibrance.Value}"
                 : $"Digital vibrance: {(int)SldDefVibrance.Value}% ({label})";
         }
-        if (LblDefShadow != null) LblDefShadow.Text = $"Shadow lift: {SldDefShadow.Value:F2}";
+        if (LblDefShadow != null) LblDefShadow.Text = $"Shadow Boost: {(int)Math.Round(SldDefShadow.Value)}";
     }
 
     private void BackendToggle_Changed(object sender, RoutedEventArgs e)
@@ -950,48 +971,20 @@ public partial class MainWindow : Window
 
     private static void ApplyColorSliders(
         ColorSettings c,
-        Slider b, Slider co, Slider g, Slider v, Slider shadow)
+        Slider b, Slider co, Slider g, Slider v, Slider shadowBoost)
     {
-        ConfigureGammaRangeForBackend(c.Backend, g);
-        b.Value = c.Brightness;
-        co.Value = c.Contrast;
-        g.Value = Math.Clamp(c.Gamma, g.Minimum, g.Maximum);
-        v.Value = c.Vibrance;
-        shadow.Value = c.ShadowLift;
+        ColorUiHelper.ApplyColorSliders(c, b, co, g, v, shadowBoost);
     }
 
     /// <summary>Driver/NVIDIA CP gamma is 0.4–2.8; Low Level (RT) keeps 0.5–6.</summary>
-    private static void ConfigureGammaRangeForBackend(ColorBackend backend, Slider gamma)
-    {
-        bool driver = backend is not ColorBackend.LowLevel and not ColorBackend.Gdi;
-        double min = driver ? 0.4 : 0.5;
-        double max = driver ? 2.8 : 6.0;
-        if (Math.Abs(gamma.Minimum - min) < 0.001 && Math.Abs(gamma.Maximum - max) < 0.001)
-            return;
-        double v = gamma.Value;
-        gamma.Minimum = min;
-        gamma.Maximum = max;
-        gamma.Value = Math.Clamp(v, min, max);
-    }
+    private static void ConfigureGammaRangeForBackend(ColorBackend backend, Slider gamma) =>
+        ColorUiHelper.ConfigureGammaRangeForBackend(backend, gamma);
 
     private static ColorSettings ReadColorFromSliders(
         ColorBackend backend,
-        Slider b, Slider co, Slider g, Slider v, Slider shadow,
-        bool lockColor)
-    {
-        var c = new ColorSettings
-        {
-            Backend = backend,
-            Brightness = b.Value,
-            Contrast = co.Value,
-            Gamma = g.Value,
-            Vibrance = (int)v.Value,
-            ShadowLift = shadow.Value,
-            LockColor = lockColor
-        };
-        c.Clamp();
-        return c;
-    }
+        Slider b, Slider co, Slider g, Slider v, Slider shadowBoost,
+        bool lockColor) =>
+        ColorUiHelper.ReadColorFromSliders(backend, b, co, g, v, shadowBoost, lockColor);
 
     private void PushEditorToSelected()
     {
@@ -1011,6 +1004,10 @@ public partial class MainWindow : Window
 
         if (CmbDisplay.SelectedItem is ComboBoxItem di)
             _selected.DisplayDevice = string.IsNullOrWhiteSpace(di.Tag?.ToString()) ? null : di.Tag!.ToString();
+
+        if (CmbRestoreMode.SelectedItem is ComboBoxItem rm
+            && Enum.TryParse<RestoreMode>(rm.Tag?.ToString(), out var restoreMode))
+            _selected.RestoreMode = restoreMode;
 
         _selected.Color = ReadColorFromSliders(
             ReadBackendToggle(TogBackend),
@@ -1059,9 +1056,23 @@ public partial class MainWindow : Window
             PreviewColor_Click(sender, e);
             return;
         }
+        App.Services.Monitor.SetColorLockPaused(App.Services.Display.IsAbShowingFactory);
         ShowToast(App.Services.Display.IsAbShowingFactory
             ? Loc.T("toast.ab.factory")
             : Loc.T("toast.ab.preview"));
+    }
+
+    private void Overlay_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.Application.Current is App app)
+            app.ToggleGameOverlay();
+    }
+
+    private void EmergencyRestore_Click(object sender, RoutedEventArgs e)
+    {
+        App.Services.Monitor.EmergencyRestore();
+        ShowToast(Loc.T("toast.emergency"));
+        SetStatus("Emergency Restore");
     }
 
     private void Apply_Click(object sender, RoutedEventArgs e)
@@ -1133,7 +1144,7 @@ public partial class MainWindow : Window
         cfg.Defaults.Color.Contrast = SldDefContrast.Value;
         cfg.Defaults.Color.Gamma = SldDefGamma.Value;
         cfg.Defaults.Color.Vibrance = (int)SldDefVibrance.Value;
-        cfg.Defaults.Color.ShadowLift = SldDefShadow.Value;
+        cfg.Defaults.Color.ShadowLift = ColorUiHelper.ShadowLiftFromBoost(SldDefShadow.Value);
         cfg.Defaults.Color.Backend = ReadBackendToggle(TogDefBackend);
         cfg.Defaults.Color.Clamp();
         cfg.Defaults.SaveActiveToDualSlots();
@@ -1152,6 +1163,18 @@ public partial class MainWindow : Window
         cfg.GlobalHotkeys.ResetColor = NormHotkey(HkReset.Text);
         if (HkCompareAb != null)
             cfg.GlobalHotkeys.CompareAb = NormHotkey(HkCompareAb.Text);
+        if (HkShadowUp != null)
+            cfg.GlobalHotkeys.ShadowBoostUp = NormHotkey(HkShadowUp.Text);
+        if (HkShadowDown != null)
+            cfg.GlobalHotkeys.ShadowBoostDown = NormHotkey(HkShadowDown.Text);
+        if (HkNextPreset != null)
+            cfg.GlobalHotkeys.NextPreset = NormHotkey(HkNextPreset.Text);
+        if (HkPrevPreset != null)
+            cfg.GlobalHotkeys.PreviousPreset = NormHotkey(HkPrevPreset.Text);
+        if (HkToggleOverlay != null)
+            cfg.GlobalHotkeys.ToggleOverlay = NormHotkey(HkToggleOverlay.Text);
+        if (HkEmergency != null)
+            cfg.GlobalHotkeys.EmergencyRestore = NormHotkey(HkEmergency.Text);
 
         cfg.StartWithWindows = ChkAutostart.IsChecked == true;
         cfg.StartMinimized = ChkStartMin.IsChecked == true;
@@ -1521,7 +1544,7 @@ public partial class MainWindow : Window
                 ? $"Vibrance: {(int)SldPresetV.Value}"
                 : $"Digital vibrance: {(int)SldPresetV.Value}%  ({label} CP)";
         }
-        if (LblPresetShadow != null) LblPresetShadow.Text = $"Shadow lift: {SldPresetShadow.Value:F2}";
+        if (LblPresetShadow != null) LblPresetShadow.Text = $"Shadow Boost: {(int)Math.Round(SldPresetShadow.Value)}";
     }
 
     private void PushPresetEditor()
@@ -1782,6 +1805,7 @@ public partial class MainWindow : Window
         ApplyColor = p.ApplyColor,
         ApplyResolution = p.ApplyResolution,
         ApplyPowerPlan = p.ApplyPowerPlan,
+        RestoreMode = p.RestoreMode,
         Color = p.Color.Clone(),
         ColorLowLevel = p.ColorLowLevel?.Clone(),
         ColorDriver = p.ColorDriver?.Clone(),

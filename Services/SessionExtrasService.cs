@@ -122,6 +122,70 @@ public sealed class SessionExtrasService : IDisposable
         }
     }
 
+    /// <summary>Copy current system extras into an ActiveSessionSnapshot (before profile apply).</summary>
+    public void FillSnapshotExtras(Models.ActiveSessionSnapshot target)
+    {
+        var c = Capture();
+        target.ToastEnabled = c.ToastEnabled;
+        target.AutoHdrEnabled = c.AutoHdrEnabled;
+        target.NightLightKnown = c.NightLightKnown;
+        target.NightLightOn = c.NightLightOn;
+        target.AudioDeviceId = c.AudioDeviceId;
+        target.MonitorBrightness = c.Brightness;
+    }
+
+    /// <summary>Restore extras from persisted ActiveSessionSnapshot (crash / emergency).</summary>
+    public void RestoreFromSnapshot(Models.ActiveSessionSnapshot snap)
+    {
+        try
+        {
+            SetToastEnabled(snap.ToastEnabled);
+            SetAutoHdr(snap.AutoHdrEnabled);
+            if (snap.NightLightKnown)
+                TrySetNightLight(snap.NightLightOn);
+            if (!string.IsNullOrWhiteSpace(snap.AudioDeviceId))
+                AudioEndpoint.SetDefault(snap.AudioDeviceId!);
+            if (snap.MonitorBrightness.HasValue)
+                MonitorBrightness.Set(snap.MonitorBrightness.Value);
+            if (snap.TopologySaved)
+                DisplayTopology.Restore();
+            if (snap.ScalingSaved && snap.ScalingWidth.HasValue && snap.ScalingHeight.HasValue)
+            {
+                ScalingModeHelper.Restore(
+                    snap.ScalingWidth.Value,
+                    snap.ScalingHeight.Value,
+                    snap.ScalingFixedOutput ?? 0,
+                    snap.ScalingDevice);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("RestoreFromSnapshot: " + ex.Message);
+        }
+        finally
+        {
+            _snap = null;
+        }
+    }
+
+    /// <summary>Merge live topology/scaling flags from in-memory apply into the disk snapshot.</summary>
+    public void MergeLiveInto(Models.ActiveSessionSnapshot target)
+    {
+        if (_snap == null) return;
+        if (_snap.TopologySaved)
+        {
+            target.TopologySaved = true;
+        }
+        if (_snap.ScalingSaved)
+        {
+            target.ScalingSaved = true;
+            target.ScalingDevice = _snap.ScalingDevice;
+            target.ScalingFixedOutput = _snap.ScalingFixedOutput;
+            target.ScalingWidth = _snap.ScalingWidth;
+            target.ScalingHeight = _snap.ScalingHeight;
+        }
+    }
+
     private static SessionSnapshot Capture() => new()
     {
         ToastEnabled = GetToastEnabled(),

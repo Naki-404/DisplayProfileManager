@@ -1,0 +1,162 @@
+<Window x:Class="DisplayProfileManager.GameOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DPM Live"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="Manual">
+    <Grid>
+        <!-- Compact pill -->
+        <Border x:Name="MiniPill" CornerRadius="22" Padding="8,6" Cursor="Hand"
+                Background="#CC1A1418" BorderBrush="#55C45C84" BorderThickness="1"
+                MouseLeftButtonDown="MiniPill_MouseDown">
+            <StackPanel Orientation="Horizontal">
+                <Ellipse Width="8" Height="8" Fill="{DynamicResource AccentBrush}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TxtMini" Text="DPM" FontWeight="SemiBold" FontSize="11"
+                           Foreground="#F8EAF0" Margin="8,0,4,0" VerticalAlignment="Center"/>
+                <Button x:Name="BtnMiniPrev" Content="◀" Width="22" Height="22" FontSize="9" Padding="0"
+                        Style="{StaticResource CaptionButton}" Click="PrevPreset_Click" ToolTip="Previous preset"/>
+                <Button x:Name="BtnMiniNext" Content="▶" Width="22" Height="22" FontSize="9" Padding="0"
+                        Style="{StaticResource CaptionButton}" Click="NextPreset_Click" ToolTip="Next preset"/>
+                <Button x:Name="BtnMiniAb" Content="A/B" Width="28" Height="22" FontSize="9" Padding="0" Margin="2,0,0,0"
+                        Style="{StaticResource CaptionButton}" Click="Ab_Click"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Expanded panel -->
+        <Border x:Name="PanelRoot" Visibility="Collapsed" CornerRadius="14"
+                Background="#E8181216" BorderBrush="#66C45C84" BorderThickness="1"
+                MinWidth="300" MaxWidth="320">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.45" Color="#000000"/>
+            </Border.Effect>
+            <StackPanel Margin="12,10,12,12">
+                <Grid Margin="0,0,0,8" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseDown">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock x:Name="TxtTitle" Text="Live color" FontWeight="SemiBold" FontSize="13"
+                                   Foreground="#FFF8F4"/>
+                        <TextBlock x:Name="TxtContext" Text="" FontSize="10" Foreground="#B08A9A"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="210"/>
+                        <TextBlock x:Name="TxtPreset" Text="" FontSize="10" Foreground="#C45C84"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="210"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="BtnCollapse" Content="—" Style="{StaticResource CaptionButton}"
+                                Width="28" Height="24" FontSize="12" Click="Collapse_Click"
+                                ToolTip="Minimize to pill"/>
+                        <Button x:Name="BtnHide" Content="×" Style="{StaticResource CaptionCloseButton}"
+                                Width="28" Height="24" Margin="4,0,0,0" Click="Hide_Click"
+                                ToolTip="Hide overlay"/>
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock x:Name="LblLiveHint" Text="Sliders apply live to the display"
+                           FontSize="10" Foreground="#9980888E" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                <ToggleButton x:Name="TogBackend" Style="{StaticResource BackendSlideToggle}"
+                              Content="NVIDIA" Margin="0,0,0,8"
+                              Checked="Backend_Changed" Unchecked="Backend_Changed"/>
+
+                <Grid Margin="0,0,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="36"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="44"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="LblB" Text="B 50%" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                    <Slider Grid.Column="1" x:Name="SldB" Minimum="0" Maximum="1" TickFrequency="0.01"
+                            IsSnapToTickEnabled="True" ValueChanged="Slider_ValueChanged"/>
+                    <TextBlock Grid.Column="2" x:Name="ValB" Text="50" FontSize="10" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                </Grid>
+                <Grid Margin="0,4,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="36"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="44"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="LblC" Text="C 50%" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                    <Slider Grid.Column="1" x:Name="SldC" Minimum="0" Maximum="2" TickFrequency="0.01"
+                            IsSnapToTickEnabled="True" ValueChanged="Slider_ValueChanged"/>
+                    <TextBlock Grid.Column="2" x:Name="ValC" Text="50" FontSize="10" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                </Grid>
+                <Grid Margin="0,4,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="36"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="44"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="LblG" Text="G 1.00" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                    <Slider Grid.Column="1" x:Name="SldG" Minimum="0.5" Maximum="6" TickFrequency="0.01"
+                            IsSnapToTickEnabled="True" ValueChanged="Slider_ValueChanged"/>
+                    <TextBlock Grid.Column="2" x:Name="ValG" Text="1.00" FontSize="10" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                </Grid>
+                <Grid Margin="0,4,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="36"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="44"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="LblV" Text="V 50" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                    <Slider Grid.Column="1" x:Name="SldV" Minimum="0" Maximum="100" TickFrequency="1"
+                            IsSnapToTickEnabled="True" ValueChanged="Slider_ValueChanged"/>
+                    <TextBlock Grid.Column="2" x:Name="ValV" Text="50" FontSize="10" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                </Grid>
+                <Grid Margin="0,4,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="36"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="44"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="LblS" Text="S 0" VerticalAlignment="Center" FontSize="11"
+                               Foreground="{DynamicResource MutedBrush}"
+                               ToolTip="Shadow Boost — lifts dark areas while preserving highlights"/>
+                    <Slider Grid.Column="1" x:Name="SldS" Minimum="0" Maximum="100" TickFrequency="1"
+                            IsSnapToTickEnabled="True" ValueChanged="Slider_ValueChanged"/>
+                    <TextBlock Grid.Column="2" x:Name="ValS" Text="0" FontSize="10" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                </Grid>
+
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock x:Name="LblPanelOpacity" DockPanel.Dock="Right" Text="92%"
+                               FontSize="10" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="LblPanelOpacityTitle" Text="Panel opacity" FontSize="10" Foreground="{DynamicResource MutedBrush}"
+                               VerticalAlignment="Center"/>
+                </DockPanel>
+                <Slider x:Name="SldPanelOpacity" Minimum="0.55" Maximum="1" Value="0.92" TickFrequency="0.01"
+                        ValueChanged="PanelOpacity_Changed" Margin="0,0,0,8"/>
+
+                <UniformGrid Columns="2" Margin="0,0,0,4">
+                    <Button x:Name="BtnApply" Content="Save to Profile" Style="{StaticResource CompactAccentButton}"
+                            Margin="0,0,4,4" Click="Apply_Click"/>
+                    <Button x:Name="BtnSavePreset" Content="Save as Preset" Style="{StaticResource CompactGhostButton}"
+                            Margin="4,0,0,4" Click="SaveAsPreset_Click"/>
+                    <Button x:Name="BtnUpdatePreset" Content="Update Preset" Style="{StaticResource CompactGhostButton}"
+                            Margin="0,0,4,4" Click="UpdatePreset_Click"/>
+                    <Button x:Name="BtnAb" Content="A/B" Style="{StaticResource CompactGhostButton}"
+                            Margin="4,0,0,4" Click="Ab_Click"/>
+                    <Button x:Name="BtnReset" Content="Reset" Style="{StaticResource CompactGhostButton}"
+                            Margin="0,0,4,0" Click="Reset_Click"/>
+                    <Button x:Name="BtnEmergency" Content="Emergency" Style="{StaticResource CompactGhostButton}"
+                            Margin="4,0,0,0" Click="Emergency_Click"/>
+                </UniformGrid>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

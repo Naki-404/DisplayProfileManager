@@ -61,6 +61,12 @@ public sealed class HotkeyService : IDisposable
         TryRegister("gammaDown", hk.GammaDown);
         TryRegister("resetColor", hk.ResetColor);
         TryRegister("compareAb", hk.CompareAb);
+        TryRegister("shadowBoostUp", hk.ShadowBoostUp);
+        TryRegister("shadowBoostDown", hk.ShadowBoostDown);
+        TryRegister("nextPreset", hk.NextPreset);
+        TryRegister("previousPreset", hk.PreviousPreset);
+        TryRegister("toggleOverlay", hk.ToggleOverlay);
+        TryRegister("emergencyRestore", hk.EmergencyRestore);
 
         // Prefer live game; otherwise the game selected on Presets / Profiles so hotkeys work before launch.
         var source = activeProfile ?? fallbackProfile;

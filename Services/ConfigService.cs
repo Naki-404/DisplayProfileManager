@@ -6,7 +6,7 @@ namespace DisplayProfileManager.Services;
 
 public sealed class ConfigService : IDisposable
 {
-    public const int CurrentVersion = 13;
+    public const int CurrentVersion = 14;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -19,6 +19,9 @@ public sealed class ConfigService : IDisposable
     public string ConfigDirectory { get; }
     public string ConfigPath { get; }
     public string LogPath { get; }
+
+    /// <summary>Set when LoadOrCreate recovered from corrupt JSON / backup.</summary>
+    public string? LastRecoveryMessage { get; private set; }
 
     private readonly object _gate = new();
     private AppConfig _config = new();
@@ -48,6 +51,7 @@ public sealed class ConfigService : IDisposable
     {
         lock (_gate)
         {
+            LastRecoveryMessage = null;
             if (!File.Exists(ConfigPath))
             {
                 _config = CreateDefaultConfig();
@@ -55,8 +59,7 @@ public sealed class ConfigService : IDisposable
             }
             else
             {
-                var json = File.ReadAllText(ConfigPath);
-                _config = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? CreateDefaultConfig();
+                _config = TryLoadConfigFile(ConfigPath, out var err) ?? TryRecoverCorrupt(err);
                 if (MigrateIfNeeded(_config))
                     SaveInternal(_config);
             }
@@ -64,6 +67,67 @@ public sealed class ConfigService : IDisposable
             EnsureWatcher();
             return _config;
         }
+    }
+
+    private AppConfig? TryLoadConfigFile(string path, out string? error)
+    {
+        error = null;
+        try
+        {
+            var json = File.ReadAllText(path);
+            var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions);
+            if (cfg == null)
+            {
+                error = "null config";
+                return null;
+            }
+            return cfg;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            AppLog.Error($"Config load failed ({path}): {ex.Message}");
+            return null;
+        }
+    }
+
+    private AppConfig TryRecoverCorrupt(string? primaryError)
+    {
+        string stamp = DateTime.Now.ToString("yyyyMMdd-HHmm");
+        string corruptName = $"profiles.corrupt-{stamp}.json";
+        string corruptPath = Path.Combine(ConfigDirectory, corruptName);
+
+        try
+        {
+            if (File.Exists(ConfigPath))
+                File.Copy(ConfigPath, corruptPath, true);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Could not quarantine corrupt config: " + ex.Message);
+        }
+
+        string bak = ConfigPath + ".bak";
+        var fromBak = TryLoadConfigFile(bak, out _);
+        if (fromBak != null)
+        {
+            _config = fromBak;
+            SaveInternal(_config);
+            LastRecoveryMessage =
+                $"Your config file was corrupted. DPM restored the latest backup.\n" +
+                $"Original file was saved as {corruptName}.";
+            AppLog.Info(LastRecoveryMessage);
+            return _config;
+        }
+
+        _config = CreateDefaultConfig();
+        SaveInternal(_config);
+        LastRecoveryMessage =
+            $"Your config file was corrupted and no backup was available. DPM created a new config.\n" +
+            $"Original file was saved as {corruptName}." +
+            (string.IsNullOrWhiteSpace(primaryError) ? "" : $"\n({primaryError})");
+        AppLog.Info(LastRecoveryMessage);
+        return _config;
     }
 
     public void Save(AppConfig config) => Save(config, raiseChanged: true);
@@ -89,8 +153,11 @@ public sealed class ConfigService : IDisposable
         lock (_gate)
         {
             if (!File.Exists(ConfigPath)) return;
-            var json = File.ReadAllText(ConfigPath);
-            var loaded = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? _config;
+            var loaded = TryLoadConfigFile(ConfigPath, out var err);
+            if (loaded == null)
+            {
+                loaded = TryRecoverCorrupt(err);
+            }
             if (MigrateIfNeeded(loaded))
                 SaveInternal(loaded);
             _config = loaded;
@@ -411,6 +478,19 @@ public sealed class ConfigService : IDisposable
             cfg.ConfigVersion = 13;
             changed = true;
             AppLog.Info($"Migrated to v13 (cleared {cleared} bare NumPad preset hotkeys).");
+        }
+
+        if (cfg.ConfigVersion < 14)
+        {
+            foreach (var p in cfg.Profiles)
+            {
+                // Default RestoreMode already PreviousSnapshot for new fields via enum default.
+                p.Session ??= new SessionExtras();
+            }
+            cfg.GlobalHotkeys ??= new GlobalHotkeys();
+            cfg.ConfigVersion = 14;
+            changed = true;
+            AppLog.Info("Migrated to v14 (RestoreMode + extended global hotkeys).");
         }
 
         cfg.Ui ??= new UiPreferences();

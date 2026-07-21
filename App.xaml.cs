@@ -8,6 +8,7 @@ public partial class App : System.Windows.Application
     public static AppServices Services { get; private set; } = null!;
     private System.Windows.Forms.NotifyIcon? _tray;
     private MainWindow? _main;
+    private GameOverlayWindow? _overlay;
     private bool _exitRequested;
     private Mutex? _mutex;
 
@@ -81,6 +82,8 @@ public partial class App : System.Windows.Application
 
             _main = new MainWindow();
             MainWindow = _main;
+            _overlay = new GameOverlayWindow();
+            _overlay.ApplyLocalization();
 
             InitTray();
             RebuildTrayMenu();
@@ -100,9 +103,12 @@ public partial class App : System.Windows.Application
                         _main.Dispatcher.Invoke(() =>
                         {
                             Services.Monitor.HandleHotkey(action);
-                            if (action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase)
+                            if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase)
+                                 || action is "nextPreset" or "previousPreset")
                                 && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
                                 _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
+                            else if (action == "emergencyRestore")
+                                _main.ShowToast(Loc.T("toast.emergency"));
                         });
                 }
                 catch (Exception ex)
@@ -126,6 +132,7 @@ public partial class App : System.Windows.Application
                         _main.HotkeyPresetFallback);
                     _main.ReloadFromConfig();
                     _main.ApplyLocalization();
+                    _overlay?.ApplyLocalization();
                     RebuildTrayMenu();
                 });
 
@@ -142,15 +149,26 @@ public partial class App : System.Windows.Application
                         _main.UpdateActiveHeader(profile);
                         _main.FocusPresetsForActiveOrSelectedGame(profile);
                         RebuildTrayMenu();
+                        if (profile != null && (Services.Config.Current.Ui?.OverlayAutoShowOnGame ?? false))
+                            ShowGameOverlay(sync: true);
                         if (profile != null && (Services.Config.Current.Ui?.NotifyOnGameStart ?? true))
                         {
                             var msg = $"{Loc.T("toast.game")}: {profile.Name}";
-                            if (!string.IsNullOrWhiteSpace(profile.Resolution) && profile.ApplyResolution)
-                                msg += $" · {profile.Resolution}";
+                            string? presetId = Services.Monitor.ActivePresetId;
+                            if (presetId != null)
+                            {
+                                var pr = profile.Presets?.FirstOrDefault(p => p.Id == presetId);
+                                if (pr != null) msg += $"\nColor: {pr.Name}";
+                            }
+                            var detail = Services.Monitor.LastApplyToastDetail;
+                            if (!string.IsNullOrWhiteSpace(detail))
+                                msg += "\n" + detail;
+                            else if (Services.Monitor.SnapshotActive)
+                                msg += "\n" + Loc.T("toast.snapshot");
                             _main.ShowToast(msg);
                             try
                             {
-                                _tray?.ShowBalloonTip(2500, Loc.T("app.name"), msg,
+                                _tray?.ShowBalloonTip(2800, Loc.T("app.name"), msg.Replace("\n", " · "),
                                     System.Windows.Forms.ToolTipIcon.Info);
                             }
                             catch { }
@@ -187,6 +205,12 @@ public partial class App : System.Windows.Application
                         msg += " · " + Loc.T("toast.crash.restored");
                     _main.ShowToast(msg);
                     AppLog.Info("Startup health: " + msg);
+
+                    if (!string.IsNullOrWhiteSpace(Services.Config.LastRecoveryMessage))
+                    {
+                        ThemedDialog.Show(_main, Services.Config.LastRecoveryMessage);
+                        _main.ShowToast(Loc.T("toast.config.recovered"));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -312,6 +336,7 @@ public partial class App : System.Windows.Application
         }
 
         menu.Items.Add(MakeItem(Loc.T("tray.open"), (_, _) => ShowMain()));
+        menu.Items.Add(MakeItem(Loc.T("tray.overlay"), (_, _) => ToggleGameOverlay()));
         menu.Items.Add(MakeItem(
             Services.Monitor.IsPaused ? Loc.T("tray.resume") : Loc.T("tray.pause"),
             (_, _) =>
@@ -363,6 +388,25 @@ public partial class App : System.Windows.Application
         _main.ShowWithFade();
     }
 
+    public void ShowGameOverlay(bool sync = true)
+    {
+        if (_overlay == null) return;
+        if (sync) _overlay.SyncFromActiveContext();
+        _overlay.ShowOverlay(expanded: Services.Config.Current.Ui?.OverlayExpanded ?? true);
+        var ui = Services.Config.Current.Ui ?? new Models.UiPreferences();
+        ui.OverlayVisible = true;
+        Services.Config.Save(Services.Config.Current, raiseChanged: false);
+    }
+
+    public void ToggleGameOverlay()
+    {
+        if (_overlay == null) return;
+        if (_overlay.IsOverlayVisible)
+            _overlay.HideOverlay();
+        else
+            ShowGameOverlay(sync: true);
+    }
+
     public void ExitApp()
     {
         if (_main != null)
@@ -375,6 +419,8 @@ public partial class App : System.Windows.Application
         }
 
         _exitRequested = true;
+
+        try { _overlay?.HideOverlay(); } catch { }
 
         void FinishExit()
         {

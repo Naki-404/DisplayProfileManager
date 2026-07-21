@@ -366,6 +366,22 @@ public sealed class DisplayEngine
         ApplyColor(c);
     }
 
+    /// <summary>Adjust ShadowLift (0..0.4). Delta is in ShadowLift units, not 0..100 UI.</summary>
+    public void AdjustShadowLift(double delta)
+    {
+        var c = _liveColor.Clone();
+        if (c.Backend is not ColorBackend.LowLevel and not ColorBackend.Gdi)
+            return;
+        c.ShadowLift = Math.Clamp(c.ShadowLift + delta, 0.0, 0.4);
+        ApplyColor(c);
+    }
+
+    public void ClearAbCompare()
+    {
+        _abPreview = null;
+        _abShowingFactory = false;
+    }
+
     public void ResetColor(ColorSettings defaults)
     {
         var c = defaults?.Clone() ?? ColorSettings.Neutral;
@@ -690,6 +706,85 @@ public sealed class DisplayEngine
         if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref mode))
             return $"{mode.dmPelsWidth}x{mode.dmPelsHeight}";
         return "1920x1080";
+    }
+
+    public static (string Resolution, int RefreshRate, string? Device) GetCurrentMode(string? deviceName = null)
+    {
+        string? device = string.IsNullOrWhiteSpace(deviceName) ? null : deviceName.Trim();
+        var mode = new DEVMODE();
+        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref mode))
+            return (GetCurrentResolution(), 0, device);
+        return ($"{mode.dmPelsWidth}x{mode.dmPelsHeight}", mode.dmDisplayFrequency, device);
+    }
+
+    /// <summary>Capture current gamma ramp as three 256-entry ushort arrays.</summary>
+    public bool TryCaptureGammaRamp(out ushort[] red, out ushort[] green, out ushort[] blue)
+    {
+        red = new ushort[256];
+        green = new ushort[256];
+        blue = new ushort[256];
+        var ramp = new RAMP { Red = red, Green = green, Blue = blue };
+        IntPtr hdc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
+        bool created = hdc != IntPtr.Zero;
+        if (!created) hdc = GetDC(IntPtr.Zero);
+        if (hdc == IntPtr.Zero) return false;
+        try
+        {
+            if (!GetDeviceGammaRamp(hdc, ref ramp)) return false;
+            red = (ushort[])ramp.Red.Clone();
+            green = (ushort[])ramp.Green.Clone();
+            blue = (ushort[])ramp.Blue.Clone();
+            return true;
+        }
+        finally
+        {
+            if (created) DeleteDC(hdc);
+            else ReleaseDC(IntPtr.Zero, hdc);
+        }
+    }
+
+    public bool ApplyCapturedGammaRamp(ushort[] red, ushort[] green, ushort[] blue)
+    {
+        if (red.Length != 256 || green.Length != 256 || blue.Length != 256) return false;
+        var ramp = new RAMP
+        {
+            Red = (ushort[])red.Clone(),
+            Green = (ushort[])green.Clone(),
+            Blue = (ushort[])blue.Clone()
+        };
+        return ApplyRamp(ramp);
+    }
+
+    /// <summary>Active power scheme GUID via powercfg /getactivescheme (best-effort).</summary>
+    public static string? GetActivePowerPlanGuid()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powercfg.exe",
+                Arguments = "/getactivescheme",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using var p = Process.Start(psi);
+            if (p == null) return null;
+            string output = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(4000);
+            // GUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+            var m = System.Text.RegularExpressions.Regex.Match(
+                output,
+                @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+            return m.Success ? m.Value : null;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("GetActivePowerPlanGuid: " + ex.Message);
+            return null;
+        }
     }
 
     public void DisposeDriverColor()

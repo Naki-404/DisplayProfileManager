@@ -57,6 +57,11 @@
                     <CheckBox x:Name="ChkConfirmDelete"/>
                     <CheckBox x:Name="ChkShowActive"/>
 
+                    <TextBlock x:Name="LblOverlay" Text="Live overlay" FontWeight="SemiBold" Margin="0,16,0,8"/>
+                    <CheckBox x:Name="ChkOverlayAuto" Content="Show overlay when a game starts"/>
+                    <TextBlock x:Name="LblOverlayHint" Text="Compact topmost panel with live color sliders over the game."
+                               FontSize="11" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+
                     <TextBlock x:Name="LblData" Text="Data" FontWeight="SemiBold" Margin="0,16,0,8"/>
                     <StackPanel Orientation="Horizontal">
                         <Button x:Name="BtnExport" Content="Export…" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Export_Click"/>

@@ -42,6 +42,15 @@ public sealed class UiPreferences
     /// <summary>null / empty = primary monitor</summary>
     public string? PreferredDisplayDevice { get; set; }
 
+    /// <summary>Show live color overlay over games.</summary>
+    public bool OverlayAutoShowOnGame { get; set; }
+    public bool OverlayVisible { get; set; }
+    public bool OverlayExpanded { get; set; } = true;
+    /// <summary>0.55..1 panel opacity</summary>
+    public double OverlayPanelOpacity { get; set; } = 0.92;
+    public double OverlayLeft { get; set; } = double.NaN;
+    public double OverlayTop { get; set; } = double.NaN;
+
     public UiPreferences Clone() => new()
     {
         Locale = Locale,
@@ -55,7 +64,13 @@ public sealed class UiPreferences
         ConfirmDelete = ConfirmDelete,
         ShowActiveInHeader = ShowActiveInHeader,
         MinimizeToTrayOnClose = MinimizeToTrayOnClose,
-        PreferredDisplayDevice = PreferredDisplayDevice
+        PreferredDisplayDevice = PreferredDisplayDevice,
+        OverlayAutoShowOnGame = OverlayAutoShowOnGame,
+        OverlayVisible = OverlayVisible,
+        OverlayExpanded = OverlayExpanded,
+        OverlayPanelOpacity = OverlayPanelOpacity,
+        OverlayLeft = OverlayLeft,
+        OverlayTop = OverlayTop
     };
 }
 
@@ -163,6 +178,17 @@ public enum ColorBackend
     LowLevel = 3,
     /// <summary>Auto: NVIDIA Vibrance or AMD ADL, whichever is available.</summary>
     Driver = 4
+}
+
+/// <summary>What to restore when the last watched game exits.</summary>
+public enum RestoreMode
+{
+    /// <summary>Restore display/power/color captured before this game session.</summary>
+    PreviousSnapshot = 0,
+    /// <summary>Restore AppConfig.Defaults (Global tab).</summary>
+    GlobalDefaults = 1,
+    /// <summary>Leave the tuned state after the game exits.</summary>
+    DoNothing = 2
 }
 
 public sealed class ColorSettings
@@ -295,6 +321,12 @@ public sealed class GlobalHotkeys
     public string? ResetColor { get; set; }
     /// <summary>Toggle live preview ↔ factory gamma (A/B compare).</summary>
     public string? CompareAb { get; set; }
+    public string? ShadowBoostUp { get; set; }
+    public string? ShadowBoostDown { get; set; }
+    public string? NextPreset { get; set; }
+    public string? PreviousPreset { get; set; }
+    public string? ToggleOverlay { get; set; }
+    public string? EmergencyRestore { get; set; }
 }
 
 public sealed class QuickPreset
@@ -468,6 +500,9 @@ public sealed class GameProfile
 
     /// <summary>Extra session tweaks (Focus Assist, audio, monitors, deferred apply…).</summary>
     public SessionExtras Session { get; set; } = new();
+
+    /// <summary>How to restore the PC when this game (last watched) exits.</summary>
+    public RestoreMode RestoreMode { get; set; } = RestoreMode.PreviousSnapshot;
 
     public void EnsureDualColorSlots()
     {

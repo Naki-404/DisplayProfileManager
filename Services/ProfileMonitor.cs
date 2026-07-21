@@ -15,6 +15,7 @@ public sealed class ProfileMonitor : IDisposable
     private readonly ProcessWatcher _watcher;
     private readonly CompanionService _companions;
     private readonly SessionExtrasService _session = new();
+    private readonly SessionSnapshotService _snapshots;
     private readonly object _gate = new();
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _colorLockTimer;
@@ -26,6 +27,8 @@ public sealed class ProfileMonitor : IDisposable
     private string? _activePresetId;
     private bool _started;
     private bool _colorLockActive;
+    private bool _colorLockPaused;
+    private ColorSettings? _colorLockSource;
 
     public event Action<string>? StatusChanged;
     public event Action<GameProfile?>? ActiveProfileChanged;
@@ -35,7 +38,6 @@ public sealed class ProfileMonitor : IDisposable
         get { lock (_gate) return _currentProfile; }
     }
 
-    /// <summary>True while a quick-preset color/resolution is driving the display (not profile base / Global).</summary>
     public bool HasActivePreset
     {
         get { lock (_gate) return _activePresetId != null; }
@@ -46,8 +48,9 @@ public sealed class ProfileMonitor : IDisposable
         get { lock (_gate) return _activePresetId; }
     }
 
-    /// <summary>Name of the last preset applied via hotkey (for UI toast).</summary>
     public string? LastPresetHotkeyName { get; private set; }
+    public string? LastApplyToastDetail { get; private set; }
+    public bool SnapshotActive => _snapshots.HasSnapshot;
 
     public bool IsPaused
     {
@@ -66,6 +69,7 @@ public sealed class ProfileMonitor : IDisposable
         _engine = engine;
         _watcher = watcher;
         _companions = companions;
+        _snapshots = new SessionSnapshotService(engine, config.ConfigDirectory);
         _dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
 
         _watcher.ProcessStarted += OnProcessStarted;
@@ -84,6 +88,14 @@ public sealed class ProfileMonitor : IDisposable
         if (_started) return;
         _started = true;
 
+        // Crash leftover: restore previous session before watching games.
+        if (_snapshots.HasSnapshot)
+        {
+            AppLog.Info("Found leftover active-session.json — restoring.");
+            _snapshots.RestoreAll(_session, _config.Current.Defaults);
+            StatusChanged?.Invoke("Restored previous session snapshot");
+        }
+
         RefreshWatchList();
 
         GameProfile? pick = null;
@@ -94,7 +106,6 @@ public sealed class ProfileMonitor : IDisposable
             pick = profile;
         }
 
-        // Seed watcher _seen before any Activate so WMI/poll cannot double-fire the same game.
         _watcher.Start();
         StatusChanged?.Invoke("Monitoring");
 
@@ -104,17 +115,43 @@ public sealed class ProfileMonitor : IDisposable
 
     public void Stop() => _watcher.Stop();
 
-    public void ResetDisplayNow()
+    /// <summary>Legacy alias — full Emergency Restore.</summary>
+    public void ResetDisplayNow() => EmergencyRestore();
+
+    public void EmergencyRestore()
     {
         RunOnUi(() =>
         {
             StopDeferred();
             StopColorLock();
             ClearActivePreset();
-            _session.Restore();
-            var factory = _config.Current.FactoryDefaults ?? _config.Current.Defaults;
-            _engine.RestoreFactory(factory);
-            StatusChanged?.Invoke("Factory settings restored");
+            _engine.ClearAbCompare();
+
+            GameProfile? cur;
+            lock (_gate)
+            {
+                cur = _currentProfile;
+                if (cur != null)
+                    StopCompanionsFor(cur);
+                _currentProfile = null;
+                _currentCompanionsKey = null;
+            }
+
+            bool restoredSnap = false;
+            if (_snapshots.HasSnapshot)
+                restoredSnap = _snapshots.RestoreAll(_session, _config.Current.FactoryDefaults ?? _config.Current.Defaults);
+            else
+            {
+                try { _session.Restore(); } catch { }
+                var factory = _config.Current.FactoryDefaults ?? _config.Current.Defaults;
+                _engine.RestoreFactory(factory);
+            }
+
+            StatusChanged?.Invoke(restoredSnap
+                ? "Emergency Restore: snapshot restored"
+                : "Emergency Restore: factory settings");
+            ActiveProfileChanged?.Invoke(null);
+            AppLog.Info("Emergency Restore completed.");
         });
     }
 
@@ -141,10 +178,35 @@ public sealed class ProfileMonitor : IDisposable
         });
     }
 
-    /// <summary>Drop active-preset override so profile / Global can drive color again.</summary>
     public void ClearActivePreset()
     {
         lock (_gate) _activePresetId = null;
+    }
+
+    public bool CyclePreset(int direction)
+    {
+        GameProfile? cur;
+        string? presetId;
+        lock (_gate)
+        {
+            cur = _currentProfile;
+            presetId = _activePresetId;
+        }
+
+        cur ??= (System.Windows.Application.Current?.MainWindow as MainWindow)?.HotkeyPresetFallback;
+        if (cur == null) return false;
+        cur = _config.Current.Profiles.FirstOrDefault(p => p.Id == cur.Id) ?? cur;
+        var list = cur.Presets;
+        if (list == null || list.Count == 0) return false;
+
+        int idx = list.FindIndex(p => p.Id == presetId);
+        if (idx < 0) idx = direction > 0 ? -1 : 0;
+        int next = (idx + direction + list.Count * 8) % list.Count;
+        var preset = list[next];
+        ApplyPreset(preset);
+        LastPresetHotkeyName = preset.Name;
+        StatusChanged?.Invoke($"Preset: {preset.Name}");
+        return true;
     }
 
     public void HandleHotkey(string action)
@@ -153,6 +215,8 @@ public sealed class ProfileMonitor : IDisposable
         {
             var cfg = _config.Current;
             double step = cfg.HotkeyStep <= 0 ? 0.05 : cfg.HotkeyStep;
+            // Shadow Boost UI is 0..100; internal ShadowLift is 0..0.4 → step ≈ 5 Boost units.
+            double shadowStep = 0.4 * 0.05;
 
             if (action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase))
             {
@@ -182,6 +246,21 @@ public sealed class ProfileMonitor : IDisposable
                 case "contrastDown": _engine.AdjustContrast(-step); break;
                 case "gammaUp": _engine.AdjustGamma(step); break;
                 case "gammaDown": _engine.AdjustGamma(-step); break;
+                case "shadowBoostUp": _engine.AdjustShadowLift(shadowStep); break;
+                case "shadowBoostDown": _engine.AdjustShadowLift(-shadowStep); break;
+                case "nextPreset":
+                    CyclePreset(+1);
+                    return;
+                case "previousPreset":
+                    CyclePreset(-1);
+                    return;
+                case "toggleOverlay":
+                    if (System.Windows.Application.Current is App app)
+                        app.ToggleGameOverlay();
+                    return;
+                case "emergencyRestore":
+                    EmergencyRestore();
+                    return;
                 case "resetColor":
                     ClearActivePreset();
                     _engine.ResetColorToFactoryOrNeutral(cfg.FactoryDefaults?.Color);
@@ -190,12 +269,22 @@ public sealed class ProfileMonitor : IDisposable
                     if (!_engine.ToggleAbCompare())
                         StatusChanged?.Invoke("A/B: apply Preview color first");
                     else
+                    {
+                        SetColorLockPaused(_engine.IsAbShowingFactory);
                         StatusChanged?.Invoke(_engine.IsAbShowingFactory ? "A/B: Factory" : "A/B: Preview");
+                    }
                     return;
             }
 
             StatusChanged?.Invoke($"Hotkey: {action}");
         });
+    }
+
+    public void SetColorLockPaused(bool paused)
+    {
+        _colorLockPaused = paused;
+        if (!paused && _colorLockActive && _colorLockSource != null && !_colorLockTimer.IsEnabled)
+            _colorLockTimer.Start();
     }
 
     private QuickPreset? FindPresetById(string id)
@@ -234,10 +323,16 @@ public sealed class ProfileMonitor : IDisposable
             if (cur == null) return;
 
             var fresh = _config.Current.Profiles.FirstOrDefault(p => p.Id == cur.Id);
-            if (fresh == null) return;
+            // Profile deleted or disabled while game is active → safe restore.
+            if (fresh == null || !fresh.Enabled)
+            {
+                AppLog.Info($"Active profile {(fresh == null ? "deleted" : "disabled")} — Emergency Restore.");
+                EmergencyRestore();
+                return;
+            }
+
             lock (_gate) _currentProfile = fresh;
 
-            // Active preset wins: Global / profile base must not overwrite preset color.
             if (presetId != null)
             {
                 var preset = fresh.Presets?.FirstOrDefault(p => p.Id == presetId);
@@ -288,11 +383,12 @@ public sealed class ProfileMonitor : IDisposable
 
     private void OnProcessStopped(string processName)
     {
-        var profile = FindProfile(processName);
+        var profile = FindProfileIncludingDisabled(processName);
         if (profile == null) return;
 
         bool wasCurrent;
         GameProfile? next = null;
+        RestoreMode restoreMode = RestoreMode.PreviousSnapshot;
         lock (_gate)
         {
             _activeProcesses.Remove(Normalize(processName));
@@ -303,7 +399,10 @@ public sealed class ProfileMonitor : IDisposable
             {
                 var cur = _currentProfile;
                 if (cur != null)
+                {
+                    restoreMode = cur.RestoreMode;
                     StopCompanionsFor(cur);
+                }
                 _currentProfile = null;
                 _currentCompanionsKey = null;
 
@@ -331,13 +430,43 @@ public sealed class ProfileMonitor : IDisposable
                 StopDeferred();
                 StopColorLock();
                 ClearActivePreset();
-                _session.Restore();
-                AppLog.Info($"Last game stopped ({processName}) → restore defaults");
-                _engine.RestoreDefaults(_config.Current.Defaults);
-                StatusChanged?.Invoke("Idle (defaults)");
+                _engine.ClearAbCompare();
+                ApplyRestoreMode(restoreMode);
+                StatusChanged?.Invoke("Idle");
                 ActiveProfileChanged?.Invoke(null);
             }
         });
+    }
+
+    private void ApplyRestoreMode(RestoreMode mode)
+    {
+        switch (mode)
+        {
+            case RestoreMode.DoNothing:
+                try { _session.Restore(); } catch { }
+                _snapshots.Clear();
+                AppLog.Info("RestoreMode=DoNothing — left tuned state.");
+                break;
+            case RestoreMode.GlobalDefaults:
+                try { _session.Restore(); } catch { }
+                _engine.RestoreDefaults(_config.Current.Defaults);
+                _snapshots.Clear();
+                AppLog.Info("RestoreMode=GlobalDefaults.");
+                break;
+            default:
+                if (_snapshots.HasSnapshot)
+                {
+                    _snapshots.RestoreAll(_session, _config.Current.Defaults);
+                    AppLog.Info("RestoreMode=PreviousSnapshot.");
+                }
+                else
+                {
+                    try { _session.Restore(); } catch { }
+                    _engine.RestoreDefaults(_config.Current.Defaults);
+                    AppLog.Info("No snapshot — fell back to Global Defaults.");
+                }
+                break;
+        }
     }
 
     private void ActivateProfile(GameProfile profile, bool relaunchCompanions)
@@ -356,12 +485,12 @@ public sealed class ProfileMonitor : IDisposable
             StopCompanionsFor(previous);
             StopDeferred();
             StopColorLock();
-            _session.Restore();
+            // Leaving previous game: restore its extras before new capture.
+            try { _session.Restore(); } catch { }
         }
 
         if (same)
         {
-            // Same profile already active — avoid re-isolate / re-capture side effects.
             if (relaunchCompanions && _currentCompanionsKey != profile.Id)
             {
                 foreach (var c in profile.Companions)
@@ -374,9 +503,21 @@ public sealed class ProfileMonitor : IDisposable
         }
 
         AppLog.Info($"Activating profile: {profile.Name}");
+        LastApplyToastDetail = null;
         try
         {
+            // Capture PC state before applying this game (for PreviousSnapshot / crash).
+            var snap = _snapshots.Capture(profile, _session);
+            LastApplyToastDetail = $"Snapshot saved · {snap.Resolution}";
             ApplyProfileCore(profile);
+
+            // Persist topology/scaling flags after session apply.
+            var live = _snapshots.Current;
+            if (live != null)
+            {
+                _session.MergeLiveInto(live);
+                _snapshots.Persist(live);
+            }
         }
         catch (Exception ex)
         {
@@ -407,8 +548,6 @@ public sealed class ProfileMonitor : IDisposable
 
     private void ApplyProfileCore(GameProfile profile)
     {
-        // Keep a preset that was Applied / hotkeyed before the game started,
-        // as long as it still belongs to this profile.
         string? presetId;
         lock (_gate) presetId = _activePresetId;
         var keep = presetId == null
@@ -507,6 +646,8 @@ public sealed class ProfileMonitor : IDisposable
     private void StartColorLock(ColorSettings color)
     {
         _colorLockActive = true;
+        _colorLockPaused = false;
+        _colorLockSource = color.Clone();
         _colorLockTimer.Interval = color.Backend == ColorBackend.LowLevel
             ? TimeSpan.FromMilliseconds(500)
             : TimeSpan.FromSeconds(2);
@@ -517,12 +658,15 @@ public sealed class ProfileMonitor : IDisposable
     private void StopColorLock()
     {
         _colorLockActive = false;
+        _colorLockPaused = false;
+        _colorLockSource = null;
         if (_colorLockTimer.IsEnabled)
             _colorLockTimer.Stop();
     }
 
     private void OnColorLockTick()
     {
+        if (_colorLockPaused) return;
         GameProfile? profile;
         lock (_gate) profile = _currentProfile;
         if (!_colorLockActive || profile == null)
@@ -547,6 +691,14 @@ public sealed class ProfileMonitor : IDisposable
         var norm = Normalize(processName);
         return _config.Current.Profiles.FirstOrDefault(p =>
             p.Enabled &&
+            !string.IsNullOrWhiteSpace(p.ProcessName) &&
+            Normalize(p.ProcessName) == norm);
+    }
+
+    private GameProfile? FindProfileIncludingDisabled(string processName)
+    {
+        var norm = Normalize(processName);
+        return _config.Current.Profiles.FirstOrDefault(p =>
             !string.IsNullOrWhiteSpace(p.ProcessName) &&
             Normalize(p.ProcessName) == norm);
     }

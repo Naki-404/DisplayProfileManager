@@ -53,6 +53,7 @@ public partial class SettingsWindow : Window
         ChkTrayClose.IsChecked = ui.MinimizeToTrayOnClose;
         ChkConfirmDelete.IsChecked = ui.ConfirmDelete;
         ChkShowActive.IsChecked = ui.ShowActiveInHeader;
+        ChkOverlayAuto.IsChecked = ui.OverlayAutoShowOnGame;
     }
 
     private void ApplyLabels()
@@ -72,6 +73,9 @@ public partial class SettingsWindow : Window
         ChkTrayClose.Content = Loc.T("setup.trayClose");
         ChkConfirmDelete.Content = Loc.T("settings.confirmDelete");
         ChkShowActive.Content = Loc.T("settings.showActive");
+        if (LblOverlay != null) LblOverlay.Text = Loc.T("overlay.open");
+        if (ChkOverlayAuto != null) ChkOverlayAuto.Content = Loc.T("overlay.auto");
+        if (LblOverlayHint != null) LblOverlayHint.Text = Loc.T("overlay.auto.hint");
         BtnEditPalette.Content = Loc.T("setup.editPalette");
         BtnExport.Content = Loc.T("btn.export");
         BtnImport.Content = Loc.T("btn.import");
@@ -161,7 +165,8 @@ public partial class SettingsWindow : Window
             MinimizeToTrayOnClose = ChkTrayClose.IsChecked == true,
             ConfirmDelete = ChkConfirmDelete.IsChecked == true,
             ShowActiveInHeader = ChkShowActive.IsChecked == true,
-            PreferredDisplayDevice = string.IsNullOrWhiteSpace(mon) ? null : mon
+            PreferredDisplayDevice = string.IsNullOrWhiteSpace(mon) ? null : mon,
+            OverlayAutoShowOnGame = ChkOverlayAuto.IsChecked == true
         };
         if (theme == "custom")
         {
