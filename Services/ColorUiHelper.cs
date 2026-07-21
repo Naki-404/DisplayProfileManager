@@ -105,8 +105,22 @@ public static class ColorUiHelper
 
     public static void PlaceOverlayDefault(Window win, double margin = 16)
     {
+        // SizeToContent windows often report Width=NaN / ActualWidth=0 before layout → Left becomes NaN → top-left.
+        win.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        double w = win.ActualWidth;
+        if (w < 8 || double.IsNaN(w))
+            w = win.DesiredSize.Width;
+        if (w < 8 || double.IsNaN(w))
+            w = 300;
+        double h = win.ActualHeight;
+        if (h < 8 || double.IsNaN(h))
+            h = Math.Max(win.DesiredSize.Height, 48);
+
         var area = SystemParameters.WorkArea;
-        win.Left = area.Right - win.Width - margin;
-        win.Top = area.Top + margin;
+        win.Left = Math.Max(area.Left + margin, area.Right - w - margin);
+        win.Top = Math.Max(area.Top + margin, area.Top + margin);
+        // Keep fully on-screen vertically
+        if (win.Top + h > area.Bottom - margin)
+            win.Top = Math.Max(area.Top + margin, area.Bottom - h - margin);
     }
 }

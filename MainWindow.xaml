@@ -87,10 +87,9 @@
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="BtnApply" Content="Apply" Style="{StaticResource AccentButton}" Margin="0,0,8,0" Click="Apply_Click"/>
                 <local:InfoHint x:Name="InfoApply" Margin="0,0,10,0"/>
-                <Button x:Name="BtnEmergency" Content="Emergency Restore" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="EmergencyRestore_Click"
+                <Button x:Name="BtnEmergency" Content="Emergency Restore" Style="{StaticResource GhostButton}" Click="EmergencyRestore_Click"
                         ToolTip="Restores display, color, power, and session settings to a safe state."/>
-                <Button x:Name="BtnReset" Content="Reset settings" Style="{StaticResource GhostButton}" Click="ResetSettings_Click"/>
-                <local:InfoHint x:Name="InfoReset"/>
+                <local:InfoHint x:Name="InfoEmergency" Margin="8,0,0,0"/>
             </StackPanel>
         </DockPanel>
 
@@ -595,6 +594,12 @@
                                 <CheckBox x:Name="ChkStartMin" Content="Start minimized to tray" VerticalAlignment="Center"
                                           Checked="GlobalEditorChanged" Unchecked="GlobalEditorChanged"/>
                             </DockPanel>
+                            <Separator Margin="0,12,0,8"/>
+                            <TextBlock x:Name="LblResetGlobalHint" Text="Reset Global defaults to factory (resolution / power / color)."
+                                       Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <Button x:Name="BtnReset" Content="Reset Global defaults" Style="{StaticResource GhostButton}"
+                                    HorizontalAlignment="Left" Click="ResetSettings_Click"
+                                    ToolTip="Rewrite Global defaults to factory and restore the display."/>
                         </StackPanel>
                     </Border>
                 </ScrollViewer>

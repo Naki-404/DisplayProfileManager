@@ -78,6 +78,18 @@ public partial class GameOverlayWindow : Window
         SyncFromActiveContext();
         if (!IsVisible)
             Show();
+        // Force layout so default placement uses real size (not NaN → top-left).
+        UpdateLayout();
+        var ui = App.Services.Config.Current.Ui;
+        bool hasPos = ui?.OverlayLeft != null && ui.OverlayTop != null
+                      && !double.IsNaN(ui.OverlayLeft.Value) && !double.IsNaN(ui.OverlayTop.Value);
+        if (!hasPos)
+            ColorUiHelper.PlaceOverlayDefault(this);
+        else
+        {
+            Left = ui!.OverlayLeft!.Value;
+            Top = ui.OverlayTop!.Value;
+        }
         SetExpanded(expanded, save: true);
         OverlayWin32.StayTopmost(this);
     }
@@ -88,6 +100,8 @@ public partial class GameOverlayWindow : Window
         var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
         ui.OverlayVisible = false;
         App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
+        if (System.Windows.Application.Current is App app)
+            app.NotifyOverlayHidden();
     }
 
     public void SyncFromActiveContext()
@@ -362,7 +376,7 @@ public partial class GameOverlayWindow : Window
     private void Emergency_Click(object sender, RoutedEventArgs e)
     {
         App.Services.Monitor.EmergencyRestore();
-        HideOverlay();
+        HideOverlay(); // also restores main via NotifyOverlayHidden
     }
 
     private void Ab_Click(object sender, RoutedEventArgs e)

@@ -319,7 +319,9 @@ public partial class MainWindow : Window
             BtnEmergency.Content = Loc.T("btn.emergency");
             BtnEmergency.ToolTip = Loc.T("btn.emergency.tip");
         }
-        BtnReset.Content = Loc.T("btn.reset");
+        if (InfoEmergency != null) SetTip(InfoEmergency, "btn.emergency.tip");
+        if (BtnReset != null) BtnReset.Content = Loc.T("btn.reset.global");
+        if (LblResetGlobalHint != null) LblResetGlobalHint.Text = Loc.T("btn.reset.global.hint");
         BtnScan.Content = Loc.T("btn.scan");
         BtnAddManual.Content = Loc.T("btn.addManual");
         BtnRestore.Content = Loc.T("btn.restore");
@@ -365,7 +367,7 @@ public partial class MainWindow : Window
     private void ApplyInfoTips()
     {
         SetTip(InfoApply, "btn.apply.tip");
-        SetTip(InfoReset, "btn.reset.tip");
+        if (InfoEmergency != null) SetTip(InfoEmergency, "btn.emergency.tip");
         if (BtnOverlay != null) BtnOverlay.ToolTip = Loc.T("btn.overlay.tip");
         SetTip(InfoRes, "display.res.tip");
         SetTip(InfoPower, "display.power.tip");

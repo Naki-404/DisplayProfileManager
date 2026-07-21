@@ -10,6 +10,7 @@ public partial class App : System.Windows.Application
     private MainWindow? _main;
     private GameOverlayWindow? _overlay;
     private bool _exitRequested;
+    private bool _mainHiddenForOverlay;
     private Mutex? _mutex;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -393,12 +394,14 @@ public partial class App : System.Windows.Application
     public void ShowMain()
     {
         if (_main == null) return;
+        _mainHiddenForOverlay = false;
         _main.ShowWithFade();
     }
 
     public void ShowGameOverlay(bool sync = true)
     {
         if (_overlay == null) return;
+        HideMainForOverlay();
         if (sync) _overlay.SyncFromActiveContext();
         _overlay.ShowOverlay(expanded: Services.Config.Current.Ui?.OverlayExpanded ?? true);
         var ui = Services.Config.Current.Ui ?? new Models.UiPreferences();
@@ -410,9 +413,50 @@ public partial class App : System.Windows.Application
     {
         if (_overlay == null) return;
         if (_overlay.IsOverlayVisible)
-            _overlay.HideOverlay();
+            HideGameOverlay();
         else
             ShowGameOverlay(sync: true);
+    }
+
+    public void HideGameOverlay()
+    {
+        _overlay?.HideOverlay();
+        RestoreMainAfterOverlay();
+    }
+
+    /// <summary>Called by overlay when user closes it (×).</summary>
+    public void NotifyOverlayHidden() => RestoreMainAfterOverlay();
+
+    private void HideMainForOverlay()
+    {
+        if (_main == null) return;
+        if (!_main.IsVisible && _main.WindowState == WindowState.Minimized) return;
+        if (!_main.IsVisible) return;
+        _mainHiddenForOverlay = true;
+        try
+        {
+            _main.ShowInTaskbar = false;
+            _main.Hide();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("HideMainForOverlay: " + ex.Message);
+            _mainHiddenForOverlay = false;
+        }
+    }
+
+    private void RestoreMainAfterOverlay()
+    {
+        if (!_mainHiddenForOverlay || _main == null) return;
+        _mainHiddenForOverlay = false;
+        try
+        {
+            _main.ShowWithFade();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("RestoreMainAfterOverlay: " + ex.Message);
+        }
     }
 
     public void ExitApp()
