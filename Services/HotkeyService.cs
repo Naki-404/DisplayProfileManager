@@ -59,9 +59,7 @@ public sealed class HotkeyService : IDisposable
         }
 
         var hk = config.GlobalHotkeys ?? new GlobalHotkeys();
-        // Preset workflow only — no global B/C/G adjustment binds.
-        TryRegister("nextPreset", hk.NextPreset);
-        TryRegister("previousPreset", hk.PreviousPreset);
+        // Per-preset binds live on the Presets tab — no global next/prev here.
         TryRegister("toggleOverlay", hk.ToggleOverlay);
         TryRegister("emergencyRestore", hk.EmergencyRestore);
 

@@ -239,12 +239,6 @@ public sealed class ProfileMonitor : IDisposable
 
             switch (action)
             {
-                case "nextPreset":
-                    CyclePreset(+1);
-                    return;
-                case "previousPreset":
-                    CyclePreset(-1);
-                    return;
                 case "toggleOverlay":
                     if (System.Windows.Application.Current is App app)
                         app.ToggleGameOverlay();

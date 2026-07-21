@@ -112,8 +112,7 @@ public partial class App : System.Windows.Application
                         _main.Dispatcher.Invoke(() =>
                         {
                             Services.Monitor.HandleHotkey(action);
-                            if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase)
-                                 || action is "nextPreset" or "previousPreset")
+                            if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase))
                                 && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
                                 _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
                             else if (action == "emergencyRestore")

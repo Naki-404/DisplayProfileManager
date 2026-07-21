@@ -195,15 +195,23 @@ public partial class MainWindow : Window
             PresetGameList.SelectedItem = match;
         else if (_presetGame == null || _presets.Count == 0)
         {
-            // Force reload if list is empty but profile has presets
-            _presetGame = match;
-            _presets.Clear();
-            match.Presets ??= new List<QuickPreset>();
-            foreach (var p in match.Presets)
-                _presets.Add(p);
-            LblPresetGame.Text = $"Presets — {match.Name}";
-            if (_presets.Count > 0 && PresetList.SelectedItem == null)
-                PresetList.SelectedIndex = 0;
+            _suppressEditorEvents = true;
+            try
+            {
+                _selectedPreset = null;
+                _presetGame = match;
+                _presets.Clear();
+                match.Presets ??= new List<QuickPreset>();
+                foreach (var p in match.Presets)
+                    _presets.Add(p);
+                LblPresetGame.Text = $"Presets — {match.Name}";
+                if (_presets.Count > 0 && PresetList.SelectedItem == null)
+                    PresetList.SelectedIndex = 0;
+            }
+            finally
+            {
+                _suppressEditorEvents = false;
+            }
         }
     }
 
@@ -265,6 +273,64 @@ public partial class MainWindow : Window
             _ = DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkModeBefore20, ref useDark, sizeof(int));
         }
         catch { /* older Windows */ }
+
+        EventManager.RegisterClassHandler(
+            typeof(System.Windows.Controls.Button),
+            System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new RoutedEventHandler(OnAnyButtonClick),
+            handledEventsToo: true);
+
+        UiSound.Open();
+    }
+
+    private static DateTime _lastClickSoundUtc = DateTime.MinValue;
+
+    private static void OnAnyButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn) return;
+        // Skip title-bar chrome
+        if (Equals(btn.Style, btn.TryFindResource("CaptionButton"))
+            || Equals(btn.Style, btn.TryFindResource("CaptionCloseButton"))
+            || btn.Name == "BtnSettingsCaption")
+            return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastClickSoundUtc).TotalMilliseconds < 70) return;
+        _lastClickSoundUtc = now;
+        UiSound.Click();
+    }
+
+    private void LaunchGame_Click(object sender, RoutedEventArgs e)
+    {
+        var profile = _selected ?? _presetGame;
+        if (profile == null)
+        {
+            ThemedDialog.Show(this, "Select a game profile first.", "Launch");
+            return;
+        }
+
+        string? path = profile.ExePath;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            ThemedDialog.Show(this,
+                "No exe path on this profile.\nUse Browse… or Scan to fill ExePath, then try again.",
+                "Launch");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                WorkingDirectory = Path.GetDirectoryName(path) ?? "",
+                UseShellExecute = true
+            });
+            ShowToast($"Launching {profile.Name}");
+        }
+        catch (Exception ex)
+        {
+            ThemedDialog.Show(this, "Could not start game:\n" + ex.Message, "Launch");
+        }
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -495,10 +561,9 @@ public partial class MainWindow : Window
         UpdateDriverUiAvailability();
 
         cfg.GlobalHotkeys ??= new GlobalHotkeys();
-        if (HkNextPreset != null) HkNextPreset.Text = cfg.GlobalHotkeys.NextPreset ?? "";
-        if (HkPrevPreset != null) HkPrevPreset.Text = cfg.GlobalHotkeys.PreviousPreset ?? "";
         if (HkToggleOverlay != null) HkToggleOverlay.Text = cfg.GlobalHotkeys.ToggleOverlay ?? "";
         if (HkEmergency != null) HkEmergency.Text = cfg.GlobalHotkeys.EmergencyRestore ?? "";
+        // Next/Prev preset binds live on each preset — do not load global leftovers into UI.
 
         ChkAutostart.IsChecked = cfg.StartWithWindows;
         ChkStartMin.IsChecked = cfg.StartMinimized;
@@ -970,10 +1035,8 @@ public partial class MainWindow : Window
         cfg.GlobalHotkeys.CompareAb = null;
         cfg.GlobalHotkeys.ShadowBoostUp = null;
         cfg.GlobalHotkeys.ShadowBoostDown = null;
-        if (HkNextPreset != null)
-            cfg.GlobalHotkeys.NextPreset = NormHotkey(HkNextPreset.Text);
-        if (HkPrevPreset != null)
-            cfg.GlobalHotkeys.PreviousPreset = NormHotkey(HkPrevPreset.Text);
+        cfg.GlobalHotkeys.NextPreset = null;
+        cfg.GlobalHotkeys.PreviousPreset = null;
         if (HkToggleOverlay != null)
             cfg.GlobalHotkeys.ToggleOverlay = NormHotkey(HkToggleOverlay.Text);
         if (HkEmergency != null)
@@ -1184,34 +1247,47 @@ public partial class MainWindow : Window
         if (_selectedPreset != null) PushPresetEditor();
         SyncPresetsBackToGame();
 
-        _presetGame = PresetGameList.SelectedItem as GameProfile;
-        _presets.Clear();
-        _selectedPreset = null;
-
-        if (_presetGame != null)
+        _suppressEditorEvents = true;
+        try
         {
-            _presetGame.Presets ??= new List<QuickPreset>();
-            foreach (var p in _presetGame.Presets)
-                _presets.Add(p);
-            LblPresetGame.Text = $"Presets — {_presetGame.Name}";
-            if (_presets.Count > 0) PresetList.SelectedIndex = 0;
-            else LoadPresetEditor(null);
+            // Null selection BEFORE Clear — otherwise SelectionChanged Push/Sync wipes presets.
+            _selectedPreset = null;
+            _presetGame = PresetGameList.SelectedItem as GameProfile;
+            _presets.Clear();
+
+            if (_presetGame != null)
+            {
+                _presetGame.Presets ??= new List<QuickPreset>();
+                foreach (var p in _presetGame.Presets)
+                    _presets.Add(p);
+                LblPresetGame.Text = $"Presets — {_presetGame.Name}";
+                if (_presets.Count > 0) PresetList.SelectedIndex = 0;
+                else LoadPresetEditor(null);
+            }
+            else
+            {
+                LblPresetGame.Text = "Presets";
+                LoadPresetEditor(null);
+            }
         }
-        else
+        finally
         {
-            LblPresetGame.Text = "Presets";
-            LoadPresetEditor(null);
+            _suppressEditorEvents = false;
         }
 
-        // Bind this game's preset hotkeys when idle (or keep active game if running).
         RefreshHotkeyBindings();
     }
 
     private void SyncPresetsBackToGame()
     {
         if (_presetGame == null) return;
-        // Keep the same QuickPreset instances (do NOT CloneOf) so the list/editor
-        // and the profile stay in sync. Deep-clone only when writing to config.
+        // Never overwrite a non-empty profile with an empty UI list during list rebuild races.
+        if (_presets.Count == 0
+            && _presetGame.Presets != null
+            && _presetGame.Presets.Count > 0
+            && _selectedPreset == null)
+            return;
+
         _presetGame.Presets = _presets.ToList();
     }
 
@@ -1604,11 +1680,23 @@ public partial class MainWindow : Window
         }
         int n = PresetPackService.Import(_presetGame);
         if (n <= 0) return;
-        _presets.Clear();
-        foreach (var p in _presetGame.Presets)
-            _presets.Add(p);
-        PresetList.Items.Refresh();
+        _suppressEditorEvents = true;
+        try
+        {
+            _selectedPreset = null;
+            _presets.Clear();
+            foreach (var p in _presetGame.Presets)
+                _presets.Add(p);
+            PresetList.Items.Refresh();
+            if (_presets.Count > 0)
+                PresetList.SelectedIndex = 0;
+        }
+        finally
+        {
+            _suppressEditorEvents = false;
+        }
         MarkDirty();
+        FlushAutosave();
         ShowToast($"Imported {n} preset(s)");
     }
 

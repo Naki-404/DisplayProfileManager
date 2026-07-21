@@ -501,7 +501,7 @@
 
         <Style TargetType="ScrollViewer">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="VerticalScrollBarVisibility" Value="Hidden"/>
             <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="Template">
@@ -522,9 +522,10 @@
                                                     CanContentScroll="{TemplateBinding CanContentScroll}"
                                                     Content="{TemplateBinding Content}"
                                                     ContentTemplate="{TemplateBinding ContentTemplate}"/>
+                            <!-- Keep PART bars for wheel/pan; Width/Height 0 so they never show -->
                             <ScrollBar x:Name="PART_VerticalScrollBar"
                                        Grid.Column="1" Grid.Row="0"
-                                       Orientation="Vertical"
+                                       Orientation="Vertical" Width="0" Opacity="0"
                                        Minimum="0"
                                        Maximum="{TemplateBinding ScrollableHeight}"
                                        ViewportSize="{TemplateBinding ViewportHeight}"
@@ -532,7 +533,7 @@
                                        Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
                             <ScrollBar x:Name="PART_HorizontalScrollBar"
                                        Grid.Column="0" Grid.Row="1"
-                                       Orientation="Horizontal"
+                                       Orientation="Horizontal" Height="0" Opacity="0"
                                        Minimum="0"
                                        Maximum="{TemplateBinding ScrollableWidth}"
                                        ViewportSize="{TemplateBinding ViewportWidth}"

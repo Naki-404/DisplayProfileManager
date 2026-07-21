@@ -15,6 +15,7 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
     private DispatcherTimer? _hold;
     private int _gen;
     private int _profilesClicks;
+    private DateTime _streakStartUtc = DateTime.MinValue;
     private bool _busy;
     private string? _last;
 
@@ -35,9 +36,19 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
 
     public void NotifyProfilesClick()
     {
+        var now = DateTime.UtcNow;
+        // 5 clicks in a row within 5 seconds (not lifetime total).
+        if (_streakStartUtc == DateTime.MinValue || (now - _streakStartUtc).TotalSeconds > 5)
+        {
+            _streakStartUtc = now;
+            _profilesClicks = 0;
+        }
+
         _profilesClicks++;
         if (_profilesClicks < 5) return;
+
         _profilesClicks = 0;
+        _streakStartUtc = DateTime.MinValue;
         _busy = false;
         ShowRandom();
     }

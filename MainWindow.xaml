@@ -163,7 +163,7 @@
                         </DockPanel>
                     </Border>
 
-                    <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                    <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                                   CanContentScroll="False" PanningMode="VerticalOnly">
                         <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                             <StackPanel x:Name="EditorPanel">
@@ -186,6 +186,10 @@
                                     <Button Grid.Column="2" Content="Running..." Style="{StaticResource CompactGhostButton}"
                                             Margin="6,0,0,0" MinWidth="72" HorizontalAlignment="Left" Click="PickRunning_Click"/>
                                 </Grid>
+                                <Button x:Name="BtnLaunchGame" Content="Launch game" Style="{StaticResource CompactAccentButton}"
+                                        Margin="0,8,0,0" HorizontalAlignment="Left" MinWidth="120"
+                                        Click="LaunchGame_Click"
+                                        ToolTip="Start this game's exe (set ExePath via Browse or Scan)"/>
 
                                 <Separator/>
                                 <TextBlock Text="Display" FontWeight="SemiBold" Margin="0,0,0,8"/>
@@ -220,8 +224,11 @@
 
                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                     <Button x:Name="BtnOverlay" Content="Live overlay" Style="{StaticResource CompactAccentButton}"
-                                            Click="Overlay_Click"
+                                            Margin="0,0,8,0" Click="Overlay_Click"
                                             ToolTip="Floating panel over the game — tune presets live"/>
+                                    <Button x:Name="BtnLaunchGamePreset" Content="Launch game" Style="{StaticResource CompactGhostButton}"
+                                            Click="LaunchGame_Click"
+                                            ToolTip="Start this game's exe"/>
                                 </StackPanel>
 
                                 <Separator/>
@@ -378,7 +385,7 @@
                         </DockPanel>
                     </Border>
 
-                    <ScrollViewer Grid.Column="4" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                    <ScrollViewer Grid.Column="4" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                                   CanContentScroll="False" PanningMode="VerticalOnly">
                         <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                             <StackPanel x:Name="PresetEditor">
@@ -427,7 +434,7 @@
             </TabItem>
 
             <TabItem x:Name="TabGlobal" Header="Global">
-                <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                               CanContentScroll="False" PanningMode="VerticalOnly">
                     <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                         <StackPanel MaxWidth="620" HorizontalAlignment="Left">
@@ -443,7 +450,7 @@
                                        Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                             <Separator/>
-                            <TextBlock Text="Preset &amp; app hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                            <TextBlock Text="App hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
                             <TextBlock Text="Click a field and press Ctrl/Alt/Shift + key. Esc / Backspace / Delete or Clear removes it. Per-preset binds are set on the Presets tab."
                                        Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
                             <Grid>
@@ -453,23 +460,15 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="Next preset" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkNextPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBlock Grid.Row="0" Text="Toggle overlay" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkToggleOverlay" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                                 <Button Grid.Row="0" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkNextPreset}"/>
-                                <TextBlock Grid.Row="1" Text="Previous preset" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkPrevPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="1" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
-                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkPrevPreset}"/>
-                                <TextBlock Grid.Row="2" Text="Toggle overlay" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="HkToggleOverlay" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="2" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkToggleOverlay}"/>
-                                <TextBlock Grid.Row="3" Text="Emergency Restore" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="HkEmergency" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
-                                <Button Grid.Row="3" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                <TextBlock Grid.Row="1" Text="Emergency Restore" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkEmergency" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="1" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkEmergency}"/>
                             </Grid>
 
