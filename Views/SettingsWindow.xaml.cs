@@ -54,6 +54,7 @@ public partial class SettingsWindow : Window
         ChkConfirmDelete.IsChecked = ui.ConfirmDelete;
         ChkShowActive.IsChecked = ui.ShowActiveInHeader;
         ChkOverlayAuto.IsChecked = ui.OverlayAutoShowOnGame;
+        if (ChkOverlayHotkeyOnly != null) ChkOverlayHotkeyOnly.IsChecked = ui.OverlayHotkeyOnly;
         ChkUiSounds.IsChecked = ui.UiSoundsEnabled;
         SldSoundVol.Value = Math.Clamp(ui.UiSoundVolume, 0, 100);
         LblSoundVolVal.Text = $"{(int)SldSoundVol.Value}%";
@@ -80,6 +81,7 @@ public partial class SettingsWindow : Window
         ChkShowActive.Content = Loc.T("settings.showActive");
         if (LblOverlay != null) LblOverlay.Text = Loc.T("overlay.open");
         if (ChkOverlayAuto != null) ChkOverlayAuto.Content = Loc.T("overlay.auto");
+        if (ChkOverlayHotkeyOnly != null) ChkOverlayHotkeyOnly.Content = Loc.T("overlay.hotkeyOnly");
         if (LblOverlayHint != null) LblOverlayHint.Text = Loc.T("overlay.auto.hint");
         if (LblSound != null) LblSound.Text = Loc.T("settings.sound");
         if (ChkUiSounds != null) ChkUiSounds.Content = Loc.T("settings.sound.enable");
@@ -164,6 +166,7 @@ public partial class SettingsWindow : Window
     {
         string? mon = (CmbMonitor.SelectedItem as ComboBoxItem)?.Tag?.ToString();
         string theme = (CmbTheme.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "dark";
+        var prev = App.Services.Config.Current.Ui ?? new UiPreferences();
         var ui = new UiPreferences
         {
             Locale = (CmbLang.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "en",
@@ -176,6 +179,12 @@ public partial class SettingsWindow : Window
             ShowActiveInHeader = ChkShowActive.IsChecked == true,
             PreferredDisplayDevice = string.IsNullOrWhiteSpace(mon) ? null : mon,
             OverlayAutoShowOnGame = ChkOverlayAuto.IsChecked == true,
+            OverlayHotkeyOnly = ChkOverlayHotkeyOnly?.IsChecked == true,
+            OverlayVisible = prev.OverlayVisible,
+            OverlayExpanded = prev.OverlayExpanded,
+            OverlayPanelOpacity = prev.OverlayPanelOpacity,
+            OverlayLeft = prev.OverlayLeft,
+            OverlayTop = prev.OverlayTop,
             UiSoundsEnabled = ChkUiSounds.IsChecked == true,
             UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
         };

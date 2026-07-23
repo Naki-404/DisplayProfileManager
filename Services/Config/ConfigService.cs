@@ -6,7 +6,7 @@ namespace DisplayProfileManager.Services;
 
 public sealed class ConfigService : IDisposable
 {
-    public const int CurrentVersion = 14;
+    public const int CurrentVersion = 16;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -334,9 +334,6 @@ public sealed class ConfigService : IDisposable
         {
             // Stop re-adding deleted core games; mark seeded without forcing profiles back.
             cfg.CoreProfilesSeeded = true;
-            cfg.GlobalHotkeys.ResetColor ??= "Ctrl+Alt+NumPad9";
-            if (string.Equals(cfg.GlobalHotkeys.ResetColor, "NumPad9", StringComparison.OrdinalIgnoreCase))
-                cfg.GlobalHotkeys.ResetColor = "Ctrl+Alt+NumPad9";
 
             foreach (var p in cfg.Profiles)
             {
@@ -366,22 +363,11 @@ public sealed class ConfigService : IDisposable
 
         if (cfg.ConfigVersion < 7)
         {
-            // Global adjust hotkeys are opt-in (empty by default). Clear old stock bindings.
+            // Legacy global adjust hotkeys removed from the model — keep Toggle/Emergency only.
             cfg.GlobalHotkeys ??= new GlobalHotkeys();
-            static bool IsStock(string? g, string stock) =>
-                string.Equals(g?.Trim(), stock, StringComparison.OrdinalIgnoreCase);
-            var hk = cfg.GlobalHotkeys;
-            if (IsStock(hk.BrightnessUp, "Ctrl+Alt+Up")) hk.BrightnessUp = null;
-            if (IsStock(hk.BrightnessDown, "Ctrl+Alt+Down")) hk.BrightnessDown = null;
-            if (IsStock(hk.ContrastUp, "Ctrl+Alt+Right")) hk.ContrastUp = null;
-            if (IsStock(hk.ContrastDown, "Ctrl+Alt+Left")) hk.ContrastDown = null;
-            if (IsStock(hk.GammaUp, "Ctrl+Alt+Add")) hk.GammaUp = null;
-            if (IsStock(hk.GammaDown, "Ctrl+Alt+Subtract")) hk.GammaDown = null;
-            if (IsStock(hk.ResetColor, "Ctrl+Alt+NumPad9") || IsStock(hk.ResetColor, "NumPad9"))
-                hk.ResetColor = null;
             cfg.ConfigVersion = 7;
             changed = true;
-            AppLog.Info("Migrated to v7 (empty global adjust hotkeys by default).");
+            AppLog.Info("Migrated to v7 (global adjust hotkeys retired).");
         }
 
         if (cfg.ConfigVersion < 8)
@@ -509,6 +495,45 @@ public sealed class ConfigService : IDisposable
             AppLog.Info("Migrated to v14 (RestoreMode + extended global hotkeys).");
         }
 
+        if (cfg.ConfigVersion < 15)
+        {
+            // Color is presets-only — clear misleading profile-level ApplyColor / seed color.
+            foreach (var p in cfg.Profiles)
+            {
+                p.ApplyColor = false;
+                // Keep dual slots intact; Neutral baseline is unused by ApplyProfile.
+                if (p.Presets == null || p.Presets.Count == 0)
+                    p.Color = ColorSettings.Neutral;
+            }
+            cfg.GlobalHotkeys ??= new GlobalHotkeys();
+            cfg.ConfigVersion = 15;
+            changed = true;
+            AppLog.Info("Migrated to v15 (presets-only color; trim dead global adjust hotkeys).");
+        }
+
+        if (cfg.ConfigVersion < 16)
+        {
+            foreach (var p in cfg.Profiles)
+            {
+                p.ProcessAliases ??= new List<string>();
+                p.Session ??= new SessionExtras();
+                // Sync IsolatePrimaryMonitor ← MonitorLayout when layout is set.
+                var layout = p.Session.MonitorLayout?.Trim();
+                if (!string.IsNullOrWhiteSpace(layout))
+                {
+                    if (string.Equals(layout, "keepAll", StringComparison.OrdinalIgnoreCase))
+                        p.Session.IsolatePrimaryMonitor = false;
+                    else if (string.Equals(layout, "isolatePrimary", StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(layout, "primaryOnly", StringComparison.OrdinalIgnoreCase))
+                        p.Session.IsolatePrimaryMonitor = true;
+                }
+            }
+            cfg.GlobalHotkeys ??= new GlobalHotkeys();
+            cfg.ConfigVersion = 16;
+            changed = true;
+            AppLog.Info("Migrated to v16 (ProcessAliases + MonitorLayout sync).");
+        }
+
         cfg.Ui ??= new UiPreferences();
 
         foreach (var profile in cfg.Profiles)
@@ -599,7 +624,11 @@ public sealed class ConfigService : IDisposable
             Name = "Neutral",
             Hotkey = "Ctrl+Alt+NumPad0",
             ApplyColor = true,
-            Color = ColorSettings.Neutral,
+            Color = new ColorSettings
+            {
+                Brightness = 0.5, Contrast = 1.0, Gamma = 1.0, Vibrance = 50,
+                Backend = ColorBackend.LowLevel, LockColor = true
+            },
             ApplyResolution = false
         },
         new()
@@ -608,7 +637,7 @@ public sealed class ConfigService : IDisposable
             Name = "Bright / flat",
             Hotkey = "Ctrl+Alt+NumPad1",
             ApplyColor = true,
-            Color = new ColorSettings { Brightness = 0.62, Contrast = 1.05, Gamma = 0.85 },
+            Color = new ColorSettings { Brightness = 0.62, Contrast = 1.05, Gamma = 0.85, LockColor = true },
             ApplyResolution = false
         },
         new()
@@ -617,7 +646,7 @@ public sealed class ConfigService : IDisposable
             Name = "Dark / punchy",
             Hotkey = "Ctrl+Alt+NumPad2",
             ApplyColor = true,
-            Color = new ColorSettings { Brightness = 0.42, Contrast = 1.2, Gamma = 1.15 },
+            Color = new ColorSettings { Brightness = 0.42, Contrast = 1.2, Gamma = 1.15, LockColor = true },
             ApplyResolution = false
         },
         new()
@@ -627,7 +656,8 @@ public sealed class ConfigService : IDisposable
             Hotkey = "Ctrl+Alt+NumPad3",
             ApplyResolution = true,
             Resolution = "1920x1080",
-            ApplyColor = false
+            ApplyColor = false,
+            Color = ColorSettings.Neutral
         },
         new()
         {
@@ -636,7 +666,8 @@ public sealed class ConfigService : IDisposable
             Hotkey = "Ctrl+Alt+NumPad4",
             ApplyResolution = true,
             Resolution = "2560x1440",
-            ApplyColor = false
+            ApplyColor = false,
+            Color = ColorSettings.Neutral
         },
     };
 

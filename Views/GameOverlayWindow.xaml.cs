@@ -16,7 +16,11 @@ public partial class GameOverlayWindow : Window
     private bool _expanded;
     private ColorBackend _backend = ColorBackend.Driver;
     private readonly DispatcherTimer _liveTimer;
+    private readonly DispatcherTimer _persistTimer;
     private GameProfile? _boundProfile;
+    private double? _pendingLeft;
+    private double? _pendingTop;
+    private double? _pendingOpacity;
 
     public GameOverlayWindow()
     {
@@ -29,6 +33,13 @@ public partial class GameOverlayWindow : Window
         {
             _liveTimer.Stop();
             PushLivePreview();
+        };
+
+        _persistTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _persistTimer.Tick += (_, _) =>
+        {
+            _persistTimer.Stop();
+            FlushPendingUiSave();
         };
 
         Loaded += (_, _) =>
@@ -50,10 +61,11 @@ public partial class GameOverlayWindow : Window
                 {
                     ColorUiHelper.PlaceOverlayDefault(this);
                 }
-                SetExpanded(ui?.OverlayExpanded ?? false, save: false);
+                SetExpanded(ui?.OverlayHotkeyOnly == true ? false : (ui?.OverlayExpanded ?? false), save: false);
+                ApplyHotkeyOnlyMode(ui?.OverlayHotkeyOnly == true);
                 _suppress = false;
                 if (ui?.OverlayVisible == true)
-                    ShowOverlay(expanded: ui.OverlayExpanded);
+                    ShowOverlay(expanded: ui.OverlayHotkeyOnly == true ? false : ui.OverlayExpanded);
             }
             catch (Exception ex)
             {
@@ -90,8 +102,20 @@ public partial class GameOverlayWindow : Window
             Left = ui!.OverlayLeft!.Value;
             Top = ui.OverlayTop!.Value;
         }
+
+        bool hotkeyOnly = ui?.OverlayHotkeyOnly == true;
+        if (hotkeyOnly)
+            expanded = false;
         SetExpanded(expanded, save: true);
+        ApplyHotkeyOnlyMode(hotkeyOnly);
         OverlayWin32.StayTopmost(this);
+    }
+
+    private void ApplyHotkeyOnlyMode(bool hotkeyOnly)
+    {
+        // Compact pill only — double-click / expand affordance disabled.
+        MiniPill.Cursor = hotkeyOnly ? System.Windows.Input.Cursors.SizeAll : System.Windows.Input.Cursors.Hand;
+        MiniPill.ToolTip = hotkeyOnly ? Loc.T("overlay.hotkeyOnly") : null;
     }
 
     public void HideOverlay()
@@ -146,6 +170,7 @@ public partial class GameOverlayWindow : Window
         _suppress = true;
         ColorUiHelper.SetBackendToggle(_backend, TogBackend);
         ColorUiHelper.ApplyColorSliders(source, SldB, SldC, SldG, SldV, SldS);
+        if (ChkLockColor != null) ChkLockColor.IsChecked = source.LockColor;
         RefreshLabels();
         UpdateShadowEnabled();
         TxtContext.Text = ctx;
@@ -172,10 +197,27 @@ public partial class GameOverlayWindow : Window
     private void SavePosition()
     {
         if (!IsLoaded) return;
-        var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
-        ui.OverlayLeft = Left;
-        ui.OverlayTop = Top;
-        App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
+        _pendingLeft = Left;
+        _pendingTop = Top;
+        _persistTimer.Stop();
+        _persistTimer.Start();
+    }
+
+    private void FlushPendingUiSave()
+    {
+        try
+        {
+            var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
+            if (_pendingLeft is double l) ui.OverlayLeft = l;
+            if (_pendingTop is double t) ui.OverlayTop = t;
+            if (_pendingOpacity is double o) ui.OverlayPanelOpacity = o;
+            _pendingLeft = _pendingTop = _pendingOpacity = null;
+            App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Overlay UI save: " + ex.Message);
+        }
     }
 
     private void ApplyPanelOpacityFromConfig()
@@ -210,7 +252,8 @@ public partial class GameOverlayWindow : Window
     }
 
     private ColorSettings ReadSliders() =>
-        ColorUiHelper.ReadColorFromSliders(_backend, SldB, SldC, SldG, SldV, SldS, lockColor: true);
+        ColorUiHelper.ReadColorFromSliders(_backend, SldB, SldC, SldG, SldV, SldS,
+            lockColor: ChkLockColor?.IsChecked != false);
 
     private void ScheduleLivePreview()
     {
@@ -239,6 +282,11 @@ public partial class GameOverlayWindow : Window
     private void MiniPill_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource is System.Windows.Controls.Button) return;
+        if (App.Services.Config.Current.Ui?.OverlayHotkeyOnly == true)
+        {
+            try { DragMove(); } catch { }
+            return;
+        }
         if (e.ClickCount >= 2)
         {
             try { DragMove(); } catch { }
@@ -306,9 +354,9 @@ public partial class GameOverlayWindow : Window
         PanelRoot.Opacity = op;
         LblPanelOpacity.Text = $"{(int)Math.Round(op * 100)}%";
         if (!IsLoaded) return;
-        var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
-        ui.OverlayPanelOpacity = op;
-        App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
+        _pendingOpacity = op;
+        _persistTimer.Stop();
+        _persistTimer.Start();
     }
 
     private void Apply_Click(object sender, RoutedEventArgs e)
@@ -316,13 +364,31 @@ public partial class GameOverlayWindow : Window
         var c = ReadSliders();
         App.Services.Display.ApplyColor(c);
 
-        if (_boundProfile != null)
+        if (_boundProfile == null)
         {
-            _boundProfile.Color = c.Clone();
-            _boundProfile.SaveActiveToDualSlots();
-            App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
-            TxtContext.Text = _boundProfile.Name + " ✓";
+            ThemedDialog.Show(this, Loc.T("overlay.need.profile"));
+            return;
         }
+
+        // Color is presets-only — write the active preset (or first preset), never profile.Color.
+        var presetId = App.Services.Monitor.ActivePresetId;
+        var preset = presetId == null
+            ? null
+            : _boundProfile.Presets?.FirstOrDefault(p => p.Id == presetId);
+        preset ??= _boundProfile.Presets?.FirstOrDefault();
+        if (preset == null)
+        {
+            ThemedDialog.Show(this, Loc.T("overlay.need.preset"));
+            return;
+        }
+
+        preset.ApplyColor = true;
+        preset.Color = c.Clone();
+        preset.SaveActiveToDualSlots();
+        App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
+        App.Services.Monitor.ApplyPreset(preset);
+        TxtContext.Text = _boundProfile.Name + " ✓";
+        TxtPreset.Text = Loc.Tf("overlay.preset", preset.Name);
 
         (System.Windows.Application.Current.MainWindow as MainWindow)?.NotifyOverlayApplied();
     }
@@ -474,5 +540,6 @@ public partial class GameOverlayWindow : Window
         if (BtnHide != null) BtnHide.ToolTip = Loc.T("overlay.hide");
         if (TxtMini != null) TxtMini.Text = Loc.T("overlay.mini");
         if (LblPanelOpacityTitle != null) LblPanelOpacityTitle.Text = Loc.T("overlay.panelOpacity");
+        if (ChkLockColor != null) ChkLockColor.Content = Loc.T("overlay.lock");
     }
 }

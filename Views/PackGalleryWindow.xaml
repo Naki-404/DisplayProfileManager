@@ -1,0 +1,81 @@
+<Window x:Class="DisplayProfileManager.PackGalleryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Pack gallery" Height="420" Width="460"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None" ResizeMode="NoResize"
+        Background="{DynamicResource BgBrush}"
+        Foreground="{DynamicResource TextBrush}">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="36" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+    <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource BgBrush}">
+        <Grid Margin="18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <DockPanel>
+                <Button Style="{StaticResource CaptionCloseButton}" HorizontalAlignment="Right"
+                        Width="36" Height="28" Click="Close_Click"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Path Width="9" Height="9" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
+                          Data="M1,1 L9,9 M9,1 L1,9"/>
+                </Button>
+                <TextBlock x:Name="TxtTitle" Text="Pack gallery" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </DockPanel>
+
+            <ScrollViewer Grid.Row="1" Margin="0,14,0,12" VerticalScrollBarVisibility="Hidden">
+                <StackPanel>
+                    <TextBlock x:Name="LblHint" Text="Apply a built-in pack to the game selected on the Presets tab."
+                               Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                    <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                        <DockPanel>
+                            <Button x:Name="BtnTarkov" DockPanel.Dock="Right" Content="Apply"
+                                    Style="{StaticResource CompactAccentButton}" MinWidth="72"
+                                    VerticalAlignment="Center" Click="ApplyTarkov_Click"/>
+                            <StackPanel Margin="0,0,10,0">
+                                <TextBlock x:Name="LblTarkov" Text="Tarkov Riva presets" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="LblTarkovSub" Text="gamma-1 / gamma-2 / Night / Neutral"
+                                           FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                        <DockPanel>
+                            <Button x:Name="BtnValorant" DockPanel.Dock="Right" Content="Apply"
+                                    Style="{StaticResource CompactAccentButton}" MinWidth="72"
+                                    VerticalAlignment="Center" Click="ApplyValorant_Click"/>
+                            <StackPanel Margin="0,0,10,0">
+                                <TextBlock x:Name="LblValorant" Text="Valorant stretch" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="LblValorantSub" Text="Stretch resolutions + Vibrance+"
+                                           FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="12">
+                        <DockPanel>
+                            <Button x:Name="BtnPubg" DockPanel.Dock="Right" Content="Apply"
+                                    Style="{StaticResource CompactAccentButton}" MinWidth="72"
+                                    VerticalAlignment="Center" Click="ApplyPubg_Click"/>
+                            <StackPanel Margin="0,0,10,0">
+                                <TextBlock x:Name="LblPubg" Text="PUBG stretch" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="LblPubgSub" Text="2560×1440 / 1920×1080 stretch helpers"
+                                           FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Button Grid.Row="2" x:Name="BtnClose" Content="Close" Style="{StaticResource GhostButton}"
+                    HorizontalAlignment="Right" MinWidth="100" Click="Close_Click"/>
+        </Grid>
+    </Border>
+</Window>

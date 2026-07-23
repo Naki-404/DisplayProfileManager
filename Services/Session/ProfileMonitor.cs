@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using DisplayProfileManager.Models;
 using System.Windows;
 using System.Windows.Threading;
@@ -20,6 +22,7 @@ public sealed class ProfileMonitor : IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _colorLockTimer;
     private DispatcherTimer? _deferredTimer;
+    private CancellationTokenSource? _activationCts;
 
     private readonly HashSet<string> _activeProcesses = new(StringComparer.OrdinalIgnoreCase);
     private GameProfile? _currentProfile;
@@ -99,10 +102,14 @@ public sealed class ProfileMonitor : IDisposable
         RefreshWatchList();
 
         GameProfile? pick = null;
-        foreach (var profile in _config.Current.Profiles.Where(p => p.Enabled && !string.IsNullOrWhiteSpace(p.ProcessName)))
+        foreach (var profile in _config.Current.Profiles.Where(p => p.Enabled))
         {
-            if (!ProcessWatcher.IsProcessRunning(profile.ProcessName)) continue;
-            lock (_gate) _activeProcesses.Add(Normalize(profile.ProcessName));
+            if (!AnyProcessRunning(profile)) continue;
+            foreach (var n in EnumerateProcessNames(profile))
+            {
+                if (ProcessWatcher.IsProcessRunning(n))
+                    lock (_gate) _activeProcesses.Add(Normalize(n));
+            }
             pick = profile;
         }
 
@@ -117,6 +124,7 @@ public sealed class ProfileMonitor : IDisposable
     {
         RunOnUi(() =>
         {
+            CancelPendingActivation();
             StopDeferred();
             StopColorLock();
             ClearActivePreset();
@@ -161,23 +169,31 @@ public sealed class ProfileMonitor : IDisposable
             if (preset.ApplyResolution && !string.IsNullOrWhiteSpace(preset.Resolution))
                 _engine.SetResolution(preset.Resolution!);
 
-            // Presets are the only color path — always push color (ignore ApplyColor flag).
-            var color = (preset.Color ?? ColorSettings.Neutral).Clone();
-            color.Clamp();
-            try
+            // Color only when this preset opts in (res-only presets must not wipe live gamma).
+            if (preset.ApplyColor)
             {
-                _engine.ApplyColor(color);
-                if (color.LockColor)
-                    StartColorLock(color);
-                else
-                    StopColorLock();
+                var color = (preset.Color ?? ColorSettings.Neutral).Clone();
+                color.Clamp();
+                try
+                {
+                    _engine.ApplyColor(color);
+                    if (color.LockColor)
+                        StartColorLock(color);
+                    else
+                        StopColorLock();
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("Preset color apply failed: " + ex.Message);
+                }
+
+                AppLog.Info($"Preset applied: {preset.Name} (color, backend={color.Backend}, lock={color.LockColor})");
             }
-            catch (Exception ex)
+            else
             {
-                AppLog.Error("Preset color apply failed: " + ex.Message);
+                AppLog.Info($"Preset applied: {preset.Name} (resolution only — color left alone)");
             }
 
-            AppLog.Info($"Preset applied: {preset.Name} (backend={color.Backend}, lock={color.LockColor})");
             StatusChanged?.Invoke($"Preset: {preset.Name}");
         });
     }
@@ -245,6 +261,18 @@ public sealed class ProfileMonitor : IDisposable
                     return;
                 case "emergencyRestore":
                     EmergencyRestore();
+                    return;
+                case "nextPreset":
+                    if (CyclePreset(+1))
+                    { /* LastPresetHotkeyName set by CyclePreset */ }
+                    return;
+                case "previousPreset":
+                    if (CyclePreset(-1))
+                    { /* LastPresetHotkeyName set by CyclePreset */ }
+                    return;
+                case "compareAb":
+                    if (_engine.ToggleAbCompare())
+                        SetColorLockPaused(_engine.IsAbShowingFactory);
                     return;
             }
 
@@ -317,6 +345,8 @@ public sealed class ProfileMonitor : IDisposable
 
                 try
                 {
+                    if (!preset.ApplyColor)
+                        return;
                     var color = (preset.Color ?? ColorSettings.Neutral).Clone();
                     color.Clamp();
                     _engine.ApplyColor(color);
@@ -340,15 +370,18 @@ public sealed class ProfileMonitor : IDisposable
 
     private void RefreshWatchList()
     {
-        var names = _config.Current.Profiles
-            .Where(p => p.Enabled && !string.IsNullOrWhiteSpace(p.ProcessName))
-            .Select(p => p.ProcessName);
+        var names = new List<string>();
+        foreach (var p in _config.Current.Profiles.Where(x => x.Enabled))
+        {
+            foreach (var n in EnumerateProcessNames(p))
+                names.Add(n);
+        }
         _watcher.SetWatchList(names);
     }
 
     /// <summary>
     /// Call after in-app autosave (raiseChanged: false) so watch-list and active
-    /// profile stay in sync without a full ConfigChanged UI reload.
+    /// profile pointer stay in sync without re-hitting resolution/power mid-game.
     /// </summary>
     public void NotifyConfigSaved()
     {
@@ -356,7 +389,12 @@ public sealed class ProfileMonitor : IDisposable
         RunOnUi(() =>
         {
             GameProfile? cur;
-            lock (_gate) cur = _currentProfile;
+            string? presetId;
+            lock (_gate)
+            {
+                cur = _currentProfile;
+                presetId = _activePresetId;
+            }
             if (cur == null) return;
 
             var fresh = _config.Current.Profiles.FirstOrDefault(p => p.Id == cur.Id);
@@ -368,9 +406,26 @@ public sealed class ProfileMonitor : IDisposable
             }
 
             lock (_gate) _currentProfile = fresh;
-            // Soft re-apply so color/res edits take effect while the game is running.
-            try { ApplyProfileCore(fresh); }
-            catch (Exception ex) { AppLog.Error("NotifyConfigSaved re-apply: " + ex.Message); }
+
+            // Soft path: refresh color from the active preset only — no ChangeDisplaySettings / powercfg.
+            if (presetId == null) return;
+            var preset = fresh.Presets?.FirstOrDefault(p => p.Id == presetId);
+            if (preset == null || !preset.ApplyColor) return;
+
+            try
+            {
+                var color = (preset.Color ?? ColorSettings.Neutral).Clone();
+                color.Clamp();
+                _engine.ApplyColor(color);
+                if (color.LockColor)
+                    StartColorLock(color);
+                else
+                    StopColorLock();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("NotifyConfigSaved preset color: " + ex.Message);
+            }
         });
     }
 
@@ -379,7 +434,70 @@ public sealed class ProfileMonitor : IDisposable
         var profile = FindProfile(processName);
         if (profile == null) return;
         lock (_gate) _activeProcesses.Add(Normalize(processName));
-        RunOnUi(() => ActivateProfile(profile, relaunchCompanions: true));
+        _ = ActivateProfileAsync(profile);
+    }
+
+    private async Task ActivateProfileAsync(GameProfile profile)
+    {
+        var cts = new CancellationTokenSource();
+        lock (_gate)
+        {
+            try { _activationCts?.Cancel(); } catch { }
+            try { _activationCts?.Dispose(); } catch { }
+            _activationCts = cts;
+        }
+
+        try
+        {
+            // Prefer live config copy
+            var fresh = _config.Current.Profiles.FirstOrDefault(p => p.Id == profile.Id) ?? profile;
+
+            int delay = Math.Clamp(fresh.ApplyDelaySeconds, 0, 120);
+            if (delay > 0)
+            {
+                AppLog.Info($"Apply delay {delay}s for {fresh.Name}");
+                await Task.Delay(TimeSpan.FromSeconds(delay), cts.Token).ConfigureAwait(false);
+                if (!ProfileStillActive(fresh))
+                {
+                    AppLog.Info($"Apply delay cancelled — process gone ({fresh.Name})");
+                    return;
+                }
+            }
+
+            if (fresh.ApplyOnFocus)
+            {
+                AppLog.Info($"Waiting for focus (up to 30s) for {fresh.Name}");
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline)
+                {
+                    cts.Token.ThrowIfCancellationRequested();
+                    if (!ProfileStillActive(fresh))
+                    {
+                        AppLog.Info($"Focus wait cancelled — process gone ({fresh.Name})");
+                        return;
+                    }
+                    if (ForegroundProcessHelper.IsForegroundOwnedBy(EnumerateProcessNames(fresh)))
+                        break;
+                    await Task.Delay(250, cts.Token).ConfigureAwait(false);
+                }
+            }
+
+            if (!ProfileStillActive(fresh))
+                return;
+
+            await _dispatcher.InvokeAsync(() =>
+            {
+                ActivateProfile(fresh, relaunchCompanions: true);
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            AppLog.Info($"Activation cancelled for {profile.Name}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Async profile activation: " + ex.Message);
+        }
     }
 
     private void OnProcessStopped(string processName)
@@ -388,15 +506,16 @@ public sealed class ProfileMonitor : IDisposable
         if (profile == null) return;
 
         bool wasCurrent;
+        bool stillRunning;
         GameProfile? next = null;
         RestoreMode restoreMode = RestoreMode.PreviousSnapshot;
         lock (_gate)
         {
             _activeProcesses.Remove(Normalize(processName));
-            wasCurrent = _currentProfile != null
-                         && Normalize(_currentProfile.ProcessName) == Normalize(processName);
+            wasCurrent = _currentProfile != null && MatchesProcess(_currentProfile, processName);
+            stillRunning = wasCurrent && AnyActiveNameFor(_currentProfile!);
 
-            if (wasCurrent)
+            if (wasCurrent && !stillRunning)
             {
                 var cur = _currentProfile;
                 if (cur != null)
@@ -408,14 +527,21 @@ public sealed class ProfileMonitor : IDisposable
                 _currentCompanionsKey = null;
 
                 next = _config.Current.Profiles.FirstOrDefault(p =>
-                    p.Enabled && _activeProcesses.Contains(Normalize(p.ProcessName)));
+                    p.Enabled && AnyActiveNameFor(p));
             }
         }
 
-        if (!wasCurrent)
+        if (wasCurrent && !stillRunning)
+            CancelPendingActivation();
+
+        if (!wasCurrent || stillRunning)
         {
-            foreach (var c in profile.Companions)
-                _companions.Stop(c);
+            if (!wasCurrent)
+            {
+                foreach (var c in profile.Companions)
+                    _companions.Stop(c);
+            }
+            return;
         }
 
         RunOnUi(() =>
@@ -426,16 +552,13 @@ public sealed class ProfileMonitor : IDisposable
                 return;
             }
 
-            if (wasCurrent)
-            {
-                StopDeferred();
-                StopColorLock();
-                ClearActivePreset();
-                _engine.ClearAbCompare();
-                ApplyRestoreMode(restoreMode);
-                StatusChanged?.Invoke("Idle");
-                ActiveProfileChanged?.Invoke(null);
-            }
+            StopDeferred();
+            StopColorLock();
+            ClearActivePreset();
+            _engine.ClearAbCompare();
+            ApplyRestoreMode(restoreMode);
+            StatusChanged?.Invoke("Idle");
+            ActiveProfileChanged?.Invoke(null);
         });
     }
 
@@ -557,6 +680,18 @@ public sealed class ProfileMonitor : IDisposable
             AppLog.Error("Post-apply profile steps failed: " + ex.Message);
         }
 
+        // Startup preset only for new game activation (not soft reapply).
+        if (!string.IsNullOrWhiteSpace(profile.StartupPresetId))
+        {
+            var preset = profile.Presets?.FirstOrDefault(p => p.Id == profile.StartupPresetId)
+                         ?? FindPresetById(profile.StartupPresetId!);
+            if (preset != null)
+            {
+                ApplyPreset(preset);
+                LastPresetHotkeyName = preset.Name;
+            }
+        }
+
         StatusChanged?.Invoke($"Active: {profile.Name}");
         ActiveProfileChanged?.Invoke(profile);
     }
@@ -583,6 +718,13 @@ public sealed class ProfileMonitor : IDisposable
         try
         {
             _session.Apply(profile.Session ?? new SessionExtras(), profile.Resolution, profile.DisplayDevice);
+            if (!string.IsNullOrWhiteSpace(_session.LastWarning))
+            {
+                if (string.IsNullOrWhiteSpace(LastApplyToastDetail))
+                    LastApplyToastDetail = _session.LastWarning;
+                else
+                    LastApplyToastDetail += " · " + _session.LastWarning;
+            }
         }
         catch (Exception ex)
         {
@@ -592,20 +734,23 @@ public sealed class ProfileMonitor : IDisposable
         if (keep != null)
         {
             lock (_gate) _activePresetId = keep.Id;
-            try
+            if (keep.ApplyColor)
             {
-                var color = (keep.Color ?? ColorSettings.Neutral).Clone();
-                color.Clamp();
-                _engine.ApplyColor(color);
-                if (color.LockColor)
-                    StartColorLock(color);
-                else
-                    StopColorLock();
-                AppLog.Info($"Kept active preset after profile apply: {keep.Name}");
-            }
-            catch (Exception ex)
-            {
-                AppLog.Error("Preset re-apply after profile: " + ex.Message);
+                try
+                {
+                    var color = (keep.Color ?? ColorSettings.Neutral).Clone();
+                    color.Clamp();
+                    _engine.ApplyColor(color);
+                    if (color.LockColor)
+                        StartColorLock(color);
+                    else
+                        StopColorLock();
+                    AppLog.Info($"Kept active preset after profile apply: {keep.Name}");
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("Preset re-apply after profile: " + ex.Message);
+                }
             }
             return;
         }
@@ -691,17 +836,69 @@ public sealed class ProfileMonitor : IDisposable
     {
         var norm = Normalize(processName);
         return _config.Current.Profiles.FirstOrDefault(p =>
-            p.Enabled &&
-            !string.IsNullOrWhiteSpace(p.ProcessName) &&
-            Normalize(p.ProcessName) == norm);
+            p.Enabled && MatchesProcess(p, norm));
     }
 
     private GameProfile? FindProfileIncludingDisabled(string processName)
     {
         var norm = Normalize(processName);
-        return _config.Current.Profiles.FirstOrDefault(p =>
-            !string.IsNullOrWhiteSpace(p.ProcessName) &&
-            Normalize(p.ProcessName) == norm);
+        return _config.Current.Profiles.FirstOrDefault(p => MatchesProcess(p, norm));
+    }
+
+    private bool ProfileStillActive(GameProfile profile)
+    {
+        lock (_gate)
+        {
+            if (AnyActiveNameFor(profile))
+                return true;
+        }
+        return AnyProcessRunning(profile);
+    }
+
+    private bool AnyActiveNameFor(GameProfile profile)
+    {
+        foreach (var n in _activeProcesses)
+        {
+            if (MatchesProcess(profile, n))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool AnyProcessRunning(GameProfile profile)
+    {
+        foreach (var n in EnumerateProcessNames(profile))
+        {
+            if (ProcessWatcher.IsProcessRunning(n))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool MatchesProcess(GameProfile profile, string processName)
+    {
+        var norm = Normalize(processName);
+        if (!string.IsNullOrWhiteSpace(profile.ProcessName) && Normalize(profile.ProcessName) == norm)
+            return true;
+        if (profile.ProcessAliases == null) return false;
+        foreach (var a in profile.ProcessAliases)
+        {
+            if (!string.IsNullOrWhiteSpace(a) && Normalize(a) == norm)
+                return true;
+        }
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateProcessNames(GameProfile profile)
+    {
+        if (!string.IsNullOrWhiteSpace(profile.ProcessName))
+            yield return profile.ProcessName;
+        if (profile.ProcessAliases == null) yield break;
+        foreach (var a in profile.ProcessAliases)
+        {
+            if (!string.IsNullOrWhiteSpace(a))
+                yield return a;
+        }
     }
 
     private static string Normalize(string name)
@@ -710,6 +907,11 @@ public sealed class ProfileMonitor : IDisposable
         if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             name += ".exe";
         return name.ToLowerInvariant();
+    }
+
+    private void CancelPendingActivation()
+    {
+        try { _activationCts?.Cancel(); } catch { }
     }
 
     private void RunOnUi(Action action)
@@ -722,6 +924,9 @@ public sealed class ProfileMonitor : IDisposable
 
     public void Dispose()
     {
+        CancelPendingActivation();
+        try { _activationCts?.Dispose(); } catch { }
+        _activationCts = null;
         StopDeferred();
         StopColorLock();
         try { _session.Dispose(); } catch { }
@@ -729,5 +934,51 @@ public sealed class ProfileMonitor : IDisposable
         _watcher.ProcessStopped -= OnProcessStopped;
         _config.ConfigChanged -= OnConfigChanged;
         _watcher.Dispose();
+    }
+}
+
+/// <summary>Tiny Win32 helpers for focus-gated profile activation.</summary>
+internal static class ForegroundProcessHelper
+{
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    public static bool IsForegroundOwnedBy(IEnumerable<string> processNames)
+    {
+        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in processNames)
+        {
+            var n = Normalize(raw);
+            if (!string.IsNullOrWhiteSpace(n))
+                targets.Add(n);
+        }
+        if (targets.Count == 0) return false;
+
+        IntPtr hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return false;
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid == 0) return false;
+
+        try
+        {
+            using var p = Process.GetProcessById((int)pid);
+            var name = Normalize(p.ProcessName);
+            return targets.Contains(name);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string Normalize(string name)
+    {
+        name = name.Trim();
+        if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            name += ".exe";
+        return name.ToLowerInvariant();
     }
 }

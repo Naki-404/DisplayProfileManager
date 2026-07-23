@@ -46,6 +46,8 @@ public sealed class UiPreferences
     public bool OverlayAutoShowOnGame { get; set; }
     public bool OverlayVisible { get; set; }
     public bool OverlayExpanded { get; set; } = true;
+    /// <summary>When true, overlay stays as a compact pill (safer over exclusive fullscreen).</summary>
+    public bool OverlayHotkeyOnly { get; set; }
     /// <summary>0.55..1 panel opacity</summary>
     public double OverlayPanelOpacity { get; set; } = 0.92;
     /// <summary>null = place overlay at default screen corner.</summary>
@@ -74,6 +76,7 @@ public sealed class UiPreferences
         OverlayAutoShowOnGame = OverlayAutoShowOnGame,
         OverlayVisible = OverlayVisible,
         OverlayExpanded = OverlayExpanded,
+        OverlayHotkeyOnly = OverlayHotkeyOnly,
         OverlayPanelOpacity = OverlayPanelOpacity,
         OverlayLeft = OverlayLeft,
         OverlayTop = OverlayTop,
@@ -269,7 +272,7 @@ public sealed class ColorSettings
         Vibrance = 50,
         ShadowLift = 0.0,
         Backend = ColorBackend.LowLevel,
-        LockColor = true
+        LockColor = false
     };
 
     /// <summary>
@@ -283,7 +286,7 @@ public sealed class ColorSettings
         Vibrance = 50,
         ShadowLift = 0.0,
         Backend = ColorBackend.Driver,
-        LockColor = true
+        LockColor = false
     };
 
     /// <summary>
@@ -309,21 +312,11 @@ public sealed class ColorSettings
 
 public sealed class GlobalHotkeys
 {
-    public string? BrightnessUp { get; set; }
-    public string? BrightnessDown { get; set; }
-    public string? ContrastUp { get; set; }
-    public string? ContrastDown { get; set; }
-    public string? GammaUp { get; set; }
-    public string? GammaDown { get; set; }
-    public string? ResetColor { get; set; }
-    /// <summary>Toggle live preview ↔ factory gamma (A/B compare).</summary>
-    public string? CompareAb { get; set; }
-    public string? ShadowBoostUp { get; set; }
-    public string? ShadowBoostDown { get; set; }
-    public string? NextPreset { get; set; }
-    public string? PreviousPreset { get; set; }
     public string? ToggleOverlay { get; set; }
     public string? EmergencyRestore { get; set; }
+    public string? NextPreset { get; set; }
+    public string? PreviousPreset { get; set; }
+    public string? CompareAb { get; set; }
 }
 
 public sealed class QuickPreset
@@ -507,10 +500,18 @@ public sealed class GameProfile
     public string Name { get; set; } = "New Profile";
     public bool Enabled { get; set; } = true;
     public string ProcessName { get; set; } = "";
+    /// <summary>Extra exe names that also activate this profile (launchers, anti-cheat helpers).</summary>
+    public List<string> ProcessAliases { get; set; } = new();
     /// <summary>Optional full path to the game exe — used for icons and discovery.</summary>
     public string? ExePath { get; set; }
     public string? Resolution { get; set; }
     public int RefreshRate { get; set; }
+    /// <summary>Preset Id to apply automatically when the game starts (null = none).</summary>
+    public string? StartupPresetId { get; set; }
+    /// <summary>Wait N seconds after process start before first apply (0 = immediate).</summary>
+    public int ApplyDelaySeconds { get; set; }
+    /// <summary>When true, wait until a window for this process is foreground before applying.</summary>
+    public bool ApplyOnFocus { get; set; }
     /// <summary>Win32 device name (\\\\.\\DISPLAY1) or null for primary / app default.</summary>
     public string? DisplayDevice { get; set; }
     public string? PowerPlan { get; set; } = "highPerformance";
@@ -594,6 +595,12 @@ public sealed class SessionExtras
     /// <summary>Keep only primary monitor active while game runs.</summary>
     public bool IsolatePrimaryMonitor { get; set; }
 
+    /// <summary>
+    /// Monitor layout preference: keepAll | isolatePrimary | primaryOnly.
+    /// isolatePrimary mirrors IsolatePrimaryMonitor for newer UI.
+    /// </summary>
+    public string? MonitorLayout { get; set; }
+
     public bool ApplyMonitorBrightness { get; set; }
     /// <summary>0–100 DDC/CI backlight.</summary>
     public int MonitorBrightness { get; set; } = 80;
@@ -610,6 +617,7 @@ public sealed class SessionExtras
         SwitchAudioDevice = SwitchAudioDevice,
         AudioDeviceId = AudioDeviceId,
         IsolatePrimaryMonitor = IsolatePrimaryMonitor,
+        MonitorLayout = MonitorLayout,
         ApplyMonitorBrightness = ApplyMonitorBrightness,
         MonitorBrightness = MonitorBrightness,
         ScalingMode = ScalingMode
@@ -632,4 +640,54 @@ public sealed class CompanionApp
     /// <summary>List row text: path + args.</summary>
     public string ListLabel =>
         string.IsNullOrWhiteSpace(Arguments) ? Path : $"{Path}  {Arguments.Trim()}";
+}
+
+/// <summary>
+/// Pre-game PC state persisted to active-session.json for crash-safe restore.
+/// </summary>
+public sealed class ActiveSessionSnapshot
+{
+    public DateTime CapturedUtc { get; set; } = DateTime.UtcNow;
+    public string? ProfileId { get; set; }
+    public string? ProfileName { get; set; }
+
+    public string? Resolution { get; set; }
+    public int RefreshRate { get; set; }
+    public string? DisplayDevice { get; set; }
+    public string? PowerPlanGuid { get; set; }
+
+    /// <summary>Base64 of 256 ushorts (little-endian) per channel.</summary>
+    public string? GammaRedB64 { get; set; }
+    public string? GammaGreenB64 { get; set; }
+    public string? GammaBlueB64 { get; set; }
+    public bool HasGammaRamp { get; set; }
+
+    public bool ToastEnabled { get; set; } = true;
+    public bool AutoHdrEnabled { get; set; } = true;
+    public bool NightLightKnown { get; set; }
+    public bool NightLightOn { get; set; }
+    public string? AudioDeviceId { get; set; }
+    public int? MonitorBrightness { get; set; }
+
+    public bool TopologySaved { get; set; }
+    /// <summary>CCD path array (base64) so crash restart can restore isolate.</summary>
+    public string? TopologyPathsB64 { get; set; }
+    public string? TopologyModesB64 { get; set; }
+    public int TopologyPathCount { get; set; }
+    public int TopologyModeCount { get; set; }
+
+    public bool ScalingSaved { get; set; }
+    public string? ScalingDevice { get; set; }
+    public int? ScalingFixedOutput { get; set; }
+    public int? ScalingWidth { get; set; }
+    public int? ScalingHeight { get; set; }
+
+    /// <summary>Pre-game GPU driver vibrance/sat (crash-safe).</summary>
+    public bool HasDriverColor { get; set; }
+    public string? DriverVendor { get; set; }
+    public int? DriverVibranceLevel { get; set; }
+    public float? DriverNormalizedVibrance { get; set; }
+    public int? DriverBrightness { get; set; }
+    public int? DriverContrast { get; set; }
+    public int? DriverSaturation { get; set; }
 }

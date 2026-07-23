@@ -122,11 +122,21 @@
                                         HorizontalAlignment="Stretch" Click="RestoreCoreGames_Click"
                                         ToolTip="Add Valorant / PUBG / War Thunder / Tarkov if missing"/>
                             </StackPanel>
-                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button x:Name="BtnDup" Content="Dup" Style="{StaticResource CompactGhostButton}" Margin="0,0,6,0"
-                                        MinWidth="48" HorizontalAlignment="Left" Click="DupProfile_Click"/>
-                                <Button x:Name="BtnDelete" Content="Delete" Style="{StaticResource CompactGhostButton}"
-                                        MinWidth="56" HorizontalAlignment="Left" Click="DeleteProfile_Click"/>
+                            <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <Button x:Name="BtnDup" Content="Dup" Style="{StaticResource CompactGhostButton}" Margin="0,0,6,0"
+                                            MinWidth="48" HorizontalAlignment="Left" Click="DupProfile_Click"/>
+                                    <Button x:Name="BtnDelete" Content="Delete" Style="{StaticResource CompactGhostButton}"
+                                            MinWidth="56" HorizontalAlignment="Left" Click="DeleteProfile_Click"/>
+                                </StackPanel>
+                                <UniformGrid Columns="2">
+                                    <Button x:Name="BtnExportProfile" Content="Export" Style="{StaticResource CompactGhostButton}"
+                                            Margin="0,0,3,0" Click="ExportProfile_Click"
+                                            ToolTip="Export this profile as a shareable pack"/>
+                                    <Button x:Name="BtnImportProfile" Content="Import" Style="{StaticResource CompactGhostButton}"
+                                            Margin="3,0,0,0" Click="ImportProfile_Click"
+                                            ToolTip="Import a profile pack"/>
+                                </UniformGrid>
                             </StackPanel>
                             <ListBox x:Name="ProfileList" SelectionChanged="ProfileList_SelectionChanged">
                                 <ListBox.ItemTemplate>
@@ -204,7 +214,12 @@
                                     <CheckBox x:Name="ChkApplyRes" Content="Change resolution" VerticalAlignment="Center"
                                               Checked="EditorChanged" Unchecked="EditorChanged"/>
                                 </DockPanel>
-                                <ComboBox x:Name="CmbResolution" Margin="0,6,0,0" SelectionChanged="EditorChanged"/>
+                                <ComboBox x:Name="CmbResolution" Margin="0,6,0,0" IsEditable="True"
+                                          SelectionChanged="Resolution_Changed" LostFocus="Resolution_LostFocus"/>
+                                <TextBlock x:Name="LblRefreshRate" Text="Refresh rate" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
+                                <ComboBox x:Name="CmbRefreshRate" SelectionChanged="EditorChanged">
+                                    <ComboBoxItem Content="(don't change)" Tag="0" IsSelected="True"/>
+                                </ComboBox>
                                 <TextBlock x:Name="LblDisplay" Text="Monitor" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
                                 <ComboBox x:Name="CmbDisplay" SelectionChanged="EditorChanged"/>
                                 <DockPanel Margin="0,12,0,0">
@@ -217,6 +232,18 @@
                                     <ComboBoxItem Content="balanced" Tag="balanced"/>
                                     <ComboBoxItem Content="(don't change)" Tag=""/>
                                 </ComboBox>
+                                <TextBlock x:Name="LblStartupPreset" Text="Startup preset" Margin="0,12,0,4" Foreground="{DynamicResource MutedBrush}"/>
+                                <ComboBox x:Name="CmbStartupPreset" SelectionChanged="EditorChanged">
+                                    <ComboBoxItem Content="(none)" Tag="" IsSelected="True"/>
+                                </ComboBox>
+                                <TextBlock x:Name="LblAliases" Text="Process aliases (comma-separated)" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
+                                <TextBox x:Name="TxtAliases" TextChanged="EditorChanged"
+                                         ToolTip="Extra .exe names that also activate this profile"/>
+                                <TextBlock x:Name="LblApplyDelay" Text="Apply delay: 0 s" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
+                                <Slider x:Name="SldApplyDelay" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True"
+                                        ValueChanged="ColorSlider_ValueChanged"/>
+                                <CheckBox x:Name="ChkApplyOnFocus" Content="Wait for game window focus" Margin="0,8,0,0"
+                                          Checked="EditorChanged" Unchecked="EditorChanged"/>
                                 <DockPanel Margin="0,12,0,4">
                                     <local:InfoHint x:Name="InfoRestoreMode" DockPanel.Dock="Right"/>
                                     <TextBlock x:Name="LblRestoreMode" Text="On game exit" Foreground="{DynamicResource MutedBrush}"
@@ -234,6 +261,21 @@
                                     <TextBlock x:Name="LblSessionTitle" Text="Session extras" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                 </DockPanel>
                                 <TextBlock x:Name="LblSessionSub" Text="System-only tweaks (no game injection)" FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="LblSessionTemplates" Text="Templates" FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,4"/>
+                                <UniformGrid Columns="3" Margin="0,0,0,8">
+                                    <Button x:Name="BtnTplCompetitive" Content="Competitive" Style="{StaticResource CompactGhostButton}"
+                                            Margin="0,0,4,0" Click="SessionTemplateCompetitive_Click"/>
+                                    <Button x:Name="BtnTplImmersive" Content="Immersive" Style="{StaticResource CompactGhostButton}"
+                                            Margin="2,0,2,0" Click="SessionTemplateImmersive_Click"/>
+                                    <Button x:Name="BtnTplMinimal" Content="Minimal" Style="{StaticResource CompactGhostButton}"
+                                            Margin="4,0,0,0" Click="SessionTemplateMinimal_Click"/>
+                                </UniformGrid>
+                                <TextBlock x:Name="LblMonitorLayout" Text="Monitor layout" Margin="0,0,0,4" Foreground="{DynamicResource MutedBrush}"/>
+                                <ComboBox x:Name="CmbMonitorLayout" Margin="0,0,0,8" SelectionChanged="MonitorLayout_Changed">
+                                    <ComboBoxItem Content="Keep all monitors" Tag="keepAll" IsSelected="True"/>
+                                    <ComboBoxItem Content="Isolate primary" Tag="isolatePrimary"/>
+                                    <ComboBoxItem Content="Primary only" Tag="primaryOnly"/>
+                                </ComboBox>
                                 <DockPanel>
                                     <local:InfoHint x:Name="InfoDeferred" DockPanel.Dock="Right"/>
                                     <TextBlock x:Name="LblDeferred" Text="Deferred re-apply: 0 s" Foreground="{DynamicResource MutedBrush}"
@@ -363,6 +405,9 @@
                                     <Button x:Name="BtnPresetImport" Content="Import" Style="{StaticResource CompactGhostButton}"
                                             Margin="4,4,0,0" Click="ImportPresets_Click"/>
                                 </UniformGrid>
+                                <Button x:Name="BtnPackGallery" Content="Pack gallery" Style="{StaticResource CompactGhostButton}"
+                                        HorizontalAlignment="Stretch" Margin="0,0,0,6" Click="PackGallery_Click"
+                                        ToolTip="Browse built-in preset packs"/>
                                 <Button x:Name="BtnLaunchGamePreset" Content="Launch game" Style="{StaticResource CompactAccentButton}"
                                         HorizontalAlignment="Stretch" Click="LaunchGame_Click"
                                         ToolTip="Start the selected game's exe"/>
@@ -392,7 +437,7 @@
                         <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
                             <StackPanel x:Name="PresetEditor">
                                 <TextBlock Text="Preset for this game" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                                <TextBlock Text="Hotkeys need Ctrl/Alt/Shift (e.g. Ctrl+Alt+1). Bound to this game; while it runs, they apply color immediately."
+                                <TextBlock Text="Press any key (NumPad, 1–9, letters, F-keys). Optional Ctrl/Alt/Shift. Bound to this game — works in-game via keyboard hook."
                                            Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,12" FontSize="11"/>
 
                                 <TextBlock Text="Name" Foreground="{DynamicResource MutedBrush}"/>
@@ -454,8 +499,8 @@
                                        Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                             <Separator/>
-                            <TextBlock Text="App hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="Click a field and press Ctrl/Alt/Shift + key. Esc / Backspace / Delete or Clear removes it. Per-preset binds are set on the Presets tab."
+                            <TextBlock x:Name="LblAppHotkeys" Text="App hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="LblAppHotkeysHint" Text="Click a field and press a key (modifiers optional). Esc / Backspace / Delete or Clear removes it. Per-preset binds are on the Presets tab."
                                        Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -464,16 +509,28 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="Toggle overlay" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="LblHkOverlay" Grid.Row="0" Text="Toggle overlay" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkToggleOverlay" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                                 <Button Grid.Row="0" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkToggleOverlay}"/>
-                                <TextBlock Grid.Row="1" Text="Emergency Restore" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="LblHkEmergency" Grid.Row="1" Text="Emergency Restore" VerticalAlignment="Center"/>
                                 <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkEmergency" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                                 <Button Grid.Row="1" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkEmergency}"/>
+                                <TextBlock x:Name="LblHkNext" Grid.Row="2" Text="Next preset" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="HkNextPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="2" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkNextPreset}"/>
+                                <TextBlock x:Name="LblHkPrev" Grid.Row="3" Text="Previous preset" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="HkPrevPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="3" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkPrevPreset}"/>
+                                <TextBlock x:Name="LblHkAb" Grid.Row="4" Text="A/B compare" VerticalAlignment="Center"/>
+                                <TextBox Grid.Row="4" Grid.Column="1" x:Name="HkCompareAb" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <Button Grid.Row="4" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkCompareAb}"/>
                             </Grid>
 
                             <Separator/>

@@ -47,6 +47,8 @@ public partial class App : System.Windows.Application
                     Loc.SetLocale("en");
                     ThemedDialog.Show(null, Loc.T("alreadyRunning"));
                 }
+                try { _mutex.Dispose(); } catch { }
+                _mutex = null;
                 Shutdown();
                 return;
             }
@@ -117,6 +119,11 @@ public partial class App : System.Windows.Application
                             if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase))
                                 && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
                                 _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
+                            else if (action is "nextPreset" or "previousPreset"
+                                     && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
+                                _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
+                            else if (action == "compareAb")
+                                _main.ShowToast(Loc.T("toast.hotkey.ab"));
                             else if (action == "emergencyRestore")
                                 _main.ShowToast(Loc.T("toast.emergency"));
                         });
@@ -176,6 +183,9 @@ public partial class App : System.Windows.Application
                             else if (Services.Monitor.SnapshotActive)
                                 msg += "\n" + Loc.T("toast.snapshot");
                             _main.ShowToast(msg);
+                            if (!string.IsNullOrWhiteSpace(detail)
+                                && detail.Contains("fail", StringComparison.OrdinalIgnoreCase))
+                                _main.ShowToast(detail);
                             try
                             {
                                 _tray?.ShowBalloonTip(2800, Loc.T("app.name"), msg.Replace("\n", " · "),
@@ -197,6 +207,11 @@ public partial class App : System.Windows.Application
                     {
                         _main.SetStatus(status);
                         if (_tray != null) _tray.Text = "DPM: " + status;
+                        var detail = Services.Monitor.LastApplyToastDetail;
+                        if (!string.IsNullOrWhiteSpace(detail)
+                            && detail.Contains("fail", StringComparison.OrdinalIgnoreCase)
+                            && status.Contains("fail", StringComparison.OrdinalIgnoreCase))
+                            _main.ShowToast(detail);
                     }
                     catch { }
                 });

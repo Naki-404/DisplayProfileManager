@@ -174,27 +174,38 @@ public sealed class DisplayEngine
     public bool IsAbShowingFactory => _abShowingFactory;
 
     /// <summary>Call once at startup before any ApplyColor — stores OS gamma for RestoreFactory.</summary>
-    public void CaptureFactoryGammaRamp()
+    /// <param name="captureRamp">
+    /// When false (dirty restart after crash-safe identity), skip overwriting factory with identity;
+    /// still refresh driver vibrance baseline.
+    /// </param>
+    public void CaptureFactoryGammaRamp(bool captureRamp = true)
     {
-        var ramp = new RAMP
+        if (captureRamp)
         {
-            Red = new ushort[256],
-            Green = new ushort[256],
-            Blue = new ushort[256]
-        };
-        var hdc = GetDC(IntPtr.Zero);
-        try
-        {
-            if (GetDeviceGammaRamp(hdc, ref ramp))
+            var ramp = new RAMP
             {
-                _factoryRamp = CloneRamp(ramp);
-                _hasFactoryRamp = true;
-                AppLog.Info("Factory gamma ramp captured.");
+                Red = new ushort[256],
+                Green = new ushort[256],
+                Blue = new ushort[256]
+            };
+            var hdc = GetDC(IntPtr.Zero);
+            try
+            {
+                if (GetDeviceGammaRamp(hdc, ref ramp))
+                {
+                    _factoryRamp = CloneRamp(ramp);
+                    _hasFactoryRamp = true;
+                    AppLog.Info("Factory gamma ramp captured.");
+                }
+            }
+            finally
+            {
+                ReleaseDC(IntPtr.Zero, hdc);
             }
         }
-        finally
+        else
         {
-            ReleaseDC(IntPtr.Zero, hdc);
+            AppLog.Info("Factory gamma capture skipped (post crash-safe — avoid storing identity).");
         }
 
         // Baseline for vibrance restore — only at startup / after crash-safe, not on Low Level applies.
@@ -688,6 +699,40 @@ public sealed class DisplayEngine
         }
         return set.ToList();
     }
+
+    /// <summary>Refresh rates available for a WxH mode (descending).</summary>
+    public static List<int> GetAvailableRefreshRates(string? resolution, string? deviceName = null)
+    {
+        var set = new SortedSet<int>(Comparer<int>.Create((a, b) => b.CompareTo(a)));
+        if (!TryParseRes(resolution, out int w, out int h))
+            return set.ToList();
+
+        string? device = string.IsNullOrWhiteSpace(deviceName) ? null : deviceName.Trim();
+        var mode = new DEVMODE();
+        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        int i = 0;
+        while (EnumDisplaySettings(device, i, ref mode))
+        {
+            if (mode.dmPelsWidth == w && mode.dmPelsHeight == h && mode.dmDisplayFrequency > 0)
+                set.Add(mode.dmDisplayFrequency);
+            i++;
+        }
+        return set.ToList();
+    }
+
+    public static bool TryParseRes(string? resolution, out int width, out int height)
+    {
+        width = height = 0;
+        if (string.IsNullOrWhiteSpace(resolution)) return false;
+        var parts = resolution.Trim().ToLowerInvariant().Split('x', '×');
+        if (parts.Length != 2) return false;
+        return int.TryParse(parts[0].Trim(), out width)
+               && int.TryParse(parts[1].Trim(), out height)
+               && width >= 640 && height >= 480;
+    }
+
+    public static bool IsCustomResolution(string? resolution)
+        => TryParseRes(resolution, out _, out _);
 
     public static string GetCurrentResolution()
     {

@@ -101,7 +101,12 @@ public sealed class CompanionService
                     // Launchers like Overwolf need a second start with -launchapp ….
                     if (existing.Length > 0 && string.IsNullOrWhiteSpace(companion.Arguments))
                     {
-                        AppLog.Info($"Companion already running: {name}");
+                        foreach (var p in existing)
+                        {
+                            try { TrackPid(key, p.Id); }
+                            catch { /* ignore */ }
+                        }
+                        AppLog.Info($"Companion already running — adopted {existing.Length} PID(s): {name}");
                         return;
                     }
                 }

@@ -19,17 +19,18 @@ public sealed class AppServices : IDisposable
 
         Display = new DisplayEngine();
 
-        // Dirty lock left behind → previous exit crashed/killed; restore identity first.
         CrashRestored = SessionGuard.WasDirtyShutdown();
         if (CrashRestored)
         {
+            // Wipe leftover game gamma for safety, but do NOT capture identity as "factory".
             Display.RestoreCrashSafe();
-            Display.CaptureFactoryGammaRamp();
+            Display.CaptureFactoryGammaRamp(captureRamp: false);
         }
         else
         {
-            Display.CaptureFactoryGammaRamp();
+            Display.CaptureFactoryGammaRamp(captureRamp: true);
         }
+
         SessionGuard.MarkRunning();
 
         Watcher = new ProcessWatcher();

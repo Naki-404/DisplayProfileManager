@@ -54,7 +54,8 @@ public static class GameCatalog
                 ApplyColor = false,
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
-                Color = ColorSettings.Neutral
+                Color = ColorSettings.Neutral,
+                Presets = CreateValorantStretchPresets()
             },
             new()
             {
@@ -66,7 +67,8 @@ public static class GameCatalog
                 ApplyColor = false,
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
-                Color = ColorSettings.Neutral
+                Color = ColorSettings.Neutral,
+                Presets = CreatePubgStretchPresets()
             },
             new()
             {
@@ -86,11 +88,10 @@ public static class GameCatalog
                 Name = "Escape from Tarkov",
                 ProcessName = "EscapeFromTarkov.exe",
                 ApplyResolution = false,
-                ApplyColor = true,
+                ApplyColor = false,
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
-                // Default = RivaTuner gamma-1 via Low Level
-                Color = ColorSettings.FromRivaTuner(0, 10, 1.5),
+                Color = ColorSettings.Neutral,
                 Companions = File.Exists(riva)
                     ? new List<CompanionApp>
                     {
@@ -152,8 +153,8 @@ public static class GameCatalog
 
         if (string.Equals(profile.ProcessName, "EscapeFromTarkov.exe", StringComparison.OrdinalIgnoreCase))
         {
-            profile.ApplyColor = true;
-            profile.Color = ColorSettings.FromRivaTuner(0, 10, 1.5);
+            profile.ApplyColor = false;
+            profile.Color = ColorSettings.Neutral;
             profile.Presets = CreateTarkovRivaPresets();
             if (File.Exists(riva))
             {
@@ -212,9 +213,51 @@ public static class GameCatalog
             Name = "Neutral",
             Hotkey = "Ctrl+Alt+NumPad0",
             ApplyColor = true,
-            Color = ColorSettings.Neutral,
+            Color = new ColorSettings
+            {
+                Brightness = 0.5, Contrast = 1.0, Gamma = 1.0, Vibrance = 50,
+                Backend = ColorBackend.LowLevel, LockColor = true
+            },
             ApplyResolution = false
         },
+    };
+
+    /// <summary>Stretch resolution helpers + one vibrance color preset for Valorant seed.</summary>
+    public static List<QuickPreset> CreateValorantStretchPresets() => new()
+    {
+        StretchRes("valorant_1920x1080", "1920×1080 stretch", "1920x1080"),
+        StretchRes("valorant_1728x1080", "1728×1080 stretch", "1728x1080"),
+        StretchRes("valorant_1620x1080", "1620×1080 stretch", "1620x1080"),
+        StretchRes("valorant_1440x1080", "1440×1080 stretch", "1440x1080"),
+        new()
+        {
+            Id = "valorant_vibrance",
+            Name = "Vibrance+",
+            ApplyResolution = false,
+            ApplyColor = true,
+            Color = new ColorSettings
+            {
+                Brightness = 0.5, Contrast = 1.05, Gamma = 1.0, Vibrance = 80,
+                Backend = ColorBackend.Driver, LockColor = true
+            }
+        },
+    };
+
+    /// <summary>Optional stretch helpers for PUBG seed.</summary>
+    public static List<QuickPreset> CreatePubgStretchPresets() => new()
+    {
+        StretchRes("pubg_2560x1440", "2560×1440 stretch", "2560x1440"),
+        StretchRes("pubg_1920x1080", "1920×1080 stretch", "1920x1080"),
+    };
+
+    private static QuickPreset StretchRes(string id, string name, string resolution) => new()
+    {
+        Id = id,
+        Name = name,
+        ApplyResolution = true,
+        Resolution = resolution,
+        ApplyColor = false,
+        Color = ColorSettings.Neutral
     };
 
     public static string Normalize(string processName)

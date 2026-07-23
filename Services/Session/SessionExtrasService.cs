@@ -13,10 +13,16 @@ public sealed class SessionExtrasService : IDisposable
 {
     private SessionSnapshot? _snap;
 
+    /// <summary>Last non-fatal warning from Apply (DDC / isolate). Cleared at start of Apply.</summary>
+    public string? LastWarning { get; private set; }
+
     public void Apply(SessionExtras extras, string? resolution, string? displayDevice)
     {
         extras ??= new SessionExtras();
-        if (!HasAnyExtra(extras, resolution))
+        LastWarning = null;
+
+        bool isolate = ResolveIsolate(extras);
+        if (!HasAnyExtra(extras, resolution, isolate))
             return;
 
         try
@@ -44,15 +50,22 @@ public sealed class SessionExtrasService : IDisposable
                 AudioEndpoint.SetDefault(extras.AudioDeviceId!);
 
             if (extras.ApplyMonitorBrightness)
-                MonitorBrightness.Set(Math.Clamp(extras.MonitorBrightness, 0, 100));
+            {
+                if (!MonitorBrightness.Set(Math.Clamp(extras.MonitorBrightness, 0, 100)))
+                    LastWarning = "DDC brightness failed";
+            }
 
-            if (extras.IsolatePrimaryMonitor)
+            if (isolate)
             {
                 // One-shot: DisplayTopology keeps the original snapshot; never re-capture after isolate.
                 if (_snap != null && !_snap.TopologySaved)
                 {
                     if (DisplayTopology.IsolatePrimary())
                         _snap.TopologySaved = true;
+                    else
+                        LastWarning = string.IsNullOrWhiteSpace(LastWarning)
+                            ? "Isolate primary failed"
+                            : LastWarning + " · Isolate primary failed";
                 }
             }
 
@@ -77,17 +90,34 @@ public sealed class SessionExtrasService : IDisposable
         }
     }
 
-    private static bool HasAnyExtra(SessionExtras e, string? resolution) =>
+    /// <summary>
+    /// MonitorLayout isolatePrimary/primaryOnly ⇒ isolate; keepAll forces off;
+    /// otherwise use IsolatePrimaryMonitor flag.
+    /// </summary>
+    private static bool ResolveIsolate(SessionExtras e)
+    {
+        var layout = e.MonitorLayout?.Trim();
+        if (!string.IsNullOrWhiteSpace(layout))
+        {
+            if (string.Equals(layout, "keepAll", StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (string.Equals(layout, "isolatePrimary", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(layout, "primaryOnly", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return e.IsolatePrimaryMonitor;
+    }
+
+    private static bool HasAnyExtra(SessionExtras e, string? resolution, bool isolate) =>
         e.QuietNotifications
         || e.DisableAutoHdr
         || e.DisableNightLight
-        || e.IsolatePrimaryMonitor
+        || isolate
         || e.ApplyMonitorBrightness
         || (e.SwitchAudioDevice && !string.IsNullOrWhiteSpace(e.AudioDeviceId))
         || (!string.IsNullOrWhiteSpace(e.ScalingMode)
             && !string.Equals(e.ScalingMode, "default", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(resolution));
-
     public void Restore()
     {
         if (_snap == null) return;
@@ -257,40 +287,34 @@ public sealed class SessionExtrasService : IDisposable
         }
     }
 
-    // Best-effort Night Light via schedule intensity (may no-op on some builds)
+    // Night Light: one-way best-effort disable only (OS state cannot be read reliably).
     private static bool TryGetNightLight(out bool on)
     {
         on = false;
-        try
-        {
-            using var k = Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.settings\windows.data.bluelightreduction.settings");
-            on = k?.GetValue("Data") != null;
-            return false; // can't reliably read state
-        }
-        catch
-        {
-            return false;
-        }
+        return false;
     }
 
     private static void TrySetNightLight(bool on)
     {
+        if (on)
+        {
+            // We never captured prior state — refuse to guess "enable".
+            AppLog.Info("Night Light re-enable skipped (state unknown).");
+            return;
+        }
         try
         {
-            // Soft approach: set strength 0 when disabling by writing known-empty schedule preference
             using var k = Registry.CurrentUser.CreateSubKey(
                 @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\$$windows.data.bluelightreduction.bluelightreductionstate\windows.data.bluelightreduction.bluelightreductionstate");
-            if (!on && k != null)
+            if (k != null)
             {
-                // Minimal CBOR-like off blob used by several community tools (best-effort)
                 byte[] off =
                 {
                     0x43, 0x42, 0x01, 0x00, 0x0A, 0x02, 0x01, 0x00, 0x2A, 0x06,
                     0x24, 0xA9, 0x8A, 0xE5, 0xD5, 0x01, 0x00
                 };
                 k.SetValue("Data", off, RegistryValueKind.Binary);
-                AppLog.Info("Night Light disable attempted (best-effort).");
+                AppLog.Info("Night Light disable attempted (best-effort, one-way).");
             }
         }
         catch (Exception ex)
@@ -369,28 +393,42 @@ internal static class MonitorBrightness
         return result;
     }
 
-    public static void Set(int percent)
+    /// <returns>True if at least one monitor accepted the new brightness.</returns>
+    public static bool Set(int percent)
     {
         percent = Math.Clamp(percent, 0, 100);
-        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) =>
+        bool ok = false;
+        try
         {
-            uint n = 0;
-            if (!GetNumberOfPhysicalMonitorsFromHMONITOR(h, ref n) || n == 0) return true;
-            var arr = new PHYSICAL_MONITOR[n];
-            if (!GetPhysicalMonitorsFromHMONITOR(h, n, arr)) return true;
-            try
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) =>
             {
-                uint min = 0, cur = 0, max = 0;
-                if (GetMonitorBrightness(arr[0].hPhysicalMonitor, ref min, ref cur, ref max) && max > min)
+                uint n = 0;
+                if (!GetNumberOfPhysicalMonitorsFromHMONITOR(h, ref n) || n == 0) return true;
+                var arr = new PHYSICAL_MONITOR[n];
+                if (!GetPhysicalMonitorsFromHMONITOR(h, n, arr)) return true;
+                try
                 {
-                    uint val = min + (uint)Math.Round((max - min) * (percent / 100.0));
-                    SetMonitorBrightness(arr[0].hPhysicalMonitor, val);
-                    AppLog.Info($"Monitor brightness → {percent}%");
+                    uint min = 0, cur = 0, max = 0;
+                    if (GetMonitorBrightness(arr[0].hPhysicalMonitor, ref min, ref cur, ref max) && max > min)
+                    {
+                        uint val = min + (uint)Math.Round((max - min) * (percent / 100.0));
+                        if (SetMonitorBrightness(arr[0].hPhysicalMonitor, val))
+                        {
+                            ok = true;
+                            AppLog.Info($"Monitor brightness → {percent}%");
+                        }
+                    }
                 }
-            }
-            finally { DestroyPhysicalMonitors(n, arr); }
-            return true; // all monitors
-        }, IntPtr.Zero);
+                finally { DestroyPhysicalMonitors(n, arr); }
+                return true; // all monitors
+            }, IntPtr.Zero);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("MonitorBrightness.Set: " + ex.Message);
+            return false;
+        }
+        return ok;
     }
 }
 
@@ -512,9 +550,10 @@ internal static class DisplayTopology
     private static extern int SetDisplayConfig(int numPathArrayElements, byte[]? pathArray,
         int numModeInfoArrayElements, byte[]? modeInfoArray, uint flags);
 
-    // DISPLAYCONFIG_PATH_INFO is 72 bytes on x64; flags (UINT32) at offset 68.
-    private const int PathSize = 72;
-    private const int ModeSize = 64;
+    // DISPLAYCONFIG_PATH_INFO is 72 bytes on x64 (flags UINT32 at offset 68).
+    // On 32-bit layouts differ — isolate is skipped rather than corrupting topology.
+    private static readonly int PathSize = IntPtr.Size == 8 ? 72 : 0;
+    private static readonly int ModeSize = IntPtr.Size == 8 ? 64 : 0;
     private const int PathFlagsOffset = 68;
 
     /// <returns>True if isolate was applied (or already active).</returns>
@@ -522,6 +561,12 @@ internal static class DisplayTopology
     {
         try
         {
+            if (PathSize == 0)
+            {
+                AppLog.Info("Isolate primary skipped — unsupported process architecture.");
+                return false;
+            }
+
             if (_savedPaths != null)
             {
                 AppLog.Info("Isolate primary already active — skip re-capture.");
@@ -529,10 +574,12 @@ internal static class DisplayTopology
             }
 
             if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, out int pc, out int mc) != 0) return false;
-            var paths = new byte[pc * PathSize];
-            var modes = new byte[mc * ModeSize];
+            if (pc <= 0 || mc < 0) return false;
+            var paths = new byte[checked(pc * PathSize)];
+            var modes = new byte[checked(Math.Max(mc, 1) * ModeSize)];
             int pcr = pc, mcr = mc;
             if (QueryDisplayConfig(QDC_ALL_PATHS, ref pcr, paths, ref mcr, modes, IntPtr.Zero) != 0) return false;
+            if (pcr <= 0 || paths.Length < pcr * PathSize) return false;
 
             _savedPaths = (byte[])paths.Clone();
             _savedModes = (byte[])modes.Clone();

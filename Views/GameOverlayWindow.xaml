@@ -142,6 +142,9 @@
                 <Slider x:Name="SldPanelOpacity" Minimum="0.55" Maximum="1" Value="0.92" TickFrequency="0.01"
                         ValueChanged="PanelOpacity_Changed" Margin="0,0,0,8"/>
 
+                <CheckBox x:Name="ChkLockColor" Content="Lock color while game running" Margin="0,0,0,8"
+                          Foreground="{DynamicResource TextBrush}"/>
+
                 <UniformGrid Columns="2" Margin="0,0,0,4">
                     <Button x:Name="BtnApply" Content="Save to Profile" Style="{StaticResource CompactAccentButton}"
                             Margin="0,0,4,4" Click="Apply_Click"/>

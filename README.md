@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Per-game display profiles for Windows</strong><br>
-  Automatically switch resolution, power plan, and color when a game starts — and restore everything when it exits.
+  Automatically switch resolution, power plan, and color when a game starts â€” and restore everything when it exits.
 </p>
 
 <p align="center">
@@ -17,9 +17,9 @@
 </p>
 
 <p align="center">
-  <a href="#download">Download</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#how-it-works">How it works</a> ·
+  <a href="#download">Download</a> Â·
+  <a href="#features">Features</a> Â·
+  <a href="#how-it-works">How it works</a> Â·
   <a href="#build-from-source">Build</a>
 </p>
 
@@ -30,7 +30,7 @@
 | File | What it is |
 |------|------------|
 | **[DisplayProfileManager-Setup.exe](https://github.com/Naki-404/DisplayProfileManager/releases/latest)** | Recommended installer (Start Menu + Apps and Features uninstall) |
-| **DisplayProfileManager.exe** + **QRes.exe** | Portable — unpack and run |
+| **DisplayProfileManager.exe** + **QRes.exe** | Portable â€” unpack and run |
 
 **Requirement:** [.NET Desktop Runtime 6+](https://aka.ms/dotnet/6.0/windowsdesktop-runtime-win-x64.exe) (x64).  
 The installer detects a missing runtime and opens the download page for you.
@@ -51,16 +51,16 @@ Config (profiles, preferences):
 
 ## Features
 
-- **Per-game profiles** — resolution, Windows power plan, brightness / contrast / gamma
-- **Auto apply** — watches for the game process, applies the profile, restores defaults on exit
-- **Game scanner** — find installed / running games, or add an `.exe` manually
-- **Companions** — launch helper apps with the game (and stop them afterward)
-- **Hotkey presets** — per-game color tweaks while the game is running
-- **Tray mode** — close to tray, quick presets from the tray menu
-- **Themes** — dark, light, or a fully custom color palette
-- **EN / RU** — language switch in Settings or the first-run wizard
-- **Import / export** — share or back up your `profiles.json`
-- **Compact** — single-file build (~3 MB setup), no loose asset folders
+- **Per-game profiles** â€” resolution, Windows power plan, brightness / contrast / gamma
+- **Auto apply** â€” watches for the game process, applies the profile, restores defaults on exit
+- **Game scanner** â€” find installed / running games, or add an `.exe` manually
+- **Companions** â€” launch helper apps with the game (and stop them afterward)
+- **Hotkey presets** â€” per-game color tweaks while the game is running
+- **Tray mode** â€” close to tray, quick presets from the tray menu
+- **Themes** â€” dark, light, or a fully custom color palette
+- **EN / RU** â€” language switch in Settings or the first-run wizard
+- **Import / export** â€” share or back up your `profiles.json`
+- **Compact** â€” single-file build (~3 MB setup), no loose asset folders
 
 > Display changes use the Windows API (`ChangeDisplaySettingsEx`).  
 > `QRes.exe` is only a tiny fallback if the API call fails.
@@ -79,7 +79,7 @@ Config (profiles, preferences):
 1. **Scan** or add games you care about.
 2. For each profile: enable it, set resolution / power plan / color.
 3. Leave the app running in the tray (optional autostart).
-4. Launch the game as usual — the profile applies automatically.
+4. Launch the game as usual â€” the profile applies automatically.
 
 Nothing is injected into games. The app only changes **PC display and power settings**.
 
@@ -128,10 +128,20 @@ Requires the .NET 6 SDK (or newer) with Windows Desktop workload.
 
 ```text
 DisplayProfileManager/
-├── Assets/                 # Embedded images and icon
-├── Services/               # Display engine, watcher, config, themes
+├── App.xaml / AppServices.cs
+├── Assets/                 # Embedded images, icon, sounds
+├── Models/                 # AppConfig and related models
+├── Views/                  # Main windows and dialogs
+├── Controls/               # Reusable overlays / hints
+├── Services/
+│   ├── Display/            # Resolution, color, GPU drivers
+│   ├── Session/            # Snapshots, watchers, companions
+│   ├── Config/             # profiles.json, packs, game catalog
+│   ├── Input/              # Hotkeys
+│   ├── Ui/                 # Themes, localization, helpers
+│   └── System/             # Logging, autostart, sysinfo
 ├── Installer/              # Compact Windows setup project
-├── build-release.ps1       # One-shot publish script
+├── build-release.ps1
 └── DisplayProfileManager.csproj
 ```
 
@@ -141,13 +151,13 @@ DisplayProfileManager/
 
 - Config stays on your PC under `%AppData%`
 - No telemetry, no accounts, no cloud sync
-- Safe for anti-cheat: system settings only — no game memory / input hooks
+- Safe for anti-cheat: system settings only â€” no game memory / input hooks
 
 ---
 
 ## Author
 
-**nakidev** · [Naki-404](https://github.com/Naki-404)
+**nakidev** Â· [Naki-404](https://github.com/Naki-404)
 
 ---
 

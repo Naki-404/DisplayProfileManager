@@ -59,6 +59,7 @@
 
                     <TextBlock x:Name="LblOverlay" Text="Live overlay" FontWeight="SemiBold" Margin="0,16,0,8"/>
                     <CheckBox x:Name="ChkOverlayAuto" Content="Show overlay when a game starts"/>
+                    <CheckBox x:Name="ChkOverlayHotkeyOnly" Content="Hotkey-only overlay (compact pill)" Margin="0,4,0,0"/>
                     <TextBlock x:Name="LblOverlayHint" Text="Compact topmost panel with live color sliders over the game."
                                FontSize="11" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
 
