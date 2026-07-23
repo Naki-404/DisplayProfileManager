@@ -7,6 +7,8 @@ Installer/obj/
 Installer/payload/
 Installer/_payload-stage/
 Installer/payload.zip
+_shot/
+_IconGen/
 *.user
 *.suo
 .vs/
