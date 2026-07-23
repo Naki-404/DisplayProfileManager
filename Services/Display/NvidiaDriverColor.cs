@@ -5,9 +5,9 @@ using DisplayProfileManager.Models;
 namespace DisplayProfileManager.Services;
 
 /// <summary>
-/// NVIDIA NvAPI â€” Digital Vibrance (saturation) only.
+/// NVIDIA NvAPI - Digital Vibrance (saturation) and HUE offset.
 /// Brightness/contrast/gamma match NVIDIA Control Panel via SetDeviceGammaRamp
-/// (see NvidiaControlPanelRamp) â€” public NVAPI has no CP gamma setters.
+/// (see NvidiaControlPanelRamp) - public NVAPI has no CP gamma setters.
 /// </summary>
 internal sealed class NvidiaDriverColor : IDisposable
 {
@@ -15,6 +15,7 @@ internal sealed class NvidiaDriverColor : IDisposable
     private bool _initialized;
     private Display? _display;
     private double _baselineNormalized;
+    private int _baselineHue;
 
     public bool IsAvailable => _ready;
 
@@ -33,6 +34,8 @@ internal sealed class NvidiaDriverColor : IDisposable
                        ?? throw new InvalidOperationException("No NVIDIA display");
             var dvc = _display.DigitalVibranceControl;
             _baselineNormalized = dvc.NormalizedLevel;
+            try { _baselineHue = _display.HUEControl.CurrentAngle; }
+            catch (Exception hueEx) { AppLog.Info("NVIDIA HUE baseline unavailable: " + hueEx.Message); }
             _ready = true;
             AppLog.Info($"NVIDIA NvAPI ready: DVC baseline={_baselineNormalized:F2} (norm), range {dvc.MinimumLevel}..{dvc.MaximumLevel}");
             return true;
@@ -52,17 +55,58 @@ internal sealed class NvidiaDriverColor : IDisposable
         {
             double n = _display!.DigitalVibranceControl.NormalizedLevel;
             _baselineNormalized = n; // keep baseline fresh
-            return new DriverColorSnapshot
+            var snap = new DriverColorSnapshot
             {
                 Vendor = "nvidia",
                 VibranceLevel = (int)Math.Round(n * 1000),
                 NormalizedVibrance = (float)n
             };
+            if (TryGetHue(out int hue))
+            {
+                _baselineHue = hue;
+                snap.HueAngle = hue;
+            }
+            return snap;
         }
         catch (Exception ex)
         {
             AppLog.Error("NVIDIA capture failed: " + ex.Message);
             return null;
+        }
+    }
+
+    /// <summary>Read the current NVIDIA HUE offset angle (0..359). False if unavailable.</summary>
+    public bool TryGetHue(out int hue)
+    {
+        hue = 0;
+        if (!_ready && !TryInit()) return false;
+        try
+        {
+            hue = _display!.HUEControl.CurrentAngle;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Info("NVIDIA HUE read not available: " + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>Set the NVIDIA HUE offset angle (0..359, wraps). False if unavailable.</summary>
+    public bool TrySetHue(int hue)
+    {
+        if (!_ready && !TryInit()) return false;
+        try
+        {
+            hue = ((hue % 360) + 360) % 360;
+            _display!.HUEControl.CurrentAngle = hue;
+            AppLog.Info($"NVIDIA HUE -> {hue} deg");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Info("NVIDIA HUE set not available: " + ex.Message);
+            return false;
         }
     }
 
@@ -79,7 +123,7 @@ internal sealed class NvidiaDriverColor : IDisposable
             vibrancePercent = Math.Clamp(vibrancePercent, 0, 100);
             double normalized = MapVibrancePercent(vibrancePercent, _baselineNormalized);
             _display!.DigitalVibranceControl.NormalizedLevel = normalized;
-            AppLog.Info($"NVIDIA Digital Vibrance â†’ {normalized:F2} (UI {vibrancePercent}%, baseline {_baselineNormalized:F2})");
+            AppLog.Info($"NVIDIA Digital Vibrance -> {normalized:F2} (UI {vibrancePercent}%, baseline {_baselineNormalized:F2})");
         }
         catch (Exception ex)
         {
@@ -104,6 +148,8 @@ internal sealed class NvidiaDriverColor : IDisposable
             double n = snap.NormalizedVibrance
                        ?? (snap.VibranceLevel.HasValue ? snap.VibranceLevel.Value / 1000.0 : _baselineNormalized);
             _display!.DigitalVibranceControl.NormalizedLevel = Math.Clamp(n, -1.0, 1.0);
+            if (snap.HueAngle is int hue)
+                TrySetHue(hue);
             AppLog.Info("NVIDIA Digital Vibrance restored.");
         }
         catch (Exception ex)
@@ -133,14 +179,14 @@ internal sealed class NvidiaDriverColor : IDisposable
 internal static class NvidiaControlPanelRamp
 {
     /// <summary>
-    /// DPM ColorSettings â†’ NVIDIA CP curve.
-    /// Brightness 0..1 (0.5 neutral), Contrast 0..2 (1.0 neutral â†’ CP 0.5),
+    /// DPM ColorSettings -> NVIDIA CP curve.
+    /// Brightness 0..1 (0.5 neutral), Contrast 0..2 (1.0 neutral -> CP 0.5),
     /// Gamma clamped to CP range 0.4..2.8.
     /// </summary>
     public static void Fill(ushort[] red, ushort[] green, ushort[] blue, ColorSettings color)
     {
         double brightness = Math.Clamp(color.Brightness, 0.0, 1.0);           // 0.5 = neutral
-        double contrastCp = Math.Clamp(color.Contrast / 2.0, 0.0, 1.0);       // 1.0 â†’ 0.5
+        double contrastCp = Math.Clamp(color.Contrast / 2.0, 0.0, 1.0);       // 1.0 -> 0.5
         double gamma = Math.Clamp(color.Gamma, 0.4, 2.8);
 
         FillRaw(red, green, blue, brightness, contrastCp, gamma);
@@ -160,7 +206,7 @@ internal static class NvidiaControlPanelRamp
         const int dataPoints = 256;
 
         gamma = Math.Clamp(gamma, 0.4, 2.8);
-        // Normalize contrast & brightness to âˆ’1..1 around 0.5
+        // Normalize contrast & brightness to -1..1 around 0.5
         contrast = (Math.Clamp(contrast, 0.0, 1.0) - 0.5) * 2.0;
         brightness = (Math.Clamp(brightness, 0.0, 1.0) - 0.5) * 2.0;
 

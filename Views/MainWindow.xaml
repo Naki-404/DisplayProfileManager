@@ -9,6 +9,7 @@
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         ResizeMode="CanResize"
+        Icon="pack://application:,,,/Assets/app.ico"
         Background="{DynamicResource BgBrush}"
         Foreground="{DynamicResource TextBrush}"
         Loaded="Window_Loaded"
@@ -36,11 +37,11 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                <TextBlock x:Name="TitleAppName" Text="Display Profile Manager" FontSize="12" FontWeight="SemiBold"
+                <TextBlock x:Name="TitleAppName" Text="DPM" FontSize="12" FontWeight="SemiBold"
                            Foreground="{DynamicResource TextBrush}" VerticalAlignment="Center"/>
-                <TextBlock x:Name="StatusText" Text="Monitoring" Margin="12,0,0,0" FontSize="11"
+                <TextBlock x:Name="StatusText" Text="Monitoring" Margin="12,0,0,0" FontSize="11" Opacity="0.75"
                            Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
-                <Border x:Name="ActivePill" Margin="12,0,0,0" Padding="10,3" CornerRadius="10"
+                <Border x:Name="ActivePill" Margin="12,0,0,0" Padding="10,3" CornerRadius="6"
                         Background="{DynamicResource PillBgBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                         VerticalAlignment="Center">
                     <TextBlock x:Name="ActiveHeaderText" Text="No game active" FontSize="11"
@@ -75,9 +76,8 @@
             </StackPanel>
         </Grid>
 
-        <Grid x:Name="ContentRoot" Grid.Row="1" Margin="18,10,18,14" Background="{DynamicResource BgBrush}">
+        <Grid x:Name="ContentRoot" Grid.Row="1" Margin="20,16,20,16" Background="{DynamicResource BgBrush}">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -85,18 +85,220 @@
 
         <DockPanel Grid.Row="0" Margin="0,0,0,4">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock x:Name="LblUnsaved" Text="Unsaved changes" Foreground="{DynamicResource AccentBrush}"
+                           FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0" Visibility="Collapsed"/>
                 <Button x:Name="BtnApply" Content="Apply" Style="{StaticResource AccentButton}" Margin="0,0,8,0" Click="Apply_Click"/>
-                <local:InfoHint x:Name="InfoApply" Margin="0,0,10,0"/>
-                <Button x:Name="BtnEmergency" Content="Emergency Restore" Style="{StaticResource GhostButton}" Click="EmergencyRestore_Click"
+                <Button x:Name="BtnEmergency" Content="Reset display" Style="{StaticResource CompactGhostButton}"
+                        MinHeight="34" Padding="14,0" FontSize="12" Click="EmergencyRestore_Click"
                         ToolTip="Restores display, color, power, and session settings to a safe state."/>
-                <local:InfoHint x:Name="InfoEmergency" Margin="8,0,0,0"/>
             </StackPanel>
         </DockPanel>
 
-        <local:TabBuddy x:Name="TabMascot" Grid.Row="1" Margin="0,0,0,6" Panel.ZIndex="50"/>
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="1">
             <TabControl x:Name="MainTabs">
-            <TabItem x:Name="TabProfiles" Header="Profiles">
+            <TabItem x:Name="TabPlay" Header="Play">
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="280"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0" Background="{DynamicResource PanelBrush}" CornerRadius="12" Padding="20">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock x:Name="LblPlayTitle" Grid.Row="0" Text="Now playing" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+                            <StackPanel Grid.Row="1" Margin="0,0,0,12">
+                                <TextBlock x:Name="TxtPlayName" Text="No game selected" FontWeight="SemiBold" FontSize="14"
+                                           Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="TxtPlayProcess" Text="" FontSize="11" Foreground="{DynamicResource MutedBrush}"
+                                           Margin="0,4,0,8" TextTrimming="CharacterEllipsis"/>
+                                <Border Background="{DynamicResource PillBgBrush}" CornerRadius="6" Padding="10,4" HorizontalAlignment="Left">
+                                    <TextBlock x:Name="TxtPlayStatus" Text="Idle" FontSize="11" Foreground="{DynamicResource AccentHoverBrush}"/>
+                                </Border>
+                            </StackPanel>
+
+                            <ListBox x:Name="PlayGameList" Grid.Row="2" Margin="0,0,0,12" SelectionChanged="PlayGameList_SelectionChanged">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border CornerRadius="8" Padding="8,7" Background="{Binding TileBrush}" MinHeight="48">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="36"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Border Width="32" Height="32" CornerRadius="7" Background="{DynamicResource FieldBrush}"
+                                                        Opacity="0.85" VerticalAlignment="Center">
+                                                    <Grid>
+                                                        <Image Source="{Binding Icon}" Width="28" Height="28"
+                                                               Stretch="Uniform"
+                                                               Visibility="{Binding Icon, Converter={StaticResource NullToVis}}"/>
+                                                        <TextBlock Text="{Binding Glyph}" FontWeight="Bold" FontSize="12"
+                                                                   Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"
+                                                                   Visibility="{Binding Icon, Converter={StaticResource InvNullToVis}}"/>
+                                                    </Grid>
+                                                </Border>
+                                                <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Text="{Binding ProcessName}" Foreground="{DynamicResource MutedBrush}" FontSize="10"
+                                                               Opacity="0.85" TextTrimming="CharacterEllipsis"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,4">
+                                <Button x:Name="BtnPlayLaunch" Content="Launch game" Style="{StaticResource CompactAccentButton}"
+                                        Margin="0,0,8,0" Click="PlayLaunch_Click"
+                                        ToolTip="Start this game's exe (set path via Browse or Scan)"/>
+                                <Button x:Name="BtnPlayOverlay" Content="Live overlay" Style="{StaticResource CompactGhostButton}"
+                                        Click="PlayOverlay_Click"
+                                        ToolTip="Floating panel over the game — sliders apply color live"/>
+                            </StackPanel>
+
+                            <Expander Grid.Row="4" x:Name="ExpPlaySession" Header="Session options" IsExpanded="False" Margin="0,10,0,0">
+                                <StackPanel Margin="0,10,0,0">
+                                    <DockPanel>
+                                        <local:InfoHint x:Name="InfoPlaySoftAltTab" DockPanel.Dock="Right"/>
+                                        <CheckBox x:Name="ChkPlaySoftAltTab" Content="Soft restore on Alt-Tab" VerticalAlignment="Center"
+                                                  Checked="PlaySoftAltTab_Changed" Unchecked="PlaySoftAltTab_Changed"/>
+                                    </DockPanel>
+                                    <DockPanel Margin="0,12,0,4">
+                                        <local:InfoHint x:Name="InfoPlayFps" DockPanel.Dock="Right"/>
+                                        <TextBlock x:Name="LblPlayFps" Text="FPS limit (NVIDIA only)" Foreground="{DynamicResource MutedBrush}"
+                                                   VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                    <ComboBox x:Name="CmbPlayFps" IsEditable="True" SelectionChanged="PlayFps_Changed" LostFocus="PlayFps_LostFocus">
+                                        <ComboBoxItem Content="(off)" Tag="0" IsSelected="True"/>
+                                        <ComboBoxItem Content="30" Tag="30"/>
+                                        <ComboBoxItem Content="60" Tag="60"/>
+                                        <ComboBoxItem Content="120" Tag="120"/>
+                                        <ComboBoxItem Content="144" Tag="144"/>
+                                        <ComboBoxItem Content="240" Tag="240"/>
+                                    </ComboBox>
+                                </StackPanel>
+                            </Expander>
+                        </Grid>
+                    </Border>
+
+                    <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False" PanningMode="VerticalOnly">
+                        <Border Background="{DynamicResource PanelBrush}" CornerRadius="12" Padding="20">
+                            <StackPanel x:Name="PlayEditor">
+                                <TextBlock x:Name="LblPlayColor" Text="Live color" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="LblPlayColorHint"
+                                           Text="Sliders apply instantly — pick a preset chip to edit it live."
+                                           Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                                <Grid Margin="0,0,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="44"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LblPlayB" Text="Bright 50%" VerticalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource MutedBrush}"/>
+                                    <Slider Grid.Column="1" x:Name="SldPlayB" Minimum="0" Maximum="1" TickFrequency="0.01"
+                                            IsSnapToTickEnabled="True" ValueChanged="PlaySlider_ValueChanged"/>
+                                    <TextBlock Grid.Column="2" x:Name="ValPlayB" Text="50" FontSize="10" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                                </Grid>
+                                <Grid Margin="0,4,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="44"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LblPlayC" Text="Contr 50%" VerticalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource MutedBrush}"/>
+                                    <Slider Grid.Column="1" x:Name="SldPlayC" Minimum="0" Maximum="2" TickFrequency="0.01"
+                                            IsSnapToTickEnabled="True" ValueChanged="PlaySlider_ValueChanged"/>
+                                    <TextBlock Grid.Column="2" x:Name="ValPlayC" Text="50" FontSize="10" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                                </Grid>
+                                <Grid Margin="0,4,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="44"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LblPlayG" Text="Gamma 1.00" VerticalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource MutedBrush}"/>
+                                    <Slider Grid.Column="1" x:Name="SldPlayG" Minimum="0.5" Maximum="6" TickFrequency="0.01"
+                                            IsSnapToTickEnabled="True" ValueChanged="PlaySlider_ValueChanged"/>
+                                    <TextBlock Grid.Column="2" x:Name="ValPlayG" Text="1.00" FontSize="10" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                                </Grid>
+                                <Grid Margin="0,4,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="44"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LblPlayV" Text="Vibr 50" VerticalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource MutedBrush}"/>
+                                    <Slider Grid.Column="1" x:Name="SldPlayV" Minimum="0" Maximum="100" TickFrequency="1"
+                                            IsSnapToTickEnabled="True" ValueChanged="PlaySlider_ValueChanged"/>
+                                    <TextBlock Grid.Column="2" x:Name="ValPlayV" Text="50" FontSize="10" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                                </Grid>
+                                <Grid Margin="0,4,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="44"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LblPlayH" Text="Hue 0°" VerticalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               ToolTip="NVIDIA/AMD hue rotation — driver backend only"/>
+                                    <Slider Grid.Column="1" x:Name="SldPlayH" Minimum="0" Maximum="359" TickFrequency="1"
+                                            IsSnapToTickEnabled="True" ValueChanged="PlaySlider_ValueChanged"/>
+                                    <TextBlock Grid.Column="2" x:Name="ValPlayH" Text="0" FontSize="10" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                                </Grid>
+                                <Grid Margin="0,4,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="44"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="LblPlayS" Text="Shadow 0" VerticalAlignment="Center" FontSize="11"
+                                               Foreground="{DynamicResource MutedBrush}"
+                                               ToolTip="Shadow Boost — lifts dark areas while preserving highlights"/>
+                                    <Slider Grid.Column="1" x:Name="SldPlayS" Minimum="0" Maximum="100" TickFrequency="1"
+                                            IsSnapToTickEnabled="True" ValueChanged="PlaySlider_ValueChanged"/>
+                                    <TextBlock Grid.Column="2" x:Name="ValPlayS" Text="0" FontSize="10" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                                </Grid>
+
+                                <TextBlock x:Name="LblPlayPresets" Text="Presets" FontWeight="SemiBold" Margin="0,4,0,6"/>
+                                <WrapPanel x:Name="PlayPresetChips" Margin="0,0,0,4"/>
+
+                                <Expander x:Name="ExpPlayHotkeys" Header="Hotkeys" IsExpanded="False" Margin="0,8,0,0">
+                                    <StackPanel Margin="0,8,0,0">
+                                        <TextBlock x:Name="TxtPlayHotkeys" Text="" Foreground="{DynamicResource MutedBrush}"
+                                                   FontSize="11" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Expander>
+                            </StackPanel>
+                        </Border>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="TabProfiles" Header="Library">
                 <Grid Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="270"/>
@@ -124,7 +326,7 @@
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                    <Button x:Name="BtnDup" Content="Dup" Style="{StaticResource CompactGhostButton}" Margin="0,0,6,0"
+                                    <Button x:Name="BtnDup" Content="Duplicate" Style="{StaticResource CompactGhostButton}" Margin="0,0,6,0"
                                             MinWidth="48" HorizontalAlignment="Left" Click="DupProfile_Click"/>
                                     <Button x:Name="BtnDelete" Content="Delete" Style="{StaticResource CompactGhostButton}"
                                             MinWidth="56" HorizontalAlignment="Left" Click="DeleteProfile_Click"/>
@@ -147,22 +349,22 @@
                                                     <ColumnDefinition Width="36"/>
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
-                                                <Border Width="32" Height="32" CornerRadius="7" Background="#66000000"
-                                                        VerticalAlignment="Center">
+                                                <Border Width="32" Height="32" CornerRadius="7" Background="{DynamicResource FieldBrush}"
+                                                        Opacity="0.85" VerticalAlignment="Center">
                                                     <Grid>
                                                         <Image Source="{Binding Icon}" Width="28" Height="28"
                                                                Stretch="Uniform"
                                                                Visibility="{Binding Icon, Converter={StaticResource NullToVis}}"/>
                                                         <TextBlock Text="{Binding Glyph}" FontWeight="Bold" FontSize="12"
-                                                                   Foreground="#F8EAF0" HorizontalAlignment="Center"
+                                                                   Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center"
                                                                    VerticalAlignment="Center"
                                                                    Visibility="{Binding Icon, Converter={StaticResource InvNullToVis}}"/>
                                                     </Grid>
                                                 </Border>
                                                 <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="#FFF8F4"
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"
                                                                TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Text="{Binding ProcessName}" Foreground="#E8D0D8" FontSize="10"
+                                                    <TextBlock Text="{Binding ProcessName}" Foreground="{DynamicResource MutedBrush}" FontSize="10"
                                                                Opacity="0.85" TextTrimming="CharacterEllipsis"/>
                                                 </StackPanel>
                                             </Grid>
@@ -210,7 +412,6 @@
                                 <Separator/>
                                 <TextBlock Text="Display" FontWeight="SemiBold" Margin="0,0,0,8"/>
                                 <DockPanel Margin="0,0,0,0">
-                                    <local:InfoHint x:Name="InfoRes" DockPanel.Dock="Right"/>
                                     <CheckBox x:Name="ChkApplyRes" Content="Change resolution" VerticalAlignment="Center"
                                               Checked="EditorChanged" Unchecked="EditorChanged"/>
                                 </DockPanel>
@@ -223,13 +424,12 @@
                                 <TextBlock x:Name="LblDisplay" Text="Monitor" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
                                 <ComboBox x:Name="CmbDisplay" SelectionChanged="EditorChanged"/>
                                 <DockPanel Margin="0,12,0,0">
-                                    <local:InfoHint x:Name="InfoPower" DockPanel.Dock="Right"/>
                                     <CheckBox x:Name="ChkApplyPower" Content="Change power plan" VerticalAlignment="Center"
                                               Checked="EditorChanged" Unchecked="EditorChanged"/>
                                 </DockPanel>
                                 <ComboBox x:Name="CmbPower" Margin="0,6,0,0" SelectionChanged="EditorChanged">
-                                    <ComboBoxItem Content="highPerformance" Tag="highPerformance"/>
-                                    <ComboBoxItem Content="balanced" Tag="balanced"/>
+                                    <ComboBoxItem Content="High performance" Tag="highPerformance"/>
+                                    <ComboBoxItem Content="Balanced" Tag="balanced"/>
                                     <ComboBoxItem Content="(don't change)" Tag=""/>
                                 </ComboBox>
                                 <TextBlock x:Name="LblStartupPreset" Text="Startup preset" Margin="0,12,0,4" Foreground="{DynamicResource MutedBrush}"/>
@@ -239,92 +439,116 @@
                                 <TextBlock x:Name="LblAliases" Text="Process aliases (comma-separated)" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
                                 <TextBox x:Name="TxtAliases" TextChanged="EditorChanged"
                                          ToolTip="Extra .exe names that also activate this profile"/>
-                                <TextBlock x:Name="LblApplyDelay" Text="Apply delay: 0 s" Margin="0,10,0,4" Foreground="{DynamicResource MutedBrush}"/>
-                                <Slider x:Name="SldApplyDelay" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True"
-                                        ValueChanged="ColorSlider_ValueChanged"/>
-                                <CheckBox x:Name="ChkApplyOnFocus" Content="Wait for game window focus" Margin="0,8,0,0"
-                                          Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                <DockPanel Margin="0,12,0,4">
-                                    <local:InfoHint x:Name="InfoRestoreMode" DockPanel.Dock="Right"/>
-                                    <TextBlock x:Name="LblRestoreMode" Text="On game exit" Foreground="{DynamicResource MutedBrush}"
-                                               VerticalAlignment="Center"/>
-                                </DockPanel>
-                                <ComboBox x:Name="CmbRestoreMode" SelectionChanged="EditorChanged">
-                                    <ComboBoxItem Content="Restore previous snapshot" Tag="PreviousSnapshot" IsSelected="True"/>
-                                    <ComboBoxItem Content="Restore Global Defaults" Tag="GlobalDefaults"/>
-                                    <ComboBoxItem Content="Do nothing" Tag="DoNothing"/>
-                                </ComboBox>
+
+                                <Expander x:Name="ExpAdvanced" Header="Advanced" IsExpanded="False" Margin="0,12,0,0">
+                                    <StackPanel Margin="0,10,0,0">
+                                        <TextBlock x:Name="LblApplyDelay" Text="Apply delay: 0 s" Margin="0,0,0,4" Foreground="{DynamicResource MutedBrush}"/>
+                                        <Slider x:Name="SldApplyDelay" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                ValueChanged="ColorSlider_ValueChanged"/>
+                                        <CheckBox x:Name="ChkApplyOnFocus" Content="Wait for game window focus" Margin="0,8,0,0"
+                                                  Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                        <DockPanel Margin="0,8,0,0">
+                                            <local:InfoHint x:Name="InfoSoftAltTab" DockPanel.Dock="Right"/>
+                                            <CheckBox x:Name="ChkSoftAltTab" Content="Soft restore on Alt-Tab" VerticalAlignment="Center"
+                                                      Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                        </DockPanel>
+                                        <DockPanel Margin="0,12,0,4">
+                                            <local:InfoHint x:Name="InfoFpsLimit" DockPanel.Dock="Right"/>
+                                            <TextBlock x:Name="LblFpsLimit" Text="FPS limit (NVIDIA only)" Foreground="{DynamicResource MutedBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </DockPanel>
+                                        <ComboBox x:Name="CmbFpsLimit" IsEditable="True" SelectionChanged="EditorChanged" LostFocus="FpsLimit_LostFocus">
+                                            <ComboBoxItem Content="(off)" Tag="0" IsSelected="True"/>
+                                            <ComboBoxItem Content="30" Tag="30"/>
+                                            <ComboBoxItem Content="60" Tag="60"/>
+                                            <ComboBoxItem Content="120" Tag="120"/>
+                                            <ComboBoxItem Content="144" Tag="144"/>
+                                            <ComboBoxItem Content="240" Tag="240"/>
+                                        </ComboBox>
+                                        <TextBlock x:Name="LblFpsLimitHint" Text="Requires an NVIDIA GPU (driver DRS) — hidden/no-op otherwise."
+                                                   Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        <DockPanel Margin="0,12,0,4">
+                                            <local:InfoHint x:Name="InfoRestoreMode" DockPanel.Dock="Right"/>
+                                            <TextBlock x:Name="LblRestoreMode" Text="On game exit" Foreground="{DynamicResource MutedBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </DockPanel>
+                                        <ComboBox x:Name="CmbRestoreMode" SelectionChanged="EditorChanged">
+                                            <ComboBoxItem Content="Restore previous snapshot" Tag="PreviousSnapshot" IsSelected="True"/>
+                                            <ComboBoxItem Content="Restore Global Defaults" Tag="GlobalDefaults"/>
+                                            <ComboBoxItem Content="Do nothing" Tag="DoNothing"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                </Expander>
 
                                 <Separator/>
                                 <DockPanel Margin="0,0,0,6">
-                                    <local:InfoHint x:Name="InfoSession" DockPanel.Dock="Right"/>
-                                    <TextBlock x:Name="LblSessionTitle" Text="Session extras" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    <Button x:Name="BtnOpenPresets" DockPanel.Dock="Right" Content="Open Presets"
+                                            Style="{StaticResource CompactAccentButton}" MinWidth="110" Click="OpenPresets_Click"/>
+                                    <TextBlock Text="Color" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                 </DockPanel>
-                                <TextBlock x:Name="LblSessionSub" Text="System-only tweaks (no game injection)" FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,6"/>
-                                <TextBlock x:Name="LblSessionTemplates" Text="Templates" FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,4"/>
-                                <UniformGrid Columns="3" Margin="0,0,0,8">
-                                    <Button x:Name="BtnTplCompetitive" Content="Competitive" Style="{StaticResource CompactGhostButton}"
-                                            Margin="0,0,4,0" Click="SessionTemplateCompetitive_Click"/>
-                                    <Button x:Name="BtnTplImmersive" Content="Immersive" Style="{StaticResource CompactGhostButton}"
-                                            Margin="2,0,2,0" Click="SessionTemplateImmersive_Click"/>
-                                    <Button x:Name="BtnTplMinimal" Content="Minimal" Style="{StaticResource CompactGhostButton}"
-                                            Margin="4,0,0,0" Click="SessionTemplateMinimal_Click"/>
-                                </UniformGrid>
-                                <TextBlock x:Name="LblMonitorLayout" Text="Monitor layout" Margin="0,0,0,4" Foreground="{DynamicResource MutedBrush}"/>
-                                <ComboBox x:Name="CmbMonitorLayout" Margin="0,0,0,8" SelectionChanged="MonitorLayout_Changed">
-                                    <ComboBoxItem Content="Keep all monitors" Tag="keepAll" IsSelected="True"/>
-                                    <ComboBoxItem Content="Isolate primary" Tag="isolatePrimary"/>
-                                    <ComboBoxItem Content="Primary only" Tag="primaryOnly"/>
-                                </ComboBox>
-                                <DockPanel>
-                                    <local:InfoHint x:Name="InfoDeferred" DockPanel.Dock="Right"/>
-                                    <TextBlock x:Name="LblDeferred" Text="Deferred re-apply: 0 s" Foreground="{DynamicResource MutedBrush}"
-                                               VerticalAlignment="Center"/>
-                                </DockPanel>
-                                <Slider x:Name="SldDeferred" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
-                                <DockPanel Margin="0,8,0,0">
-                                    <local:InfoHint x:Name="InfoQuiet" DockPanel.Dock="Right"/>
-                                    <CheckBox x:Name="ChkQuietToast" Content="Quiet notifications" VerticalAlignment="Center"
-                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                </DockPanel>
-                                <DockPanel Margin="0,4,0,0">
-                                    <local:InfoHint x:Name="InfoNight" DockPanel.Dock="Right"/>
-                                    <CheckBox x:Name="ChkNoNightLight" Content="Disable Night Light" VerticalAlignment="Center"
-                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                </DockPanel>
-                                <DockPanel Margin="0,4,0,0">
-                                    <local:InfoHint x:Name="InfoHdr" DockPanel.Dock="Right"/>
-                                    <CheckBox x:Name="ChkNoAutoHdr" Content="Disable Auto HDR" VerticalAlignment="Center"
-                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                </DockPanel>
-                                <DockPanel Margin="0,4,0,0">
-                                    <local:InfoHint x:Name="InfoPrimary" DockPanel.Dock="Right"/>
-                                    <CheckBox x:Name="ChkIsolateMon" Content="Primary monitor only" VerticalAlignment="Center"
-                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                </DockPanel>
-                                <DockPanel Margin="0,4,0,0">
-                                    <local:InfoHint x:Name="InfoMonBright" DockPanel.Dock="Right"/>
-                                    <CheckBox x:Name="ChkMonBright" Content="Set monitor brightness (DDC/CI)" VerticalAlignment="Center"
-                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                </DockPanel>
-                                <TextBlock x:Name="LblMonBright" Text="Brightness: 80%" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
-                                <Slider x:Name="SldMonBright" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
-                                <DockPanel Margin="0,8,0,0">
-                                    <local:InfoHint x:Name="InfoAudio" DockPanel.Dock="Right"/>
-                                    <CheckBox x:Name="ChkSwitchAudio" Content="Switch default audio device" VerticalAlignment="Center"
-                                              Checked="EditorChanged" Unchecked="EditorChanged"/>
-                                </DockPanel>
-                                <ComboBox x:Name="CmbAudio" Margin="0,6,0,0" SelectionChanged="EditorChanged"/>
-                                <DockPanel Margin="0,8,0,4">
-                                    <local:InfoHint x:Name="InfoScaling" DockPanel.Dock="Right"/>
-                                    <TextBlock x:Name="LblScaling" Text="Scaling mode" Foreground="{DynamicResource MutedBrush}"
-                                               VerticalAlignment="Center"/>
-                                </DockPanel>
-                                <ComboBox x:Name="CmbScaling" SelectionChanged="EditorChanged">
-                                    <ComboBoxItem Content="default" Tag="default" IsSelected="True"/>
-                                    <ComboBoxItem Content="stretch" Tag="stretch"/>
-                                    <ComboBoxItem Content="center" Tag="center"/>
-                                </ComboBox>
+                                <TextBlock x:Name="LblColorSummary" Text="Configure color on the Presets tab (startup preset applied on game start)."
+                                           Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"/>
+
+                                <Expander x:Name="ExpSession" Header="Advanced session" IsExpanded="False" Margin="0,4,0,0">
+                                    <StackPanel Margin="0,8,0,0">
+                                        <TextBlock x:Name="LblSessionSub" Text="System-only tweaks (no game injection)" FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,6"/>
+                                        <TextBlock x:Name="LblSessionTemplates" Text="Templates" FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,4"/>
+                                        <UniformGrid Columns="3" Margin="0,0,0,8">
+                                            <Button x:Name="BtnTplCompetitive" Content="Competitive" Style="{StaticResource CompactGhostButton}"
+                                                    Margin="0,0,4,0" Click="SessionTemplateCompetitive_Click"/>
+                                            <Button x:Name="BtnTplImmersive" Content="Immersive" Style="{StaticResource CompactGhostButton}"
+                                                    Margin="2,0,2,0" Click="SessionTemplateImmersive_Click"/>
+                                            <Button x:Name="BtnTplMinimal" Content="Minimal" Style="{StaticResource CompactGhostButton}"
+                                                    Margin="4,0,0,0" Click="SessionTemplateMinimal_Click"/>
+                                        </UniformGrid>
+                                        <TextBlock x:Name="LblMonitorLayout" Text="Monitor layout" Margin="0,0,0,4" Foreground="{DynamicResource MutedBrush}"/>
+                                        <ComboBox x:Name="CmbMonitorLayout" Margin="0,0,0,8" SelectionChanged="MonitorLayout_Changed">
+                                            <ComboBoxItem Content="Keep all monitors" Tag="keepAll" IsSelected="True"/>
+                                            <ComboBoxItem Content="Isolate primary" Tag="isolatePrimary"/>
+                                            <ComboBoxItem Content="Primary only" Tag="primaryOnly"/>
+                                        </ComboBox>
+                                        <DockPanel>
+                                            <TextBlock x:Name="LblDeferred" Text="Deferred re-apply: 0 s" Foreground="{DynamicResource MutedBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </DockPanel>
+                                        <Slider x:Name="SldDeferred" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                        <DockPanel Margin="0,8,0,0">
+                                            <CheckBox x:Name="ChkQuietToast" Content="Quiet notifications" VerticalAlignment="Center"
+                                                      Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                        </DockPanel>
+                                        <DockPanel Margin="0,4,0,0">
+                                            <local:InfoHint x:Name="InfoNight" DockPanel.Dock="Right"/>
+                                            <CheckBox x:Name="ChkNoNightLight" Content="Disable Night Light" VerticalAlignment="Center"
+                                                      Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                        </DockPanel>
+                                        <DockPanel Margin="0,4,0,0">
+                                            <local:InfoHint x:Name="InfoHdr" DockPanel.Dock="Right"/>
+                                            <CheckBox x:Name="ChkNoAutoHdr" Content="Disable Auto HDR" VerticalAlignment="Center"
+                                                      Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                        </DockPanel>
+                                        <DockPanel Margin="0,4,0,0">
+                                            <local:InfoHint x:Name="InfoMonBright" DockPanel.Dock="Right"/>
+                                            <CheckBox x:Name="ChkMonBright" Content="Set monitor brightness (DDC/CI)" VerticalAlignment="Center"
+                                                      Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                        </DockPanel>
+                                        <TextBlock x:Name="LblMonBright" Text="Brightness: 80%" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
+                                        <Slider x:Name="SldMonBright" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ColorSlider_ValueChanged"/>
+                                        <DockPanel Margin="0,8,0,0">
+                                            <CheckBox x:Name="ChkSwitchAudio" Content="Switch default audio device" VerticalAlignment="Center"
+                                                      Checked="EditorChanged" Unchecked="EditorChanged"/>
+                                        </DockPanel>
+                                        <ComboBox x:Name="CmbAudio" Margin="0,6,0,0" SelectionChanged="EditorChanged"/>
+                                        <DockPanel Margin="0,8,0,4">
+                                            <TextBlock x:Name="LblScaling" Text="Scaling mode" Foreground="{DynamicResource MutedBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </DockPanel>
+                                        <ComboBox x:Name="CmbScaling" SelectionChanged="EditorChanged">
+                                            <ComboBoxItem Content="Default" Tag="default" IsSelected="True"/>
+                                            <ComboBoxItem Content="Stretch" Tag="stretch"/>
+                                            <ComboBoxItem Content="Center" Tag="center"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                </Expander>
 
                                 <Separator/>
                                 <DockPanel Margin="0,0,0,8">
@@ -369,18 +593,19 @@
                                                     <ColumnDefinition Width="32"/>
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
-                                                <Border Width="28" Height="28" CornerRadius="6" Background="#66000000">
+                                                <Border Width="28" Height="28" CornerRadius="6" Background="{DynamicResource FieldBrush}"
+                                                        Opacity="0.85">
                                                     <Grid>
                                                         <Image Source="{Binding Icon}" Width="24" Height="24"
                                                                Visibility="{Binding Icon, Converter={StaticResource NullToVis}}"/>
                                                         <TextBlock Text="{Binding Glyph}" FontWeight="Bold" FontSize="11"
-                                                                   Foreground="#FFF8F4" HorizontalAlignment="Center"
+                                                                   Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center"
                                                                    VerticalAlignment="Center"
                                                                    Visibility="{Binding Icon, Converter={StaticResource InvNullToVis}}"/>
                                                     </Grid>
                                                 </Border>
                                                 <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="SemiBold"
-                                                           Foreground="#FFF8F4" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                           Foreground="{DynamicResource TextBrush}" VerticalAlignment="Center" Margin="8,0,0,0"
                                                            TextTrimming="CharacterEllipsis"/>
                                             </Grid>
                                         </Border>
@@ -412,23 +637,34 @@
                                         HorizontalAlignment="Stretch" Click="LaunchGame_Click"
                                         ToolTip="Start the selected game's exe"/>
                             </StackPanel>
-                            <ListBox x:Name="PresetList" SelectionChanged="PresetList_SelectionChanged">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Margin="0,2">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-                                            <TextBlock FontSize="11" Foreground="{DynamicResource MutedBrush}">
-                                                <TextBlock.Text>
-                                                    <MultiBinding StringFormat="{}{0}  ·  {1}">
-                                                        <Binding Path="Summary"/>
-                                                        <Binding Path="Hotkey" TargetNullValue="no hotkey"/>
-                                                    </MultiBinding>
-                                                </TextBlock.Text>
-                                            </TextBlock>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                            <Grid>
+                                <ListBox x:Name="PresetList" SelectionChanged="PresetList_SelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                                <TextBlock FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,2,0,0">
+                                                    <TextBlock.Text>
+                                                        <MultiBinding StringFormat="{}{0}  ·  {1}">
+                                                            <Binding Path="Summary"/>
+                                                            <Binding Path="Hotkey" TargetNullValue="no hotkey"/>
+                                                        </MultiBinding>
+                                                    </TextBlock.Text>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <StackPanel x:Name="PresetEmptyCta" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                            Margin="12" Visibility="Collapsed">
+                                    <TextBlock x:Name="LblPresetEmpty" Text="No presets yet"
+                                               TextAlignment="Center" Foreground="{DynamicResource MutedBrush}"
+                                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Button x:Name="BtnPresetEmptyGallery" Content="Open pack gallery"
+                                            Style="{StaticResource CompactAccentButton}"
+                                            HorizontalAlignment="Center" Click="PackGallery_Click"/>
+                                </StackPanel>
+                            </Grid>
                         </DockPanel>
                     </Border>
 
@@ -445,7 +681,8 @@
                                          TextChanged="PresetName_TextChanged" LostFocus="PresetName_LostFocus"/>
 
                                 <TextBlock Text="Hotkey (click &amp; press)" Foreground="{DynamicResource MutedBrush}"/>
-                                <TextBox x:Name="TxtPresetHotkey" Margin="0,4,0,10" PreviewKeyDown="HotkeyBox_PreviewKeyDown" TextChanged="PresetEditorChanged"/>
+                                <TextBox x:Name="TxtPresetHotkey" Margin="0,4,0,10" PreviewKeyDown="HotkeyBox_PreviewKeyDown"
+                                         PreviewMouseDown="HotkeyBox_PreviewMouseDown" TextChanged="PresetEditorChanged"/>
                                 <CheckBox x:Name="ChkPresetRes" Content="Set resolution" Checked="PresetEditorChanged" Unchecked="PresetEditorChanged"/>
                                 <ComboBox x:Name="CmbPresetRes" Margin="0,6,0,12" SelectionChanged="PresetEditorChanged"/>
 
@@ -474,6 +711,9 @@
                                 <Slider x:Name="SldPresetG" Minimum="0.5" Maximum="6" TickFrequency="0.01" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                                 <TextBlock x:Name="LblPresetV" Text="Vibrance: 50" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
                                 <Slider x:Name="SldPresetV" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
+                                <TextBlock x:Name="LblPresetH" Text="Hue: 0°" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"
+                                           ToolTip="NVIDIA/AMD hue rotation — driver backend only"/>
+                                <Slider x:Name="SldPresetH" Minimum="0" Maximum="359" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                                 <TextBlock x:Name="LblPresetShadow" Text="Shadow Boost: 0" Margin="0,6,0,0" Foreground="{DynamicResource MutedBrush}"/>
                                 <Slider x:Name="SldPresetShadow" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="PresetColor_ValueChanged"/>
                             </StackPanel>
@@ -482,7 +722,7 @@
                 </Grid>
             </TabItem>
 
-            <TabItem x:Name="TabGlobal" Header="Global">
+            <TabItem x:Name="TabGlobal" Header="Defaults">
                 <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                               CanContentScroll="False" PanningMode="VerticalOnly">
                     <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="16">
@@ -492,15 +732,15 @@
                             <ComboBox x:Name="CmbDefaultRes" Margin="0,4,0,12" SelectionChanged="GlobalEditorChanged"/>
                             <TextBlock Text="Default power plan" Foreground="{DynamicResource MutedBrush}"/>
                             <ComboBox x:Name="CmbDefaultPower" Margin="0,4,0,12" SelectionChanged="GlobalEditorChanged">
-                                <ComboBoxItem Content="balanced" IsSelected="True"/>
-                                <ComboBoxItem Content="highPerformance"/>
+                                <ComboBoxItem Content="Balanced" Tag="balanced" IsSelected="True"/>
+                                <ComboBoxItem Content="High performance" Tag="highPerformance"/>
                             </ComboBox>
                             <TextBlock Text="Color / gamma is configured per-game on the Presets tab only."
                                        Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                             <Separator/>
                             <TextBlock x:Name="LblAppHotkeys" Text="App hotkeys" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock x:Name="LblAppHotkeysHint" Text="Click a field and press a key (modifiers optional). Esc / Backspace / Delete or Clear removes it. Per-preset binds are on the Presets tab."
+                            <TextBlock x:Name="LblAppHotkeysHint" Text="Click a field and press a key, or click a mouse side button (Back/Forward). Esc / Backspace / Delete or Clear removes it. Per-preset binds are on the Presets tab."
                                        Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,0,0,10" TextWrapping="Wrap"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -509,41 +749,49 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <TextBlock x:Name="LblHkOverlay" Grid.Row="0" Text="Toggle overlay" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkToggleOverlay" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="HkToggleOverlay" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown" PreviewMouseDown="HotkeyBox_PreviewMouseDown"/>
                                 <Button Grid.Row="0" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkToggleOverlay}"/>
                                 <TextBlock x:Name="LblHkEmergency" Grid.Row="1" Text="Emergency Restore" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkEmergency" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="HkEmergency" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown" PreviewMouseDown="HotkeyBox_PreviewMouseDown"/>
                                 <Button Grid.Row="1" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkEmergency}"/>
                                 <TextBlock x:Name="LblHkNext" Grid.Row="2" Text="Next preset" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="HkNextPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="HkNextPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown" PreviewMouseDown="HotkeyBox_PreviewMouseDown"/>
                                 <Button Grid.Row="2" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkNextPreset}"/>
                                 <TextBlock x:Name="LblHkPrev" Grid.Row="3" Text="Previous preset" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="HkPrevPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="HkPrevPreset" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown" PreviewMouseDown="HotkeyBox_PreviewMouseDown"/>
                                 <Button Grid.Row="3" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkPrevPreset}"/>
                                 <TextBlock x:Name="LblHkAb" Grid.Row="4" Text="A/B compare" VerticalAlignment="Center"/>
-                                <TextBox Grid.Row="4" Grid.Column="1" x:Name="HkCompareAb" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                                <TextBox Grid.Row="4" Grid.Column="1" x:Name="HkCompareAb" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown" PreviewMouseDown="HotkeyBox_PreviewMouseDown"/>
                                 <Button Grid.Row="4" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
                                         Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkCompareAb}"/>
+                                <TextBlock x:Name="LblHkZoom" Grid.Row="5" Text="Toggle zoom" VerticalAlignment="Center"
+                                           ToolTip="Center-screen Magnification zoom (no game injection)"/>
+                                <TextBox Grid.Row="5" Grid.Column="1" x:Name="HkToggleZoom" Margin="0,4,8,4" PreviewKeyDown="HotkeyBox_PreviewKeyDown" PreviewMouseDown="HotkeyBox_PreviewMouseDown"/>
+                                <Button Grid.Row="5" Grid.Column="2" Content="Clear" Style="{StaticResource CompactGhostButton}" Padding="10,4"
+                                        Margin="0,4,0,4" MinWidth="48" HorizontalAlignment="Left" Click="ClearHotkey_Click" Tag="{Binding ElementName=HkToggleZoom}"/>
                             </Grid>
+                            <TextBlock x:Name="LblZoomFactor" Text="Zoom factor" Foreground="{DynamicResource MutedBrush}" Margin="0,12,0,4"/>
+                            <ComboBox x:Name="CmbZoomFactor" SelectionChanged="GlobalEditorChanged" MaxWidth="200" HorizontalAlignment="Left">
+                                <ComboBoxItem Content="×2" Tag="2"/>
+                                <ComboBoxItem Content="×3" Tag="3"/>
+                                <ComboBoxItem Content="×4" Tag="4" IsSelected="True"/>
+                                <ComboBoxItem Content="×6" Tag="6"/>
+                                <ComboBoxItem Content="×8" Tag="8"/>
+                                <ComboBoxItem Content="×10" Tag="10"/>
+                                <ComboBoxItem Content="×12" Tag="12"/>
+                            </ComboBox>
+                            <TextBlock x:Name="LblZoomHint" Text="Zooms the center of the desktop via Windows Magnifier API — no injection into games."
+                                       Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                            <TextBlock x:Name="LblHotkeyCheat"
+                                       Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"/>
 
-                            <Separator/>
-                            <DockPanel Margin="0,4,0,0">
-                                <local:InfoHint x:Name="InfoAutostart" DockPanel.Dock="Right"/>
-                                <CheckBox x:Name="ChkAutostart" Content="Start with Windows" VerticalAlignment="Center"
-                                          Checked="GlobalEditorChanged" Unchecked="GlobalEditorChanged"/>
-                            </DockPanel>
-                            <DockPanel Margin="0,4,0,0">
-                                <local:InfoHint x:Name="InfoStartMin" DockPanel.Dock="Right"/>
-                                <CheckBox x:Name="ChkStartMin" Content="Start minimized to tray" VerticalAlignment="Center"
-                                          Checked="GlobalEditorChanged" Unchecked="GlobalEditorChanged"/>
-                            </DockPanel>
                             <Separator Margin="0,12,0,8"/>
                             <TextBlock x:Name="LblResetGlobalHint" Text="Reset Global defaults to factory (resolution / power)."
                                        Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
@@ -558,8 +806,8 @@
             <TabItem x:Name="TabLog" Header="Log">
                 <DockPanel Margin="0,12,0,0">
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                        <Button Content="Refresh" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="RefreshLog_Click"/>
-                        <Button Content="Open folder" Style="{StaticResource GhostButton}" Click="OpenLogFolder_Click"/>
+                        <Button x:Name="BtnLogRefresh" Content="Refresh" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="RefreshLog_Click"/>
+                        <Button x:Name="BtnLogFolder" Content="Open log" Style="{StaticResource GhostButton}" Click="OpenLogFolder_Click"/>
                     </StackPanel>
                     <TextBox x:Name="TxtLog" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
                              VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Hidden"
@@ -570,12 +818,14 @@
         </TabControl>
         </Grid>
 
-        <DockPanel Grid.Row="3" Margin="0,12,0,0">
-            <TextBlock DockPanel.Dock="Right" Text="made by Nakidev"
-                       Foreground="{DynamicResource AccentBrush}" FontSize="11" Opacity="0.85"
-                       VerticalAlignment="Center"/>
+        <DockPanel Grid.Row="2" Margin="0,12,0,0">
+            <TextBlock DockPanel.Dock="Right" Text="Nakidev · @nakidev"
+                       Foreground="{DynamicResource AccentBrush}" FontSize="11" Opacity="0.9"
+                       VerticalAlignment="Center" Cursor="Hand"
+                       ToolTip="Discord &amp; Telegram @nakidev"
+                       MouseLeftButtonUp="NakidevCredit_Click"/>
             <TextBlock x:Name="FooterText" Foreground="{DynamicResource MutedBrush}" FontSize="11"
-                       Text="Config: %AppData%\DisplayProfileManager\profiles.json" VerticalAlignment="Center"/>
+                       Visibility="Collapsed" VerticalAlignment="Center"/>
         </DockPanel>
         </Grid><!-- content -->
 

@@ -7,86 +7,83 @@
     <UserControl.Resources>
         <Storyboard x:Key="EggIn">
             <DoubleAnimation Storyboard.TargetName="Card" Storyboard.TargetProperty="Opacity"
-                             From="0" To="1" Duration="0:0:0.28">
+                             From="0" To="1" Duration="0:0:0.24">
                 <DoubleAnimation.EasingFunction>
-                    <QuadraticEase EasingMode="EaseOut"/>
+                    <CubicEase EasingMode="EaseOut"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
             <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX"
-                             From="0.9" To="1" Duration="0:0:0.35">
+                             From="0.86" To="1" Duration="0:0:0.32">
                 <DoubleAnimation.EasingFunction>
-                    <QuadraticEase EasingMode="EaseOut"/>
+                    <BackEase EasingMode="EaseOut" Amplitude="0.45"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
             <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY"
-                             From="0.9" To="1" Duration="0:0:0.35">
+                             From="0.86" To="1" Duration="0:0:0.32">
                 <DoubleAnimation.EasingFunction>
-                    <QuadraticEase EasingMode="EaseOut"/>
+                    <BackEase EasingMode="EaseOut" Amplitude="0.45"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
-            <DoubleAnimation Storyboard.TargetName="ArtFloat" Storyboard.TargetProperty="Y"
-                             From="16" To="0" Duration="0:0:0.4">
+            <DoubleAnimation Storyboard.TargetName="IconScale" Storyboard.TargetProperty="ScaleX"
+                             From="0.3" To="1" Duration="0:0:0.36" BeginTime="0:0:0.06">
                 <DoubleAnimation.EasingFunction>
-                    <QuadraticEase EasingMode="EaseOut"/>
+                    <BackEase EasingMode="EaseOut" Amplitude="0.6"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
-            <DoubleAnimation Storyboard.TargetName="Glow" Storyboard.TargetProperty="Opacity"
-                             From="0.15" To="0.5" Duration="0:0:0.5" AutoReverse="True"/>
+            <DoubleAnimation Storyboard.TargetName="IconScale" Storyboard.TargetProperty="ScaleY"
+                             From="0.3" To="1" Duration="0:0:0.36" BeginTime="0:0:0.06">
+                <DoubleAnimation.EasingFunction>
+                    <BackEase EasingMode="EaseOut" Amplitude="0.6"/>
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
         </Storyboard>
         <Storyboard x:Key="EggOut">
             <DoubleAnimation Storyboard.TargetName="Card" Storyboard.TargetProperty="Opacity"
-                             From="1" To="0" Duration="0:0:0.3">
+                             From="1" To="0" Duration="0:0:0.22">
                 <DoubleAnimation.EasingFunction>
-                    <QuadraticEase EasingMode="EaseIn"/>
+                    <CubicEase EasingMode="EaseIn"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
             <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX"
-                             From="1" To="1.04" Duration="0:0:0.3"/>
+                             From="1" To="0.94" Duration="0:0:0.22"/>
             <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY"
-                             From="1" To="1.04" Duration="0:0:0.3"/>
+                             From="1" To="0.94" Duration="0:0:0.22"/>
             <DoubleAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="Opacity"
-                             From="1" To="0" Duration="0:0:0.3"/>
+                             From="1" To="0" Duration="0:0:0.22"/>
         </Storyboard>
     </UserControl.Resources>
 
     <Grid x:Name="Root" Opacity="1" IsHitTestVisible="False">
-        <!-- Dimmer: never steals clicks -->
-        <Border Background="#990E0A0C" IsHitTestVisible="False"/>
+        <Border Background="#990F1216" IsHitTestVisible="False"/>
         <Border x:Name="Card"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
-                Width="560" Height="320"
-                CornerRadius="16" BorderBrush="#5A3A48" BorderThickness="1"
-                Opacity="0" ClipToBounds="True" IsHitTestVisible="False"
+                MinWidth="260" Padding="28,24"
+                CornerRadius="16" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                Background="{DynamicResource PanelBrush}"
+                Opacity="0" IsHitTestVisible="False"
                 RenderTransformOrigin="0.5,0.5">
             <Border.RenderTransform>
-                <ScaleTransform x:Name="CardScale" ScaleX="0.9" ScaleY="0.9"/>
+                <ScaleTransform x:Name="CardScale" ScaleX="0.86" ScaleY="0.86"/>
             </Border.RenderTransform>
             <Border.Effect>
-                <DropShadowEffect BlurRadius="36" ShadowDepth="6" Opacity="0.55" Color="#000000"/>
+                <DropShadowEffect BlurRadius="28" ShadowDepth="3" Opacity="0.45" Color="#000000"/>
             </Border.Effect>
-            <Border.Background>
-                <SolidColorBrush Color="#120E11"/>
-            </Border.Background>
-            <Grid>
-                <Ellipse x:Name="Glow" Width="480" Height="220" Opacity="0.2"
-                         HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#88C45C84" Offset="0"/>
-                            <GradientStop Color="#00C45C84" Offset="1"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
-                </Ellipse>
-                <Image x:Name="Art"
-                       Stretch="UniformToFill"
-                       HorizontalAlignment="Stretch"
-                       VerticalAlignment="Stretch"
-                       RenderTransformOrigin="0.5,0.5">
-                    <Image.RenderTransform>
-                        <TranslateTransform x:Name="ArtFloat" Y="16"/>
-                    </Image.RenderTransform>
-                </Image>
-            </Grid>
+            <StackPanel HorizontalAlignment="Center">
+                <Grid Width="56" Height="56" Margin="0,0,0,14" RenderTransformOrigin="0.5,0.5">
+                    <Grid.RenderTransform>
+                        <ScaleTransform x:Name="IconScale" ScaleX="0.3" ScaleY="0.3"/>
+                    </Grid.RenderTransform>
+                    <Ellipse Fill="{DynamicResource AccentBrush}"/>
+                    <Path Width="22" Height="22" Stretch="Uniform"
+                          Fill="{DynamicResource AccentButtonTextBrush}"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Data="M12,2 L14.5,9 H22 L16,13.5 18.5,21 12,16.5 5.5,21 8,13.5 2,9 H9.5 Z"/>
+                </Grid>
+                <TextBlock x:Name="TitleText" Text="Nice." FontWeight="SemiBold" FontSize="16"
+                           Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center"/>
+                <TextBlock Text="Keep tuning." Foreground="{DynamicResource MutedBrush}" FontSize="12"
+                           HorizontalAlignment="Center" Margin="0,4,0,0"/>
+            </StackPanel>
         </Border>
     </Grid>
 </UserControl>

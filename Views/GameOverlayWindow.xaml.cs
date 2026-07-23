@@ -169,7 +169,7 @@ public partial class GameOverlayWindow : Window
 
         _suppress = true;
         ColorUiHelper.SetBackendToggle(_backend, TogBackend);
-        ColorUiHelper.ApplyColorSliders(source, SldB, SldC, SldG, SldV, SldS);
+        ColorUiHelper.ApplyColorSliders(source, SldB, SldC, SldG, SldV, SldS, SldH);
         if (ChkLockColor != null) ChkLockColor.IsChecked = source.LockColor;
         RefreshLabels();
         UpdateShadowEnabled();
@@ -233,12 +233,13 @@ public partial class GameOverlayWindow : Window
     private void RefreshLabels()
     {
         if (LblB == null || LblS == null || ValS == null || SldB == null || SldS == null) return;
-        ColorUiHelper.UpdateLabels(LblB, LblC, LblG, LblV, SldB, SldC, SldG, SldV, _backend);
-        if (ValB != null) ValB.Text = LblB.Text.Replace("B ", "");
-        if (ValC != null) ValC.Text = LblC.Text.Replace("C ", "");
-        if (ValG != null) ValG.Text = LblG.Text.Replace("G ", "");
-        if (ValV != null && LblV != null) ValV.Text = LblV.Text.Replace("V ", "");
-        LblS.Text = $"S {(int)SldS.Value}";
+        ColorUiHelper.UpdateLabels(LblB, LblC, LblG, LblV, SldB, SldC, SldG, SldV, _backend, LblH, SldH);
+        if (ValB != null) ValB.Text = LblB.Text.Replace("Bright ", "");
+        if (ValC != null) ValC.Text = LblC.Text.Replace("Contr ", "");
+        if (ValG != null) ValG.Text = LblG.Text.Replace("Gamma ", "");
+        if (ValV != null && LblV != null) ValV.Text = LblV.Text.Replace("Vibr ", "");
+        if (ValH != null && LblH != null) ValH.Text = LblH.Text.Replace("Hue ", "").Replace("°", "");
+        LblS.Text = $"Shadow {(int)SldS.Value}";
         ValS.Text = $"{(int)SldS.Value}";
     }
 
@@ -253,7 +254,7 @@ public partial class GameOverlayWindow : Window
 
     private ColorSettings ReadSliders() =>
         ColorUiHelper.ReadColorFromSliders(_backend, SldB, SldC, SldG, SldV, SldS,
-            lockColor: ChkLockColor?.IsChecked != false);
+            lockColor: ChkLockColor?.IsChecked != false, hue: SldH);
 
     private void ScheduleLivePreview()
     {
@@ -322,7 +323,7 @@ public partial class GameOverlayWindow : Window
             _suppress = true;
             try
             {
-                ColorUiHelper.ApplyColorSliders(loaded, SldB, SldC, SldG, SldV, SldS);
+                ColorUiHelper.ApplyColorSliders(loaded, SldB, SldC, SldG, SldV, SldS, SldH);
             }
             finally
             {
@@ -449,7 +450,7 @@ public partial class GameOverlayWindow : Window
         if (_backend == ColorBackend.Driver)
             c = ColorSettings.DriverNeutral.Clone();
         _suppress = true;
-        ColorUiHelper.ApplyColorSliders(c, SldB, SldC, SldG, SldV, SldS);
+        ColorUiHelper.ApplyColorSliders(c, SldB, SldC, SldG, SldV, SldS, SldH);
         _suppress = false;
         RefreshLabels();
         PushLivePreview();
@@ -457,6 +458,7 @@ public partial class GameOverlayWindow : Window
 
     private void Emergency_Click(object sender, RoutedEventArgs e)
     {
+        App.Services.Zoom.Off();
         App.Services.Monitor.EmergencyRestore();
         HideOverlay(); // also restores main via NotifyOverlayHidden
     }
@@ -541,5 +543,6 @@ public partial class GameOverlayWindow : Window
         if (TxtMini != null) TxtMini.Text = Loc.T("overlay.mini");
         if (LblPanelOpacityTitle != null) LblPanelOpacityTitle.Text = Loc.T("overlay.panelOpacity");
         if (ChkLockColor != null) ChkLockColor.Content = Loc.T("overlay.lock");
+        if (ExpMore != null) ExpMore.Header = Loc.T("overlay.more");
     }
 }

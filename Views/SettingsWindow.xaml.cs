@@ -60,6 +60,36 @@ public partial class SettingsWindow : Window
         LblSoundVolVal.Text = $"{(int)SldSoundVol.Value}%";
         SldSoundVol.IsEnabled = ui.UiSoundsEnabled;
         BtnPreviewSound.IsEnabled = ui.UiSoundsEnabled;
+        if (ChkMuteInGame != null) ChkMuteInGame.IsChecked = ui.MuteSoundsInGame;
+        if (CmbSoundPreview != null && CmbSoundPreview.SelectedIndex < 0)
+            CmbSoundPreview.SelectedIndex = 0;
+        if (LblConfigPath != null) LblConfigPath.Text = "Config: " + App.Services.Config.ConfigPath;
+    }
+
+    private void AboutContacts_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "https://t.me/nakidev",
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
+    private void AboutSite_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "https://github.com/Naki-404/DisplayProfileManager",
+                UseShellExecute = true
+            });
+        }
+        catch { }
     }
 
     private void ApplyLabels()
@@ -86,7 +116,18 @@ public partial class SettingsWindow : Window
         if (LblSound != null) LblSound.Text = Loc.T("settings.sound");
         if (ChkUiSounds != null) ChkUiSounds.Content = Loc.T("settings.sound.enable");
         if (LblSoundVol != null) LblSoundVol.Text = Loc.T("settings.sound.volume");
-        if (BtnPreviewSound != null) BtnPreviewSound.Content = Loc.T("settings.sound.preview");
+        if (BtnPreviewSound != null) BtnPreviewSound.Content = Loc.T("settings.sound.preview.btn");
+        if (ChkMuteInGame != null) ChkMuteInGame.Content = Loc.T("settings.sound.muteInGame");
+        if (ItmSoundOpen != null) ItmSoundOpen.Content = Loc.T("sound.cat.open");
+        if (ItmSoundClick != null) ItmSoundClick.Content = Loc.T("sound.cat.click");
+        if (ItmSoundSave != null) ItmSoundSave.Content = Loc.T("sound.cat.save");
+        if (ItmSoundLaunch != null) ItmSoundLaunch.Content = Loc.T("sound.cat.launch");
+        if (ItmSoundDone != null) ItmSoundDone.Content = Loc.T("sound.cat.done");
+        if (ItmSoundEmpty != null) ItmSoundEmpty.Content = Loc.T("sound.cat.empty");
+        if (ItmSoundArmed != null) ItmSoundArmed.Content = Loc.T("sound.cat.armed");
+        if (ItmSoundWarn != null) ItmSoundWarn.Content = Loc.T("sound.cat.warn");
+        if (ItmSoundError != null) ItmSoundError.Content = Loc.T("sound.cat.error");
+        if (ItmSoundPreset != null) ItmSoundPreset.Content = Loc.T("sound.cat.preset");
         BtnEditPalette.Content = Loc.T("setup.editPalette");
         BtnExport.Content = Loc.T("btn.export");
         BtnImport.Content = Loc.T("btn.import");
@@ -99,6 +140,11 @@ public partial class SettingsWindow : Window
         // Refresh "Primary" label in monitor list without losing selection
         if (CmbMonitor.Items.Count > 0 && CmbMonitor.Items[0] is ComboBoxItem primary)
             primary.Content = Loc.T("setup.monitor.primary");
+
+        if (LblAbout != null) LblAbout.Text = Loc.T("about.title");
+        if (LblAboutCreator != null) LblAboutCreator.Text = Loc.T("about.creator");
+        if (LblAboutContacts != null) LblAboutContacts.Text = Loc.T("about.contacts");
+        if (LblAboutSite != null) LblAboutSite.Text = Loc.T("about.site");
     }
 
     private void Lang_Changed(object sender, SelectionChangedEventArgs e)
@@ -142,7 +188,7 @@ public partial class SettingsWindow : Window
         var theme = (CmbTheme.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "dark";
         if (theme == "custom")
         {
-            _customPalette ??= ThemeService.SeedCustom("#C45C84", "#120E11");
+            _customPalette ??= ThemeService.SeedCustom("#7EB8D4", "#0F1216");
             ThemeService.ApplyPalette(_customPalette);
         }
         else
@@ -153,7 +199,7 @@ public partial class SettingsWindow : Window
 
     private void EditPalette_Click(object sender, RoutedEventArgs e)
     {
-        _customPalette ??= ThemeService.SeedCustom("#C45C84", "#120E11");
+        _customPalette ??= ThemeService.SeedCustom("#7EB8D4", "#0F1216");
         var win = new CustomThemeWindow(_customPalette) { Owner = this };
         if (win.ShowDialog() == true && win.ResultPalette != null)
         {
@@ -186,11 +232,12 @@ public partial class SettingsWindow : Window
             OverlayLeft = prev.OverlayLeft,
             OverlayTop = prev.OverlayTop,
             UiSoundsEnabled = ChkUiSounds.IsChecked == true,
-            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value),
+            MuteSoundsInGame = ChkMuteInGame?.IsChecked == true
         };
         if (theme == "custom")
         {
-            ui.CustomPalette = (_customPalette ?? ThemeService.SeedCustom("#C45C84", "#120E11")).Clone();
+            ui.CustomPalette = (_customPalette ?? ThemeService.SeedCustom("#7EB8D4", "#0F1216")).Clone();
             ui.CustomAccent = ui.CustomPalette.Accent;
             ui.CustomBackground = ui.CustomPalette.Bg;
         }
@@ -226,7 +273,8 @@ public partial class SettingsWindow : Window
         UiSound.ApplyFromConfig(new UiPreferences
         {
             UiSoundsEnabled = on,
-            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value),
+            MuteSoundsInGame = ChkMuteInGame?.IsChecked == true
         });
     }
 
@@ -238,7 +286,19 @@ public partial class SettingsWindow : Window
         UiSound.ApplyFromConfig(new UiPreferences
         {
             UiSoundsEnabled = ChkUiSounds.IsChecked == true,
-            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value),
+            MuteSoundsInGame = ChkMuteInGame?.IsChecked == true
+        });
+    }
+
+    private void MuteInGame_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        UiSound.ApplyFromConfig(new UiPreferences
+        {
+            UiSoundsEnabled = ChkUiSounds.IsChecked == true,
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value),
+            MuteSoundsInGame = ChkMuteInGame?.IsChecked == true
         });
     }
 
@@ -247,9 +307,24 @@ public partial class SettingsWindow : Window
         UiSound.ApplyFromConfig(new UiPreferences
         {
             UiSoundsEnabled = true,
-            UiSoundVolume = (int)Math.Round(SldSoundVol.Value)
+            UiSoundVolume = (int)Math.Round(SldSoundVol.Value),
+            MuteSoundsInGame = false
         });
-        UiSound.Open();
+
+        string tag = (CmbSoundPreview?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "open";
+        switch (tag)
+        {
+            case "click": UiSound.Click(); break;
+            case "save": UiSound.Save(); break;
+            case "launch": UiSound.Launch(); break;
+            case "done": UiSound.Done(); break;
+            case "empty": UiSound.Empty(); break;
+            case "armed": UiSound.Armed(); break;
+            case "warn": UiSound.Warn(); break;
+            case "error": UiSound.Error(); break;
+            case "preset": UiSound.PresetApply(); break;
+            default: UiSound.Open(); break;
+        }
     }
 
     private void Export_Click(object sender, RoutedEventArgs e)

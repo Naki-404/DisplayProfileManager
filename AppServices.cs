@@ -10,6 +10,7 @@ public sealed class AppServices : IDisposable
     public CompanionService Companions { get; }
     public ProfileMonitor Monitor { get; }
     public HotkeyService Hotkeys { get; }
+    public ScreenZoomService Zoom { get; }
 
     public AppServices()
     {
@@ -18,6 +19,8 @@ public sealed class AppServices : IDisposable
         Config.LoadOrCreate();
 
         Display = new DisplayEngine();
+        Zoom = new ScreenZoomService();
+        Zoom.ApplyFromConfig(Config.Current.Ui);
 
         CrashRestored = SessionGuard.WasDirtyShutdown();
         if (CrashRestored)
@@ -44,6 +47,7 @@ public sealed class AppServices : IDisposable
 
     public void Dispose()
     {
+        try { Zoom.Dispose(); } catch { }
         try { Monitor.Dispose(); } catch { }
         try { Hotkeys.Dispose(); } catch { }
         try { Display.DisposeDriverColor(); } catch { }

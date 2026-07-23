@@ -9,6 +9,10 @@ UI sound effects in this folder were derived from Mixkit preview SFX (mixkit.co)
 - ui_work_loop.wav - work/busy loop style (from work1.mp3; loudnorm/fade/trim)
 - ui_done.wav - positive completion style (from positive.mp3)
 - ui_empty.wav - pop/empty style (from pop.mp3)
+- ui_armed.wav - profile-activated chime (copy of ui_launch.wav / magic.mp3, played back quieter)
+- ui_warn.wav - caution chime for emergency restores (copy of ui_empty.wav / pop.mp3)
+- ui_error.wav - failure chime for failed operations (copy of ui_empty.wav / pop.mp3)
+- ui_preset.wav - quick-preset applied chime (copy of ui_save.wav / correct.mp3)
 
 Source: https://mixkit.co/
 License: Mixkit Free License (https://mixkit.co/license/#sfxFree)

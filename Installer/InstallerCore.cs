@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -11,16 +12,15 @@ internal static class InstallerCore
 {
     private const string AppName = "Display Profile Manager";
     private const string AppId = "DisplayProfileManager";
-    private const string Version = "1.6.0";
+    private const string Version = "1.8.0";
     private const string Publisher = "Nakidev";
     private const string ExeName = "DisplayProfileManager.exe";
+    private const string PayloadResourceHint = "payload.zip";
 
-    /// <summary>Only these files are ever installed (no screenshots, docs, extras).</summary>
-    private static readonly HashSet<string> AllowedFiles = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "DisplayProfileManager.exe",
-        "QRes.exe"
-    };
+    private const int MoveFileDelayUntilReboot = 0x4;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool MoveFileEx(string lpExistingFileName, string? lpNewFileName, int dwFlags);
 
     internal static string DefaultInstallDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", AppId);
@@ -82,14 +82,17 @@ internal static class InstallerCore
         Directory.CreateDirectory(installDir);
         log?.Invoke("Preparing folder…");
 
-        // Remove leftover junk from older broken installs in this folder
         foreach (var file in Directory.GetFiles(installDir))
         {
             var name = Path.GetFileName(file);
-            if (!AllowedFiles.Contains(name) &&
-                !name.Equals("Uninstall.exe", StringComparison.OrdinalIgnoreCase))
+            if (!name.Equals("Uninstall.exe", StringComparison.OrdinalIgnoreCase))
             {
-                try { File.Delete(file); } catch { /* ignore */ }
+                try
+                {
+                    File.SetAttributes(file, FileAttributes.Normal);
+                    File.Delete(file);
+                }
+                catch { /* ignore */ }
             }
         }
         foreach (var sub in Directory.GetDirectories(installDir))
@@ -98,13 +101,12 @@ internal static class InstallerCore
         }
 
         log?.Invoke("Extracting application…");
-        var extracted = ExtractPayloadWhitelisted(installDir);
-        if (!extracted.Any(f => f.Equals(ExeName, StringComparison.OrdinalIgnoreCase)))
+        ExtractPayloadZip(installDir);
+        var exe = Path.Combine(installDir, ExeName);
+        if (!File.Exists(exe))
             throw new InvalidOperationException("Installer payload is missing DisplayProfileManager.exe. Rebuild with build-release.ps1");
 
-        foreach (var name in extracted)
-            TryUnblock(Path.Combine(installDir, name));
-
+        TryUnblockTree(installDir);
         log?.Invoke("Files ready.");
     }
 
@@ -158,7 +160,6 @@ internal static class InstallerCore
         if (Directory.Exists(DefaultInstallDir))
             return DefaultInstallDir;
 
-        // Fallback: folder next to this Uninstall.exe
         try
         {
             var beside = Path.GetDirectoryName(Environment.ProcessPath);
@@ -185,7 +186,6 @@ internal static class InstallerCore
                 try { p.CloseMainWindow(); p.WaitForExit(2000); } catch { }
                 try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { try { p.Kill(); } catch { } }
             }
-            // brief pause so gamma APIs aren't fighting a dying process
             Thread.Sleep(400);
         }
         catch { }
@@ -206,6 +206,7 @@ internal static class InstallerCore
             p?.WaitForExit(5000);
         }
         catch { }
+
         try
         {
             var start = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", AppName + ".lnk");
@@ -223,7 +224,6 @@ internal static class InstallerCore
         catch { }
 
         log?.Invoke("Deleting application files…");
-        // Delete everything except the running Uninstall.exe (locked). Rest cleaned by ScheduleSelfCleanup.
         if (Directory.Exists(dir))
         {
             var self = Path.GetFullPath(Environment.ProcessPath ?? "");
@@ -248,82 +248,83 @@ internal static class InstallerCore
         _ = silent;
     }
 
-    /// <summary>After Uninstall.exe exits, remove remaining folder (including itself).</summary>
+    /// <summary>
+    /// Schedule remaining locked files (Uninstall.exe + folder) for deletion on reboot.
+    /// Avoids spawning hidden cmd cleanup scripts — those look like droppers to AV heuristics.
+    /// </summary>
     internal static void ScheduleSelfCleanup(string? installDir)
     {
-        if (string.IsNullOrWhiteSpace(installDir))
+        try
+        {
+            var self = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(self) && File.Exists(self))
+                MoveFileEx(self, null, MoveFileDelayUntilReboot);
+        }
+        catch { }
+
+        if (string.IsNullOrWhiteSpace(installDir) || !Directory.Exists(installDir))
             return;
 
         try
         {
-            var self = Environment.ProcessPath;
-            var bat = Path.Combine(Path.GetTempPath(), $"dpm-cleanup-{Guid.NewGuid():N}.cmd");
-            // ping delay is more reliable than timeout under some locales
-            var lines = new List<string>
+            foreach (var file in Directory.GetFiles(installDir, "*", SearchOption.AllDirectories))
             {
-                "@echo off",
-                "ping 127.0.0.1 -n 3 >nul"
-            };
-            if (!string.IsNullOrWhiteSpace(self))
-            {
-                lines.Add($"del /f /q \"{self}\" >nul 2>&1");
+                try { MoveFileEx(file, null, MoveFileDelayUntilReboot); } catch { }
             }
-            lines.Add($"rmdir /s /q \"{installDir}\" >nul 2>&1");
-            // second pass if first failed due to locks
-            lines.Add("ping 127.0.0.1 -n 2 >nul");
-            if (!string.IsNullOrWhiteSpace(self))
-                lines.Add($"del /f /q \"{self}\" >nul 2>&1");
-            lines.Add($"rmdir /s /q \"{installDir}\" >nul 2>&1");
-            lines.Add("del \"%~f0\" >nul 2>&1");
-
-            File.WriteAllLines(bat, lines);
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = $"/c \"{bat}\"",
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                WindowStyle = ProcessWindowStyle.Hidden
-            });
+            try { MoveFileEx(installDir, null, MoveFileDelayUntilReboot); } catch { }
         }
         catch { }
     }
 
-    private static List<string> ExtractPayloadWhitelisted(string dir)
+    private static void ExtractPayloadZip(string dir)
     {
         var asm = Assembly.GetExecutingAssembly();
-        var names = asm.GetManifestResourceNames()
-            .Where(n => n.Contains(".payload.", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (names.Count == 0)
+        var resName = asm.GetManifestResourceNames()
+            .FirstOrDefault(n => n.EndsWith(PayloadResourceHint, StringComparison.OrdinalIgnoreCase))
+            ?? asm.GetManifestResourceNames().FirstOrDefault(n => n.Contains("payload", StringComparison.OrdinalIgnoreCase));
+
+        if (resName == null)
             throw new InvalidOperationException("Installer payload is empty. Rebuild with build-release.ps1");
 
-        var written = new List<string>();
-        foreach (var resName in names)
+        using var src = asm.GetManifestResourceStream(resName)
+            ?? throw new InvalidOperationException("Cannot open installer payload stream.");
+        using var zip = new ZipArchive(src, ZipArchiveMode.Read);
+
+        var rootFull = Path.GetFullPath(dir).TrimEnd('\\') + '\\';
+        foreach (var entry in zip.Entries)
         {
-            var marker = ".payload.";
-            var idx = resName.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            var relative = idx >= 0 ? resName[(idx + marker.Length)..] : Path.GetFileName(resName);
-            relative = relative.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
-
-            // Prefer exact whitelist match at end of resource name (handles nested junk)
-            string? fileName = AllowedFiles.FirstOrDefault(a =>
-                relative.Equals(a, StringComparison.OrdinalIgnoreCase) ||
-                relative.EndsWith(Path.DirectorySeparatorChar + a, StringComparison.OrdinalIgnoreCase) ||
-                relative.EndsWith("." + a, StringComparison.OrdinalIgnoreCase));
-
-            if (fileName == null)
+            if (string.IsNullOrWhiteSpace(entry.FullName) || entry.FullName.EndsWith('/'))
                 continue;
 
-            var dest = Path.Combine(dir, fileName);
-            using var src = asm.GetManifestResourceStream(resName)!;
-            using var dst = File.Create(dest);
-            src.CopyTo(dst);
-            written.Add(fileName);
-        }
+            var relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+            if (relative.Contains("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+                continue;
+            if (!IsAllowedPayloadPath(relative))
+                continue;
 
-        return written.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var dest = Path.GetFullPath(Path.Combine(dir, relative));
+            if (!dest.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(dest.TrimEnd('\\'), rootFull.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var parent = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(parent))
+                Directory.CreateDirectory(parent);
+
+            using var entryStream = entry.Open();
+            using var dst = File.Create(dest);
+            entryStream.CopyTo(dst);
+        }
+    }
+
+    private static bool IsAllowedPayloadPath(string relative)
+    {
+        var name = Path.GetFileName(relative);
+        if (name.Equals(ExeName, StringComparison.OrdinalIgnoreCase)) return true;
+        if (name.Equals("QRes.exe", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var norm = relative.Replace('/', '\\');
+        return norm.StartsWith("Assets\\", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void WriteUninstallKey(string dir, string exe, string uninst)
@@ -368,6 +369,16 @@ internal static class InstallerCore
         {
             Marshal.FinalReleaseComObject(shell);
         }
+    }
+
+    private static void TryUnblockTree(string dir)
+    {
+        try
+        {
+            foreach (var file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                TryUnblock(file);
+        }
+        catch { }
     }
 
     private static void TryUnblock(string path)

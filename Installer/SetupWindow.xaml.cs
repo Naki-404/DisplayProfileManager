@@ -28,19 +28,25 @@ public partial class SetupWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(360))
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(380))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         };
         Chrome.BeginAnimation(OpacityProperty, fade);
 
-        var scaleX = new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(420))
+        var scaleX = new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(460))
         {
-            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.25 }
+            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.28 }
         };
-        var scaleY = scaleX.Clone();
         ChromeScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, scaleX);
-        ChromeScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, scaleY);
+        ChromeScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, scaleX.Clone());
+
+        var contentFade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(420))
+        {
+            BeginTime = TimeSpan.FromMilliseconds(90),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        ContentRoot.BeginAnimation(OpacityProperty, contentFade);
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -77,17 +83,24 @@ public partial class SetupWindow : Window
     private void StartInstallAnimations()
     {
         ProgressPanel.Visibility = Visibility.Visible;
+        ProgressPanel.Opacity = 0;
         TxtRuntime.Visibility = Visibility.Collapsed;
 
+        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        ProgressPanel.BeginAnimation(OpacityProperty, fadeIn);
+
         _spin = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
-        var spinAnim = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.9));
+        var spinAnim = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.85));
         Storyboard.SetTarget(spinAnim, SpinRotate);
         Storyboard.SetTargetProperty(spinAnim, new PropertyPath(System.Windows.Media.RotateTransform.AngleProperty));
         _spin.Children.Add(spinAnim);
         _spin.Begin();
 
         _progress = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
-        var slide = new DoubleAnimation(-90, 420, TimeSpan.FromSeconds(1.35))
+        var slide = new DoubleAnimation(-110, 460, TimeSpan.FromSeconds(1.25))
         {
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
         };
@@ -140,10 +153,7 @@ public partial class SetupWindow : Window
             StartInstallAnimations();
             SetStatus("Installing…");
 
-            // Background: file extract only (safe across drives / folders)
             await Task.Run(() => InstallerCore.ExtractAppFiles(target, SetStatus)).ConfigureAwait(true);
-
-            // UI / STA thread: registry + shortcuts (fixes cross-thread crash)
             InstallerCore.RegisterInstallation(target, startMenu, desktop, SetStatus);
 
             StopInstallAnimations();
@@ -183,20 +193,20 @@ public partial class SetupWindow : Window
         TxtSuccessBody.Text = body;
         SuccessOverlay.Visibility = Visibility.Visible;
 
-        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300))
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320))
         {
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
         };
         SuccessOverlay.BeginAnimation(OpacityProperty, fade);
 
-        var pop = new DoubleAnimation(0.5, 1, TimeSpan.FromMilliseconds(420))
+        var pop = new DoubleAnimation(0.4, 1, TimeSpan.FromMilliseconds(480))
         {
-            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.45 }
+            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.5 }
         };
         SuccessCheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, pop);
         SuccessCheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, pop.Clone());
 
-        await Task.Delay(2400);
+        await Task.Delay(2200);
         Close();
     }
 }

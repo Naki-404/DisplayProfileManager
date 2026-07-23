@@ -17,18 +17,26 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
+        if (TryHandleCliArgs(e.Args))
+            return;
+
         DispatcherUnhandledException += (_, args) =>
         {
-            AppLog.Error("UI exception: " + args.Exception.Message);
+            AppLog.Error(args.Exception, "UI exception");
             args.Handled = true;
             try { ThemedDialog.Show(null, "Something went wrong:\n" + args.Exception.Message); }
             catch { }
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
-            AppLog.Error("Unhandled: " + args.ExceptionObject);
+        {
+            if (args.ExceptionObject is Exception ex)
+                AppLog.Error(ex, "Unhandled");
+            else
+                AppLog.Error("Unhandled: " + args.ExceptionObject);
+        };
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
-            AppLog.Error("Task exception: " + args.Exception);
+            AppLog.Error(args.Exception, "Task exception");
             args.SetObserved();
         };
 
@@ -54,11 +62,11 @@ public partial class App : System.Windows.Application
             }
 
             Services = new AppServices();
+            AppLog.StartupBanner();
             var ui = Services.Config.Current.Ui ?? new Models.UiPreferences();
             Loc.SetLocale(ui.Locale);
             ThemeService.Apply(ui);
             UiSound.ApplyFromConfig(ui);
-            AppLog.Info("Application starting.");
 
             bool startMinimized = e.Args.Any(a =>
                 a.Equals("--minimized", StringComparison.OrdinalIgnoreCase) ||
@@ -115,17 +123,35 @@ public partial class App : System.Windows.Application
                     Services.Hotkeys.HotkeyPressed += action =>
                         _main.Dispatcher.Invoke(() =>
                         {
-                            Services.Monitor.HandleHotkey(action);
-                            if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase))
-                                && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
-                                _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
-                            else if (action is "nextPreset" or "previousPreset"
-                                     && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
-                                _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
-                            else if (action == "compareAb")
-                                _main.ShowToast(Loc.T("toast.hotkey.ab"));
-                            else if (action == "emergencyRestore")
-                                _main.ShowToast(Loc.T("toast.emergency"));
+                            if (action == "toggleZoom")
+                            {
+                                if (!Services.Zoom.IsAvailable)
+                                    _main.ShowToast(Loc.T("toast.zoom.unavailable"));
+                                else
+                                {
+                                    bool on = Services.Zoom.Toggle();
+                                    _main.ShowToast(on
+                                        ? Loc.Tf("toast.zoom.on", (int)Services.Zoom.Factor)
+                                        : Loc.T("toast.zoom.off"));
+                                }
+                            }
+                            else
+                            {
+                                Services.Monitor.HandleHotkey(action);
+                                if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase))
+                                    && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
+                                    _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
+                                else if (action is "nextPreset" or "previousPreset"
+                                         && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
+                                    _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
+                                else if (action == "compareAb")
+                                    _main.ShowToast(Loc.T("toast.hotkey.ab"));
+                                else if (action == "emergencyRestore")
+                                {
+                                    Services.Zoom.Off();
+                                    _main.ShowToast(Loc.T("toast.emergency"));
+                                }
+                            }
                         });
                 }
                 catch (Exception ex)
@@ -158,6 +184,10 @@ public partial class App : System.Windows.Application
                 {
                     try
                     {
+                        // Don't leave Magnification zoom on when a game arms.
+                        if (profile != null)
+                            Services.Zoom.Off();
+
                         Services.Hotkeys.RegisterFromConfig(
                             Services.Config.Current,
                             profile,
@@ -175,7 +205,7 @@ public partial class App : System.Windows.Application
                             if (presetId != null)
                             {
                                 var pr = profile.Presets?.FirstOrDefault(p => p.Id == presetId);
-                                if (pr != null) msg += $"\nColor: {pr.Name}";
+                                if (pr != null) msg += "\n" + Loc.Tf("toast.color", pr.Name);
                             }
                             var detail = Services.Monitor.LastApplyToastDetail;
                             if (!string.IsNullOrWhiteSpace(detail))
@@ -191,12 +221,15 @@ public partial class App : System.Windows.Application
                                 _tray?.ShowBalloonTip(2800, Loc.T("app.name"), msg.Replace("\n", " · "),
                                     System.Windows.Forms.ToolTipIcon.Info);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                AppLog.Warn(ex, "Tray balloon tip");
+                            }
                         }
                     }
                     catch (Exception ex)
                     {
-                        AppLog.Error("ActiveProfileChanged UI: " + ex.Message);
+                        AppLog.Error(ex, "ActiveProfileChanged UI");
                     }
                 });
 
@@ -206,14 +239,17 @@ public partial class App : System.Windows.Application
                     try
                     {
                         _main.SetStatus(status);
-                        if (_tray != null) _tray.Text = "DPM: " + status;
+                        UpdateTrayTooltip();
                         var detail = Services.Monitor.LastApplyToastDetail;
                         if (!string.IsNullOrWhiteSpace(detail)
                             && detail.Contains("fail", StringComparison.OrdinalIgnoreCase)
                             && status.Contains("fail", StringComparison.OrdinalIgnoreCase))
                             _main.ShowToast(detail);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        AppLog.Warn(ex, "StatusChanged UI");
+                    }
                 });
 
             // Start monitoring after the window exists — avoids applying while UI is half-built.
@@ -241,6 +277,8 @@ public partial class App : System.Windows.Application
                 {
                     AppLog.Error("Startup health toast: " + ex.Message);
                 }
+
+                RunConflictCheckFireAndForget();
             };
 
             try
@@ -296,6 +334,112 @@ public partial class App : System.Windows.Application
         }
     }
 
+    /// <summary>Fire-and-forget entry point (avoids CS4014 without relying on discard semantics inside a lambda).</summary>
+    private async void RunConflictCheckFireAndForget() => await CheckConflictsOnceAsync();
+
+    /// <summary>Best-effort, one-shot check for other gamma/color tools or Night Light at startup.</summary>
+    private async Task CheckConflictsOnceAsync()
+    {
+        try
+        {
+            var result = await Task.Run(ConflictDetector.Scan).ConfigureAwait(false);
+            var msg = ConflictDetector.Describe(result);
+            if (!string.IsNullOrWhiteSpace(msg) && _main != null)
+            {
+#pragma warning disable CS4014 // Fire-and-forget UI marshal — nothing to await here.
+                _main.Dispatcher.BeginInvoke(() => { _main.ShowToast(msg); });
+#pragma warning restore CS4014
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Conflict check failed: " + ex.Message);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool AllocConsole();
+
+    /// <summary>
+    /// Handles headless CLI invocations (--list / --apply-profile "Name" / --emergency).
+    /// Returns true if the app should exit immediately after processing (no UI shown).
+    /// </summary>
+    private bool TryHandleCliArgs(string[] args)
+    {
+        bool wantsList = false;
+        bool wantsEmergency = false;
+        string? applyProfileName = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var a = args[i];
+            if (a.Equals("--list", StringComparison.OrdinalIgnoreCase))
+                wantsList = true;
+            else if (a.Equals("--emergency", StringComparison.OrdinalIgnoreCase))
+                wantsEmergency = true;
+            else if (a.Equals("--apply-profile", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                applyProfileName = args[++i];
+        }
+
+        if (!wantsList && !wantsEmergency && applyProfileName == null)
+            return false;
+
+        try { AllocConsole(); } catch { }
+
+        ConfigService? config = null;
+        DisplayEngine? engine = null;
+        try
+        {
+            config = new ConfigService();
+            config.LoadOrCreate();
+
+            if (wantsList)
+            {
+                Console.WriteLine("Display Profile Manager - profiles:");
+                if (config.Current.Profiles.Count == 0)
+                    Console.WriteLine("  (none configured)");
+                foreach (var p in config.Current.Profiles)
+                    Console.WriteLine($"  [{(p.Enabled ? "enabled " : "disabled")}] {p.Name}  ({p.ProcessName})");
+            }
+
+            if (wantsEmergency)
+            {
+                engine = new DisplayEngine();
+                engine.CaptureFactoryGammaRamp(captureRamp: false);
+                engine.RestoreFactory(config.Current.FactoryDefaults ?? config.Current.Defaults);
+                Console.WriteLine("Emergency restore applied.");
+            }
+            else if (applyProfileName != null)
+            {
+                var profile = config.Current.Profiles.FirstOrDefault(p =>
+                    string.Equals(p.Name, applyProfileName, StringComparison.OrdinalIgnoreCase));
+                if (profile == null)
+                {
+                    Console.WriteLine($"Profile not found: {applyProfileName}");
+                }
+                else
+                {
+                    engine = new DisplayEngine();
+                    engine.CaptureFactoryGammaRamp(captureRamp: true);
+                    engine.ApplyProfile(profile, config.Current.Defaults);
+                    Console.WriteLine($"Applied profile: {profile.Name}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("CLI error: " + ex.Message);
+        }
+        finally
+        {
+            try { engine?.DisposeDriverColor(); } catch { }
+            try { config?.Dispose(); } catch { }
+        }
+
+        Shutdown();
+        return true;
+    }
+
     private void NotifyHotkeyFailures()
     {
         try
@@ -303,11 +447,15 @@ public partial class App : System.Windows.Application
             var fails = Services.Hotkeys.LastFailures;
             if (fails.Count == 0 || _main == null) return;
             var msg = fails.Count == 1
-                ? $"Hotkey busy: {fails[0]}"
-                : $"{fails.Count} hotkeys failed (in use?)";
+                ? Loc.Tf("toast.hotkey.busy", fails[0])
+                : Loc.Tf("toast.hotkey.failed", fails.Count);
             _main.Dispatcher.BeginInvoke(() => _main.ShowToast(msg));
+            AppLog.Warn("Hotkey registration failed: " + string.Join(", ", fails));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "NotifyHotkeyFailures");
+        }
     }
 
     private void InitTray()
@@ -317,13 +465,26 @@ public partial class App : System.Windows.Application
         {
             using var stream = AssetLoader.OpenStream("app.ico");
             if (stream != null)
-                trayIcon = new System.Drawing.Icon(stream);
+            {
+                using var ms = new System.IO.MemoryStream();
+                stream.CopyTo(ms);
+                ms.Position = 0;
+                using var tmp = new System.Drawing.Icon(ms);
+                trayIcon = (System.Drawing.Icon)tmp.Clone();
+            }
+            else
+            {
+                AppLog.Warn("Tray icon: app.ico resource stream was null");
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Tray icon load");
+        }
 
         _tray = new System.Windows.Forms.NotifyIcon
         {
-            Text = "Display Profile Manager",
+            Text = Loc.T("app.name"),
             Visible = true,
             Icon = trayIcon ?? System.Drawing.SystemIcons.Application
         };
@@ -336,9 +497,9 @@ public partial class App : System.Windows.Application
 
         var menu = new System.Windows.Forms.ContextMenuStrip
         {
-            Renderer = new DarkPinkMenuRenderer(),
-            BackColor = System.Drawing.Color.FromArgb(0x1A, 0x14, 0x18),
-            ForeColor = System.Drawing.Color.FromArgb(0xF3, 0xE6, 0xEC),
+            Renderer = new SlateMenuRenderer(),
+            BackColor = System.Drawing.Color.FromArgb(0x16, 0x1B, 0x22),
+            ForeColor = System.Drawing.Color.FromArgb(0xE8, 0xEE, 0xF4),
             Font = new System.Drawing.Font("Segoe UI", 9.25f, System.Drawing.FontStyle.Regular),
             ShowImageMargin = false,
             ShowCheckMargin = false,
@@ -347,7 +508,11 @@ public partial class App : System.Windows.Application
             AutoSize = true
         };
 
-        System.Windows.Forms.ToolStripMenuItem MakeItem(string text, EventHandler onClick, int width = 200)
+        const int MaxTrayPresets = 12;
+        var trayFore = System.Drawing.Color.FromArgb(0xE8, 0xEE, 0xF4);
+        var trayBack = System.Drawing.Color.FromArgb(0x16, 0x1B, 0x22);
+
+        System.Windows.Forms.ToolStripMenuItem MakeItem(string text, EventHandler onClick, int width = 220)
         {
             return new System.Windows.Forms.ToolStripMenuItem(text, null, onClick)
             {
@@ -356,10 +521,19 @@ public partial class App : System.Windows.Application
                 Height = 32,
                 Padding = new System.Windows.Forms.Padding(0),
                 Margin = new System.Windows.Forms.Padding(0),
-                ForeColor = System.Drawing.Color.FromArgb(0xF3, 0xE6, 0xEC),
-                BackColor = System.Drawing.Color.FromArgb(0x1A, 0x14, 0x18),
+                ForeColor = trayFore,
+                BackColor = trayBack,
                 TextAlign = System.Drawing.ContentAlignment.MiddleLeft
             };
+        }
+
+        System.Windows.Forms.ToolStripMenuItem MakeSubmenu(string text)
+        {
+            var mi = MakeItem(text, (_, _) => { });
+            mi.DropDown.Renderer = new SlateMenuRenderer();
+            mi.DropDown.BackColor = trayBack;
+            mi.DropDownItems.Clear();
+            return mi;
         }
 
         menu.Items.Add(MakeItem(Loc.T("tray.open"), (_, _) => ShowMain()));
@@ -371,17 +545,85 @@ public partial class App : System.Windows.Application
                 Services.Monitor.IsPaused = !Services.Monitor.IsPaused;
                 RebuildTrayMenu();
             }));
-        menu.Items.Add(MakeItem(Loc.T("tray.reset"), (_, _) => Services.Monitor.EmergencyRestore()));
+        menu.Items.Add(MakeItem(Loc.T("tray.reset"), (_, _) =>
+        {
+            Services.Zoom.Off();
+            Services.Monitor.EmergencyRestore();
+        }));
+
+        // Profiles submenu — activate any enabled profile on demand, regardless of running state.
+        var profilesMenu = MakeSubmenu(Loc.T("tray.profiles"));
+        var enabledProfiles = Services.Config.Current.Profiles.Where(p => p.Enabled).ToList();
+        if (enabledProfiles.Count > 0)
+        {
+            foreach (var profile in enabledProfiles)
+            {
+                var pr = profile;
+                var item = MakeItem(pr.Name, (_, _) =>
+                {
+                    Services.Monitor.ForceApplyProfile(pr);
+                    _main?.Dispatcher.Invoke(() => _main.ShowToast($"{Loc.T("btn.apply")}: {pr.Name}"));
+                }, width: 200);
+                if (Services.Monitor.CurrentProfile?.Id == pr.Id)
+                    item.Font = new System.Drawing.Font(menu.Font, System.Drawing.FontStyle.Bold);
+                profilesMenu.DropDownItems.Add(item);
+            }
+        }
+        else
+        {
+            var none = MakeItem(Loc.T("tray.profiles.none"), (_, _) => { }, width: 200);
+            none.Enabled = false;
+            profilesMenu.DropDownItems.Add(none);
+        }
+        menu.Items.Add(profilesMenu);
+
+        // Hotkeys submenu — read-only reference; click copies the gesture to the clipboard.
+        var hotkeysMenu = MakeSubmenu(Loc.T("tray.hotkeys"));
+        var hk = Services.Config.Current.GlobalHotkeys ?? new Models.GlobalHotkeys();
+        var globalBindings = new (string Label, string? Gesture)[]
+        {
+            (Loc.T("tray.hotkeys.toggleOverlay"), hk.ToggleOverlay),
+            (Loc.T("tray.hotkeys.emergencyRestore"), hk.EmergencyRestore),
+            (Loc.T("tray.hotkeys.nextPreset"), hk.NextPreset),
+            (Loc.T("tray.hotkeys.previousPreset"), hk.PreviousPreset),
+            (Loc.T("tray.hotkeys.compareAb"), hk.CompareAb),
+            (Loc.T("hotkey.zoom"), hk.ToggleZoom),
+        }.Where(b => !string.IsNullOrWhiteSpace(b.Gesture)).ToList();
+
+        var activeForHotkeys = Services.Monitor.CurrentProfile;
+        var presetBindings = (activeForHotkeys?.Presets ?? new List<Models.QuickPreset>())
+            .Where(p => !string.IsNullOrWhiteSpace(p.Hotkey))
+            .Select(p => (Label: p.Name, Gesture: p.Hotkey))
+            .ToList();
+
+        if (globalBindings.Count == 0 && presetBindings.Count == 0)
+        {
+            var none = MakeItem(Loc.T("tray.hotkeys.none"), (_, _) => { }, width: 240);
+            none.Enabled = false;
+            hotkeysMenu.DropDownItems.Add(none);
+        }
+        else
+        {
+            foreach (var (label, gesture) in globalBindings)
+                hotkeysMenu.DropDownItems.Add(MakeItem($"{label}: {gesture}", (_, _) => CopyHotkeyToClipboard(gesture!), width: 240));
+            if (presetBindings.Count > 0)
+            {
+                hotkeysMenu.DropDownItems.Add(new System.Windows.Forms.ToolStripSeparator { AutoSize = false, Height = 7 });
+                foreach (var (label, gesture) in presetBindings)
+                    hotkeysMenu.DropDownItems.Add(MakeItem($"{label}: {gesture}", (_, _) => CopyHotkeyToClipboard(gesture!), width: 240));
+            }
+        }
+        menu.Items.Add(hotkeysMenu);
 
         var active = Services.Monitor.CurrentProfile;
-        var presets = active?.Presets?.Where(p => !string.IsNullOrWhiteSpace(p.Name)).Take(5).ToList();
+        var presets = active?.Presets?.Where(p => !string.IsNullOrWhiteSpace(p.Name)).ToList();
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator { AutoSize = false, Height = 7 });
         if (active != null && presets != null && presets.Count > 0)
         {
             var header = MakeItem($"{Loc.T("tray.presets")}: {active.Name}", (_, _) => { });
             header.Enabled = false;
             menu.Items.Add(header);
-            foreach (var preset in presets)
+            foreach (var preset in presets.Take(MaxTrayPresets))
             {
                 var p = preset;
                 menu.Items.Add(MakeItem("  " + p.Name, (_, _) =>
@@ -389,6 +631,12 @@ public partial class App : System.Windows.Application
                     Services.Monitor.ApplyPreset(p);
                     _main?.Dispatcher.Invoke(() => _main.ShowToast($"{Loc.T("btn.apply")}: {p.Name}"));
                 }));
+            }
+            if (presets.Count > MaxTrayPresets)
+            {
+                var more = MakeItem($"  … +{presets.Count - MaxTrayPresets} more (Open app)", (_, _) => ShowMain());
+                more.Enabled = false;
+                menu.Items.Add(more);
             }
         }
         else
@@ -402,11 +650,44 @@ public partial class App : System.Windows.Application
         menu.Items.Add(MakeItem(Loc.T("tray.exit"), (_, _) => ExitApp()));
 
         foreach (System.Windows.Forms.ToolStripItem it in menu.Items)
-            if (it is System.Windows.Forms.ToolStripMenuItem mi) mi.Width = 200;
+            if (it is System.Windows.Forms.ToolStripMenuItem mi && mi.DropDownItems.Count == 0) mi.Width = 220;
 
         var old = _tray.ContextMenuStrip;
         _tray.ContextMenuStrip = menu;
         old?.Dispose();
+
+        UpdateTrayTooltip();
+    }
+
+    private static void CopyHotkeyToClipboard(string gesture)
+    {
+        try { System.Windows.Clipboard.SetText(gesture); } catch { }
+    }
+
+    /// <summary>Keeps the tray icon tooltip in sync with the active profile/preset.</summary>
+    private void UpdateTrayTooltip()
+    {
+        if (_tray == null) return;
+        try
+        {
+            var profile = Services.Monitor.CurrentProfile;
+            string text;
+            if (profile != null)
+            {
+                var presetId = Services.Monitor.ActivePresetId;
+                var preset = presetId == null ? null : profile.Presets?.FirstOrDefault(p => p.Id == presetId);
+                text = preset != null
+                    ? $"DPM — {profile.Name} · {preset.Name}"
+                    : $"DPM — {profile.Name}";
+            }
+            else
+            {
+                text = Loc.T("tray.idle");
+            }
+            // NotifyIcon.Text is limited to 63 chars on classic shells.
+            _tray.Text = text.Length > 63 ? text[..63] : text;
+        }
+        catch { }
     }
 
     public void ShowMain()
@@ -494,18 +775,25 @@ public partial class App : System.Windows.Application
 
         void FinishExit()
         {
+            try { Services.Zoom.Off(); } catch (Exception ex) { AppLog.Warn(ex, "Zoom.Off on exit"); }
             try
             {
                 // Snapshot / factory restore already set the intended gamma.
                 Services.Monitor.EmergencyRestore();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AppLog.Error(ex, "EmergencyRestore on exit");
+            }
             try
             {
                 Services.Dispose();
                 SessionGuard.MarkCleanExit();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AppLog.Warn(ex, "Services.Dispose on exit");
+            }
 
             if (_tray != null)
             {

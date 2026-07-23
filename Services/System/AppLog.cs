@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 
 namespace DisplayProfileManager.Services;
 
@@ -6,8 +7,9 @@ public static class AppLog
 {
     private static readonly object Gate = new();
     private static readonly LinkedList<string> Ring = new();
-    private const int RingMax = 400;
+    private const int RingMax = 500;
     private const long MaxLogBytes = 2 * 1024 * 1024;
+    private const int MaxMessageChars = 2000;
 
     private static string _path = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -23,13 +25,54 @@ public static class AppLog
     }
 
     public static void Info(string msg) => Write("INFO", msg);
+    public static void Warn(string msg) => Write("WARN", msg);
     public static void Error(string msg) => Write("ERROR", msg);
+
+    public static void Error(Exception ex, string context)
+    {
+        if (ex == null)
+        {
+            Error(context);
+            return;
+        }
+
+        var detail = $"{context}: {ex.GetType().Name}: {ex.Message}";
+        if (!string.IsNullOrWhiteSpace(ex.StackTrace))
+            detail += " | " + FlattenStack(ex.StackTrace);
+        if (ex.InnerException != null)
+            detail += $" | inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}";
+        Error(detail);
+    }
+
+    public static void Warn(Exception ex, string context)
+    {
+        if (ex == null)
+        {
+            Warn(context);
+            return;
+        }
+        Warn($"{context}: {ex.GetType().Name}: {ex.Message}");
+    }
+
+    /// <summary>One-line startup banner with version and log path.</summary>
+    public static void StartupBanner()
+    {
+        var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?";
+        Info($"Display Profile Manager {ver} starting — log: {_path}");
+    }
+
+    private static string FlattenStack(string stack)
+    {
+        var lines = stack.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(" <- ", lines.Take(6).Select(l => l.Trim()));
+    }
 
     private static void Write(string level, string msg)
     {
+        if (string.IsNullOrEmpty(msg)) msg = "(empty)";
         // Avoid dumping huge payloads / paths that could leak secrets into shared logs.
-        if (msg.Length > 800)
-            msg = msg[..800] + "…";
+        if (msg.Length > MaxMessageChars)
+            msg = msg[..MaxMessageChars] + "…";
 
         var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {msg}";
         lock (Gate)
@@ -44,7 +87,10 @@ public static class AppLog
                 File.AppendAllText(_path, line + Environment.NewLine);
                 TryTrimLogFile();
             }
-            catch { /* ignore */ }
+            catch
+            {
+                /* disk full / locked — keep ring only */
+            }
         }
         DebugWrite(line);
     }

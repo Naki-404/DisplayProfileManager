@@ -28,6 +28,9 @@ internal static class UiSound
     private static DateTime _lastPlayUtc = DateTime.MinValue;
     private static string? _dir;
     private static bool _welcomePlayed;
+    private static bool _muteInGame;
+    private static double _currentGain = 1.0;
+    private static readonly Random Rng = new();
 
     private static string PathOpen => Resolve("ui_open.wav");
     private static string PathClick => Resolve("ui_click.wav");
@@ -36,6 +39,10 @@ internal static class UiSound
     private static string PathWork => Resolve("ui_work_loop.wav");
     private static string PathDone => Resolve("ui_done.wav");
     private static string PathEmpty => Resolve("ui_empty.wav");
+    private static string PathArmed => Resolve("ui_armed.wav");
+    private static string PathWarn => Resolve("ui_warn.wav");
+    private static string PathError => Resolve("ui_error.wav");
+    private static string PathPreset => Resolve("ui_preset.wav");
 
     public static bool IsWorking
     {
@@ -46,6 +53,7 @@ internal static class UiSound
     {
         ui ??= new UiPreferences();
         _enabled = ui.UiSoundsEnabled;
+        _muteInGame = ui.MuteSoundsInGame;
         double t = Math.Clamp(ui.UiSoundVolume / 100.0, 0, 1);
         _volume = t * 0.62;
         lock (Gate)
@@ -53,6 +61,14 @@ internal static class UiSound
             if (_loopPlayer != null && _workActive)
                 _loopPlayer.Volume = LoopVolume();
         }
+    }
+
+    /// <summary>True when MuteSoundsInGame is on and a game profile is currently active.</summary>
+    private static bool MutedForGame()
+    {
+        if (!_muteInGame) return false;
+        try { return DisplayProfileManager.App.Services?.Monitor?.CurrentProfile != null; }
+        catch { return false; }
     }
 
     public static void SetEnabled(bool enabled)
@@ -83,15 +99,38 @@ internal static class UiSound
 
     public static void Click()
     {
-        if (IsWorking) return;
-        Play(PathClick, minGapMs: 160, interrupt: false);
+        if (IsWorking || MutedForGame()) return;
+        // Tiny random pitch wobble so rapid clicks don't sound mechanical.
+        double speed = 0.97 + Rng.NextDouble() * 0.06;
+        Play(PathClick, minGapMs: 160, interrupt: false, speedRatio: speed);
     }
 
-    public static void Open() => Play(PathOpen, minGapMs: 800, interrupt: true);
+    public static void Open()
+    {
+        if (MutedForGame()) return;
+        Play(PathOpen, minGapMs: 800, interrupt: true);
+    }
+
     public static void Save() => Play(PathSave, minGapMs: 400, interrupt: true);
     public static void Launch() => Play(PathLaunch, minGapMs: 500, interrupt: true);
     public static void Done() => Play(PathDone, minGapMs: 400, interrupt: true);
     public static void Empty() => Play(PathEmpty, minGapMs: 400, interrupt: true);
+
+    /// <summary>Profile activated (game start / re-apply). Suppressed by MuteSoundsInGame spam guard.</summary>
+    public static void Armed()
+    {
+        if (MutedForGame()) return;
+        Play(PathArmed, minGapMs: 500, interrupt: true, gain: 0.68);
+    }
+
+    /// <summary>Caution chime — emergency restores, soft-restore, etc. Never muted in-game.</summary>
+    public static void Warn() => Play(PathWarn, minGapMs: 200, interrupt: true);
+
+    /// <summary>Failure chime — failed applies, imports, scans. Never muted in-game.</summary>
+    public static void Error() => Play(PathError, minGapMs: 200, interrupt: true);
+
+    /// <summary>Quick preset applied (hotkey / next / previous).</summary>
+    public static void PresetApply() => Play(PathPreset, minGapMs: 150, interrupt: true, gain: 0.85);
 
     /// <summary>Soft looping bed until <see cref="EndWork"/> — for scan and other long ops.</summary>
     public static void BeginWork()
@@ -191,7 +230,9 @@ internal static class UiSound
         return nextToExe;
     }
 
-    private static void Play(string path, int minGapMs, bool interrupt)
+    /// <summary>gain scales the master volume for this one-shot (e.g. 0.68 for a quieter chime).
+    /// speedRatio applies subtle pitch/tempo variation (e.g. 0.97..1.03 for click wobble).</summary>
+    private static void Play(string path, int minGapMs, bool interrupt, double gain = 1.0, double speedRatio = 1.0)
     {
         if (!_enabled || _volume < 0.03) return;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
@@ -213,7 +254,9 @@ internal static class UiSound
 
                     _lastPlayUtc = now;
                     _playing = true;
-                    _player.Volume = Math.Clamp(_volume, 0, 0.62);
+                    _currentGain = gain;
+                    _player.Volume = Math.Clamp(_volume * gain, 0, 0.62);
+                    try { _player.SpeedRatio = Math.Clamp(speedRatio, 0.5, 2.0); } catch { /* older runtimes */ }
                     _player.Open(new Uri(path, UriKind.Absolute));
                 }
             }
@@ -257,7 +300,7 @@ internal static class UiSound
             {
                 lock (Gate)
                 {
-                    p.Volume = Math.Clamp(_volume, 0, 0.62);
+                    p.Volume = Math.Clamp(_volume * _currentGain, 0, 0.62);
                     p.Play();
                 }
             }
@@ -268,7 +311,7 @@ internal static class UiSound
             lock (Gate)
             {
                 _playing = false;
-                try { p.Stop(); p.Close(); } catch { }
+                try { p.Stop(); p.Close(); p.SpeedRatio = 1.0; } catch { }
             }
         };
         p.MediaFailed += (_, _) =>

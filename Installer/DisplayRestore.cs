@@ -4,8 +4,8 @@ using System.Runtime.InteropServices;
 namespace DisplayProfileManager.Setup;
 
 /// <summary>
-/// Restores neutral gamma/brightness/contrast and a balanced power plan on uninstall.
-/// (Installer cannot use the main app's captured factory ramp — applies a clean neutral ramp.)
+/// Restores neutral gamma and a balanced power plan on uninstall.
+/// Keeps the installer free of NvAPIWrapper.dll (common AV heuristic on unsigned NVIDIA wrappers).
 /// </summary>
 internal static class DisplayRestore
 {
@@ -35,17 +35,10 @@ internal static class DisplayRestore
     {
         try
         {
-            log?.Invoke("Restoring color (gamma / brightness / contrast)…");
+            log?.Invoke("Restoring color (gamma)…");
             ApplyNeutralRamp();
         }
         catch { /* best-effort */ }
-
-        try
-        {
-            log?.Invoke("Restoring NVIDIA Digital Vibrance…");
-            ResetNvidiaVibrance();
-        }
-        catch { /* best-effort / no NVIDIA */ }
 
         try
         {
@@ -55,25 +48,8 @@ internal static class DisplayRestore
         catch { /* best-effort */ }
     }
 
-    private static void ResetNvidiaVibrance()
-    {
-        try
-        {
-            NvAPIWrapper.NVIDIA.Initialize();
-            var display = NvAPIWrapper.Display.Display.GetDisplays().FirstOrDefault();
-            if (display != null)
-                display.DigitalVibranceControl.NormalizedLevel = 0;
-            NvAPIWrapper.NVIDIA.Unload();
-        }
-        catch
-        {
-            try { NvAPIWrapper.NVIDIA.Unload(); } catch { }
-        }
-    }
-
     private static void ApplyNeutralRamp()
     {
-        // Neutral: brightness 0.5, contrast 1.0, gamma 1.0 (same as ColorSettings.Neutral)
         const double brightness = 0.5;
         const double contrast = 1.0;
         const double gamma = 1.0;

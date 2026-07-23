@@ -6,7 +6,7 @@ namespace DisplayProfileManager.Services;
 
 public sealed class ConfigService : IDisposable
 {
-    public const int CurrentVersion = 16;
+    public const int CurrentVersion = 18;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -532,6 +532,29 @@ public sealed class ConfigService : IDisposable
             cfg.ConfigVersion = 16;
             changed = true;
             AppLog.Info("Migrated to v16 (ProcessAliases + MonitorLayout sync).");
+        }
+
+        if (cfg.ConfigVersion < 17)
+        {
+            // Hue / FPS limit / SoftRestore foundations — new fields (ColorSettings.Hue,
+            // GameProfile.FpsLimit / SoftRestoreOnAltTab, QuickPreset.FpsLimit,
+            // UiPreferences.MuteSoundsInGame) all default safely via the model; no
+            // existing data needs to move. Just bump the version so future migrations
+            // can rely on their presence.
+            cfg.ConfigVersion = 17;
+            changed = true;
+            AppLog.Info("Migrated to v17 (Hue / FPS limit / SoftRestore foundations).");
+        }
+
+        if (cfg.ConfigVersion < 18)
+        {
+            cfg.Ui ??= new UiPreferences();
+            if (cfg.Ui.ZoomFactor < 2 || cfg.Ui.ZoomFactor > 12)
+                cfg.Ui.ZoomFactor = 4;
+            cfg.GlobalHotkeys ??= new GlobalHotkeys();
+            cfg.ConfigVersion = 18;
+            changed = true;
+            AppLog.Info("Migrated to v18 (center-screen Magnification zoom).");
         }
 
         cfg.Ui ??= new UiPreferences();

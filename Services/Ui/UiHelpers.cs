@@ -13,17 +13,18 @@ using System.Windows.Threading;
 using DisplayProfileManager.Models;
 
 namespace DisplayProfileManager;
-/// <summary>Short one-shot UI motion Ã¢â‚¬â€ no continuous timers after playback.</summary>
+/// <summary>Short one-shot UI motion — Cubic/Back ease, no continuous timers after playback.</summary>
 internal static class UiMotion
 {
-    private static readonly IEasingFunction EaseOut = new QuadraticEase { EasingMode = EasingMode.EaseOut };
-    private static readonly IEasingFunction EaseIn = new QuadraticEase { EasingMode = EasingMode.EaseIn };
-    private static readonly IEasingFunction EaseInOut = new QuadraticEase { EasingMode = EasingMode.EaseInOut };
+    private static readonly IEasingFunction EaseOut = new CubicEase { EasingMode = EasingMode.EaseOut };
+    private static readonly IEasingFunction EaseIn = new CubicEase { EasingMode = EasingMode.EaseIn };
+    private static readonly IEasingFunction EaseInOut = new CubicEase { EasingMode = EasingMode.EaseInOut };
+    private static readonly IEasingFunction BackOut = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.4 };
 
     private static DispatcherTimer? _toastHold;
     private static int _toastGen;
 
-    public static void FadeIn(UIElement element, double to = 1.0, int ms = 160)
+    public static void FadeIn(UIElement element, double to = 1.0, int ms = 180)
     {
         if (element == null) return;
         element.Opacity = 0;
@@ -48,16 +49,16 @@ internal static class UiMotion
         if (element == null) return;
         var anim = new DoubleAnimationUsingKeyFrames
         {
-            Duration = TimeSpan.FromMilliseconds(280),
+            Duration = TimeSpan.FromMilliseconds(320),
             FillBehavior = FillBehavior.Stop
         };
-        anim.KeyFrames.Add(new EasingDoubleKeyFrame(0.45, KeyTime.FromPercent(0.35), EaseOut));
+        anim.KeyFrames.Add(new EasingDoubleKeyFrame(0.55, KeyTime.FromPercent(0.4), EaseOut));
         anim.KeyFrames.Add(new EasingDoubleKeyFrame(1.0, KeyTime.FromPercent(1.0), EaseOut));
         element.BeginAnimation(UIElement.OpacityProperty, anim);
     }
 
-    /// <summary>Fade + slight upward slide for tab / panel content.</summary>
-    public static void FadeSlideIn(FrameworkElement element, double fromY = 8, int ms = 180)
+    /// <summary>Fade + soft upward slide for tab / panel content.</summary>
+    public static void FadeSlideIn(FrameworkElement element, double fromY = 10, int ms = 220)
     {
         if (element == null) return;
         EnsureTranslate(element, out var tt);
@@ -67,12 +68,11 @@ internal static class UiMotion
         element.BeginAnimation(UIElement.OpacityProperty,
             new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseOut });
         tt.BeginAnimation(TranslateTransform.YProperty,
-            new DoubleAnimation(fromY, 0, TimeSpan.FromMilliseconds(ms + 20)) { EasingFunction = EaseOut });
+            new DoubleAnimation(fromY, 0, TimeSpan.FromMilliseconds(ms + 30)) { EasingFunction = BackOut });
     }
 
-
-    /// <summary>Tab content: subtle opacity only â€” no slide, no flash to zero.</summary>
-    public static void SoftContentIn(FrameworkElement element, int ms = 180)
+    /// <summary>Tab content: soft brightness nudge — no hard flash.</summary>
+    public static void SoftContentIn(FrameworkElement element, int ms = 200)
     {
         if (element == null) return;
 
@@ -85,30 +85,31 @@ internal static class UiMotion
         element.BeginAnimation(UIElement.OpacityProperty, null);
         element.Opacity = 1;
 
-        var anim = new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(ms))
+        var anim = new DoubleAnimation(0.92, 1, TimeSpan.FromMilliseconds(ms))
         {
             EasingFunction = EaseOut
         };
         element.BeginAnimation(UIElement.OpacityProperty, anim);
     }
-    /// <summary>Window open: fade + soft scale-up.</summary>
-    public static void PopIn(FrameworkElement element, int ms = 200)
+
+    /// <summary>Window open: fade + soft overshoot scale.</summary>
+    public static void PopIn(FrameworkElement element, int ms = 240)
     {
         if (element == null) return;
         EnsureScale(element, out var scale);
         element.Opacity = 0;
-        scale.ScaleX = scale.ScaleY = 0.97;
+        scale.ScaleX = scale.ScaleY = 0.94;
 
         element.BeginAnimation(UIElement.OpacityProperty,
             new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseOut });
         scale.BeginAnimation(ScaleTransform.ScaleXProperty,
-            new DoubleAnimation(0.97, 1, TimeSpan.FromMilliseconds(ms + 30)) { EasingFunction = EaseOut });
+            new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(ms + 40)) { EasingFunction = BackOut });
         scale.BeginAnimation(ScaleTransform.ScaleYProperty,
-            new DoubleAnimation(0.97, 1, TimeSpan.FromMilliseconds(ms + 30)) { EasingFunction = EaseOut });
+            new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(ms + 40)) { EasingFunction = BackOut });
     }
 
     /// <summary>Window hide: fade + soft scale-down.</summary>
-    public static void PopOut(FrameworkElement element, Action? onCompleted = null, int ms = 140)
+    public static void PopOut(FrameworkElement element, Action? onCompleted = null, int ms = 150)
     {
         if (element == null)
         {
@@ -126,13 +127,13 @@ internal static class UiMotion
 
         element.BeginAnimation(UIElement.OpacityProperty, fade);
         scale.BeginAnimation(ScaleTransform.ScaleXProperty,
-            new DoubleAnimation(scale.ScaleX, 0.97, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseIn });
+            new DoubleAnimation(scale.ScaleX, 0.96, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseIn });
         scale.BeginAnimation(ScaleTransform.ScaleYProperty,
-            new DoubleAnimation(scale.ScaleY, 0.97, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseIn });
+            new DoubleAnimation(scale.ScaleY, 0.96, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseIn });
     }
 
-    /// <summary>Non-modal toast: rise + fade in, hold, fade out. No buttons.</summary>
-    public static void ShowToast(FrameworkElement host, TextBlock? label = null, string? text = null, int holdMs = 1200)
+    /// <summary>Non-modal toast: rise + fade in, hold, fade out.</summary>
+    public static void ShowToast(FrameworkElement host, TextBlock? label = null, string? text = null, int holdMs = 1300)
     {
         if (host == null) return;
         if (label != null && text != null)
@@ -145,10 +146,10 @@ internal static class UiMotion
         host.Visibility = Visibility.Visible;
         host.IsHitTestVisible = false;
         host.Opacity = 0;
-        tt.Y = 16;
+        tt.Y = 14;
 
-        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)) { EasingFunction = EaseOut };
-        var slideIn = new DoubleAnimation(16, 0, TimeSpan.FromMilliseconds(200)) { EasingFunction = EaseOut };
+        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200)) { EasingFunction = EaseOut };
+        var slideIn = new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = BackOut };
 
         fadeIn.Completed += (_, _) =>
         {
@@ -159,7 +160,7 @@ internal static class UiMotion
                 _toastHold.Stop();
                 if (gen != _toastGen) return;
 
-                var fadeOut = new DoubleAnimation(host.Opacity, 0, TimeSpan.FromMilliseconds(220))
+                var fadeOut = new DoubleAnimation(host.Opacity, 0, TimeSpan.FromMilliseconds(200))
                 {
                     EasingFunction = EaseIn
                 };
@@ -170,7 +171,7 @@ internal static class UiMotion
                 };
                 host.BeginAnimation(UIElement.OpacityProperty, fadeOut);
                 tt.BeginAnimation(TranslateTransform.YProperty,
-                    new DoubleAnimation(0, 10, TimeSpan.FromMilliseconds(220)) { EasingFunction = EaseIn });
+                    new DoubleAnimation(0, 8, TimeSpan.FromMilliseconds(200)) { EasingFunction = EaseIn });
             };
             _toastHold.Start();
         };
@@ -246,7 +247,8 @@ public static class GameVisuals
         else
         {
             var seed = Math.Abs((profile.Name + process).GetHashCode());
-            var hue = seed % 360;
+            // Cool blue-gray band (slate accent family) instead of full rainbow hue.
+            var hue = 195 + seed % 50;
             profile.Glyph = string.IsNullOrWhiteSpace(profile.Name)
                 ? "?"
                 : profile.Name.Trim()[..1].ToUpperInvariant();
@@ -303,8 +305,8 @@ public static class GameVisuals
 
     private static System.Windows.Media.Brush MakeHueBrush(int hue)
     {
-        var c1 = Hsv(hue, 0.55, 0.55);
-        var c2 = Hsv(hue, 0.65, 0.22);
+        var c1 = Hsv(hue, 0.34, 0.40);
+        var c2 = Hsv(hue, 0.42, 0.16);
         var brush = new System.Windows.Media.LinearGradientBrush(c1, c2, 45);
         brush.Freeze();
         return brush;
@@ -350,17 +352,17 @@ public sealed class InvertNullToVisibilityConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-/// <summary>Clean dark-pink tray menu Ã¢â‚¬â€ even rows, no crooked padding.</summary>
-internal sealed class DarkPinkMenuRenderer : ToolStripProfessionalRenderer
+/// <summary>Slate tray menu — even rows, no crooked padding.</summary>
+internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
 {
-    private static readonly System.Drawing.Color Bg = System.Drawing.Color.FromArgb(0x1A, 0x14, 0x18);
-    private static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(0x3D, 0x2A, 0x34);
-    private static readonly System.Drawing.Color Hover = System.Drawing.Color.FromArgb(0x2E, 0x1F, 0x27);
-    private static readonly System.Drawing.Color Accent = System.Drawing.Color.FromArgb(0xC4, 0x5C, 0x84);
-    private static readonly System.Drawing.Color Text = System.Drawing.Color.FromArgb(0xF3, 0xE6, 0xEC);
-    private static readonly System.Drawing.Color TextHot = System.Drawing.Color.FromArgb(0xD4, 0x74, 0x9A);
+    private static readonly System.Drawing.Color Bg = System.Drawing.Color.FromArgb(0x16, 0x1B, 0x22);
+    private static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(0x2A, 0x33, 0x40);
+    private static readonly System.Drawing.Color Hover = System.Drawing.Color.FromArgb(0x1E, 0x27, 0x33);
+    private static readonly System.Drawing.Color Accent = System.Drawing.Color.FromArgb(0x7E, 0xB8, 0xD4);
+    private static readonly System.Drawing.Color Text = System.Drawing.Color.FromArgb(0xE8, 0xEE, 0xF4);
+    private static readonly System.Drawing.Color TextHot = System.Drawing.Color.FromArgb(0x93, 0xC7, 0xDF);
 
-    public DarkPinkMenuRenderer() : base(new DarkPinkColorTable())
+    public SlateMenuRenderer() : base(new SlateMenuColorTable())
     {
         RoundedEdges = false;
     }
@@ -426,7 +428,7 @@ internal sealed class DarkPinkMenuRenderer : ToolStripProfessionalRenderer
         return path;
     }
 
-    private sealed class DarkPinkColorTable : ProfessionalColorTable
+    private sealed class SlateMenuColorTable : ProfessionalColorTable
     {
         public override System.Drawing.Color MenuBorder => Border;
         public override System.Drawing.Color MenuItemBorder => Accent;

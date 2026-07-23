@@ -1,9 +1,12 @@
 bin/
 obj/
 dist/
+release/
 Installer/bin/
 Installer/obj/
 Installer/payload/
+Installer/_payload-stage/
+Installer/payload.zip
 *.user
 *.suo
 .vs/

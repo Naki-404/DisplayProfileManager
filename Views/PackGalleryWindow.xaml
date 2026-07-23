@@ -31,46 +31,29 @@
             <ScrollViewer Grid.Row="1" Margin="0,14,0,12" VerticalScrollBarVisibility="Hidden">
                 <StackPanel>
                     <TextBlock x:Name="LblHint" Text="Apply a built-in pack to the game selected on the Presets tab."
-                               Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                               Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <TextBlock x:Name="LblAppliesTo" Text="" FontWeight="SemiBold" FontSize="12"
+                               Foreground="{DynamicResource AccentBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
-                    <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="12" Margin="0,0,0,10">
-                        <DockPanel>
-                            <Button x:Name="BtnTarkov" DockPanel.Dock="Right" Content="Apply"
-                                    Style="{StaticResource CompactAccentButton}" MinWidth="72"
-                                    VerticalAlignment="Center" Click="ApplyTarkov_Click"/>
-                            <StackPanel Margin="0,0,10,0">
-                                <TextBlock x:Name="LblTarkov" Text="Tarkov Riva presets" FontWeight="SemiBold"/>
-                                <TextBlock x:Name="LblTarkovSub" Text="gamma-1 / gamma-2 / Night / Neutral"
-                                           FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-
-                    <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="12" Margin="0,0,0,10">
-                        <DockPanel>
-                            <Button x:Name="BtnValorant" DockPanel.Dock="Right" Content="Apply"
-                                    Style="{StaticResource CompactAccentButton}" MinWidth="72"
-                                    VerticalAlignment="Center" Click="ApplyValorant_Click"/>
-                            <StackPanel Margin="0,0,10,0">
-                                <TextBlock x:Name="LblValorant" Text="Valorant stretch" FontWeight="SemiBold"/>
-                                <TextBlock x:Name="LblValorantSub" Text="Stretch resolutions + Vibrance+"
-                                           FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-
-                    <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="12">
-                        <DockPanel>
-                            <Button x:Name="BtnPubg" DockPanel.Dock="Right" Content="Apply"
-                                    Style="{StaticResource CompactAccentButton}" MinWidth="72"
-                                    VerticalAlignment="Center" Click="ApplyPubg_Click"/>
-                            <StackPanel Margin="0,0,10,0">
-                                <TextBlock x:Name="LblPubg" Text="PUBG stretch" FontWeight="SemiBold"/>
-                                <TextBlock x:Name="LblPubgSub" Text="2560×1440 / 1920×1080 stretch helpers"
-                                           FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
+                    <ItemsControl x:Name="PacksList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="{Binding ApplyLabel}"
+                                                IsEnabled="{Binding CanApply}"
+                                                Style="{StaticResource CompactAccentButton}" MinWidth="72"
+                                                VerticalAlignment="Center" Click="ApplyPack_Click" Tag="{Binding}"/>
+                                        <StackPanel Margin="0,0,10,0">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding Subtitle}"
+                                                       FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
             </ScrollViewer>
 

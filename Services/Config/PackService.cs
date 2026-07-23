@@ -20,6 +20,151 @@ public static class PresetPackService
         public List<QuickPreset> Presets { get; set; } = new();
     }
 
+    /// <summary>A built-in preset pack shown in the Pack Gallery (bundled JSON or fallback).</summary>
+    public sealed class BundledPack
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "Preset pack";
+        public string? Subtitle { get; set; }
+        public List<QuickPreset> Presets { get; set; } = new();
+    }
+
+    /// <summary>Raw JSON shape for bundled packs — flattened preset fields (see Assets/Packs/*.json).</summary>
+    private sealed class BundledPackDto
+    {
+        public string? Id { get; set; }
+        public string? Name { get; set; }
+        public string? Subtitle { get; set; }
+        public List<BundledPresetDto> Presets { get; set; } = new();
+    }
+
+    private sealed class BundledPresetDto
+    {
+        public string? Name { get; set; }
+        public string? Hotkey { get; set; }
+        public bool ApplyColor { get; set; } = true;
+        public double Brightness { get; set; } = 0.5;
+        public double Contrast { get; set; } = 1.0;
+        public double Gamma { get; set; } = 1.0;
+        public int Vibrance { get; set; } = 50;
+        public double ShadowLift { get; set; }
+        public int Hue { get; set; }
+        public string? Backend { get; set; }
+        public bool LockColor { get; set; } = true;
+        public bool ApplyResolution { get; set; }
+        public string? Resolution { get; set; }
+    }
+
+    /// <summary>
+    /// Loads built-in packs from Assets/Packs/*.json (copied next to the exe). Falls back to the
+    /// hardcoded <see cref="GameCatalog"/> creators when the folder is missing or empty/unparsable,
+    /// so the Pack Gallery is never empty.
+    /// </summary>
+    public static List<BundledPack> LoadBundledPacks()
+    {
+        var result = new List<BundledPack>();
+        try
+        {
+            var dir = Path.Combine(AppContext.BaseDirectory, "Assets", "Packs");
+            if (Directory.Exists(dir))
+            {
+                foreach (var file in Directory.EnumerateFiles(dir, "*.json")
+                             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var dto = JsonSerializer.Deserialize<BundledPackDto>(File.ReadAllText(file), Json);
+                        if (dto == null || string.IsNullOrWhiteSpace(dto.Name)) continue;
+                        result.Add(ConvertDto(dto));
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLog.Error($"Bundled pack parse failed ({file}): {ex.Message}");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("LoadBundledPacks: " + ex.Message);
+        }
+
+        if (result.Count == 0)
+            result.AddRange(FallbackPacks());
+
+        return result;
+    }
+
+    private static BundledPack ConvertDto(BundledPackDto dto) => new()
+    {
+        Id = string.IsNullOrWhiteSpace(dto.Id) ? Guid.NewGuid().ToString("N") : dto.Id!,
+        Name = dto.Name!,
+        Subtitle = dto.Subtitle,
+        Presets = dto.Presets.Select(ConvertPresetDto).ToList()
+    };
+
+    private static QuickPreset ConvertPresetDto(BundledPresetDto p)
+    {
+        var color = new ColorSettings
+        {
+            Brightness = p.Brightness,
+            Contrast = p.Contrast,
+            Gamma = p.Gamma,
+            Vibrance = p.Vibrance,
+            ShadowLift = p.ShadowLift,
+            Hue = p.Hue,
+            Backend = ParseBackend(p.Backend),
+            LockColor = p.LockColor
+        };
+        color.Clamp();
+
+        var preset = new QuickPreset
+        {
+            Name = string.IsNullOrWhiteSpace(p.Name) ? "Preset" : p.Name!,
+            Hotkey = string.IsNullOrWhiteSpace(p.Hotkey) ? null : p.Hotkey,
+            ApplyColor = p.ApplyColor,
+            Color = color,
+            ApplyResolution = p.ApplyResolution,
+            Resolution = p.Resolution
+        };
+        preset.EnsureDualColorSlots();
+        return preset;
+    }
+
+    private static ColorBackend ParseBackend(string? backend) => (backend?.Trim().ToLowerInvariant()) switch
+    {
+        "driver" => ColorBackend.Driver,
+        "nvidia" => ColorBackend.Nvidia,
+        "amd" => ColorBackend.Amd,
+        "gdi" => ColorBackend.Gdi,
+        _ => ColorBackend.LowLevel
+    };
+
+    private static List<BundledPack> FallbackPacks() => new()
+    {
+        new BundledPack
+        {
+            Id = "tarkov-riva",
+            Name = "Tarkov Riva presets",
+            Subtitle = "gamma-1 / gamma-2 / Night / Neutral",
+            Presets = GameCatalog.CreateTarkovRivaPresets()
+        },
+        new BundledPack
+        {
+            Id = "valorant-stretch",
+            Name = "Valorant stretch",
+            Subtitle = "Stretch resolutions + Vibrance+",
+            Presets = GameCatalog.CreateValorantStretchPresets()
+        },
+        new BundledPack
+        {
+            Id = "pubg-stretch",
+            Name = "PUBG stretch",
+            Subtitle = "2560×1440 / 1920×1080 stretch helpers",
+            Presets = GameCatalog.CreatePubgStretchPresets()
+        }
+    };
+
     public static bool Export(GameProfile profile)
     {
         var dlg = new Microsoft.Win32.SaveFileDialog

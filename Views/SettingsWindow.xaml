@@ -38,7 +38,7 @@
                     </ComboBox>
                     <TextBlock x:Name="LblTheme" Text="Theme" Foreground="{DynamicResource MutedBrush}"/>
                     <ComboBox x:Name="CmbTheme" Margin="0,4,0,8" SelectionChanged="Theme_Changed">
-                        <ComboBoxItem Content="Dark pink" Tag="dark"/>
+                        <ComboBoxItem Content="Dark" Tag="dark"/>
                         <ComboBoxItem Content="Light" Tag="light"/>
                         <ComboBoxItem Content="Custom" Tag="custom"/>
                     </ComboBox>
@@ -74,14 +74,44 @@
                                 IsSnapToTickEnabled="True" Value="70" Margin="8,0"
                                 ValueChanged="SoundVol_Changed"/>
                     </DockPanel>
-                    <Button x:Name="BtnPreviewSound" Content="Preview chime" Style="{StaticResource CompactGhostButton}"
-                            HorizontalAlignment="Left" Margin="0,8,0,0" Click="PreviewSound_Click"/>
+                    <CheckBox x:Name="ChkMuteInGame" Content="Mute UI sounds while a game is active" Margin="0,8,0,0"
+                              Checked="MuteInGame_Changed" Unchecked="MuteInGame_Changed"/>
+                    <DockPanel Margin="0,10,0,0">
+                        <Button x:Name="BtnPreviewSound" Content="Preview" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                Margin="8,0,0,0" Click="PreviewSound_Click"/>
+                        <ComboBox x:Name="CmbSoundPreview" HorizontalAlignment="Stretch">
+                            <ComboBoxItem x:Name="ItmSoundOpen" Content="Open" Tag="open"/>
+                            <ComboBoxItem x:Name="ItmSoundClick" Content="Click" Tag="click"/>
+                            <ComboBoxItem x:Name="ItmSoundSave" Content="Save" Tag="save"/>
+                            <ComboBoxItem x:Name="ItmSoundLaunch" Content="Launch" Tag="launch"/>
+                            <ComboBoxItem x:Name="ItmSoundDone" Content="Done" Tag="done"/>
+                            <ComboBoxItem x:Name="ItmSoundEmpty" Content="Empty" Tag="empty"/>
+                            <ComboBoxItem x:Name="ItmSoundArmed" Content="Armed" Tag="armed"/>
+                            <ComboBoxItem x:Name="ItmSoundWarn" Content="Warn" Tag="warn"/>
+                            <ComboBoxItem x:Name="ItmSoundError" Content="Error" Tag="error"/>
+                            <ComboBoxItem x:Name="ItmSoundPreset" Content="Preset applied" Tag="preset"/>
+                        </ComboBox>
+                    </DockPanel>
 
                     <TextBlock x:Name="LblData" Text="Data" FontWeight="SemiBold" Margin="0,16,0,8"/>
                     <StackPanel Orientation="Horizontal">
                         <Button x:Name="BtnExport" Content="Export…" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Export_Click"/>
                         <Button x:Name="BtnImport" Content="Import…" Style="{StaticResource GhostButton}" Click="Import_Click"/>
                     </StackPanel>
+                    <TextBlock x:Name="LblConfigPath" Text="" IsHitTestVisible="False"
+                               Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
+
+                    <TextBlock x:Name="LblAbout" Text="About" FontWeight="SemiBold" Margin="0,20,0,8"/>
+                    <TextBlock x:Name="LblAboutCreator" Text="Created by Nakidev"
+                               Foreground="{DynamicResource TextBrush}" FontSize="13"/>
+                    <TextBlock x:Name="LblAboutContacts" Text="Discord &amp; Telegram: @nakidev"
+                               Foreground="{DynamicResource AccentBrush}" FontSize="12" Margin="0,4,0,0"
+                               Cursor="Hand" MouseLeftButtonUp="AboutContacts_Click"
+                               ToolTip="Open https://t.me/nakidev"/>
+                    <TextBlock x:Name="LblAboutSite" Text="github.com/Naki-404/DisplayProfileManager"
+                               Foreground="{DynamicResource MutedBrush}" FontSize="11" Margin="0,6,0,0"
+                               Cursor="Hand" MouseLeftButtonUp="AboutSite_Click"
+                               TextDecorations="Underline"/>
                 </StackPanel>
             </ScrollViewer>
 

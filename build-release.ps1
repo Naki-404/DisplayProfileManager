@@ -1,78 +1,121 @@
-# Build compact single-file app + Windows installer
+# Build compact app + Windows installer into project-root \release
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$publish = Join-Path $root 'dist\app'
-$payload = Join-Path $root 'Installer\payload'
-$outSetup = Join-Path $root 'dist'
+$release = Join-Path $root 'release'
+$publish = Join-Path $release '_publish'
+$payloadDir = Join-Path $root 'Installer\_payload-stage'
+$payloadZip = Join-Path $root 'Installer\payload.zip'
+$setupPublish = Join-Path $release '_setup-publish'
 
-Write-Host '== Publish app (single-file, win-x64, framework-dependent) ==' -ForegroundColor Cyan
-if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
+Write-Host '== Clean previous release artifacts ==' -ForegroundColor Cyan
+foreach ($p in @($publish, $payloadDir, $setupPublish)) {
+  if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+}
+if (Test-Path $payloadZip) { Remove-Item $payloadZip -Force }
+New-Item -ItemType Directory -Force -Path $release | Out-Null
+
+Get-Process DisplayProfileManager, 'DisplayProfileManager-Setup' -ErrorAction SilentlyContinue |
+  Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 400
+
+Write-Host '== Publish app (single-file, AV-friendlier flags) ==' -ForegroundColor Cyan
 dotnet publish .\DisplayProfileManager.csproj -c Release -r win-x64 --self-contained false `
   -p:PublishSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true `
-  -p:PublishReadyToRun=true `
+  -p:IncludeNativeLibrariesForSelfExtract=false `
+  -p:PublishReadyToRun=false `
   -p:DebugType=none `
   -p:DebugSymbols=false `
+  -p:IncludeAllContentForSelfExtract=false `
   -o $publish
 if ($LASTEXITCODE -ne 0) { throw 'App publish failed' }
 
-# Drop junk that may still appear
-Get-ChildItem $publish -Include '*.pdb','*.xml' -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-ChildItem $publish -Include '*.pdb','*.xml' -Recurse -ErrorAction SilentlyContinue |
+  Remove-Item -Force -ErrorAction SilentlyContinue
 
-# QRes beside the app (tiny fallback for resolution)
 $qres = 'C:\Tools\QRes\QRes.exe'
 if (Test-Path $qres) {
-    Copy-Item $qres (Join-Path $publish 'QRes.exe') -Force
+  Copy-Item $qres (Join-Path $publish 'QRes.exe') -Force
 }
 
-Write-Host '== Stage installer payload (app files only) ==' -ForegroundColor Cyan
-if (Test-Path $payload) { Remove-Item $payload -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $payload | Out-Null
-# Strict whitelist — never ship screenshots/docs/extra junk
+Write-Host '== Stage installer payload.zip ==' -ForegroundColor Cyan
+New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
 $appExe = Join-Path $publish 'DisplayProfileManager.exe'
 if (-not (Test-Path $appExe)) { throw "Missing $appExe" }
-Copy-Item $appExe (Join-Path $payload 'DisplayProfileManager.exe') -Force
+Copy-Item $appExe (Join-Path $payloadDir 'DisplayProfileManager.exe') -Force
+
 $qresOut = Join-Path $publish 'QRes.exe'
 if (Test-Path $qresOut) {
-  Copy-Item $qresOut (Join-Path $payload 'QRes.exe') -Force
+  Copy-Item $qresOut (Join-Path $payloadDir 'QRes.exe') -Force
 }
-Get-ChildItem $payload | ForEach-Object { '  payload: {0}' -f $_.Name }
+
+$assetsDst = Join-Path $payloadDir 'Assets'
+New-Item -ItemType Directory -Force -Path $assetsDst | Out-Null
+$soundsSrc = Join-Path $root 'Assets\Sounds'
+$packsSrc = Join-Path $root 'Assets\Packs'
+if (Test-Path $soundsSrc) { Copy-Item $soundsSrc (Join-Path $assetsDst 'Sounds') -Recurse -Force }
+if (Test-Path $packsSrc) { Copy-Item $packsSrc (Join-Path $assetsDst 'Packs') -Recurse -Force }
+
+# Also copy Assets that landed beside publish output
+$pubAssets = Join-Path $publish 'Assets'
+if (Test-Path $pubAssets) {
+  Copy-Item (Join-Path $pubAssets '*') $assetsDst -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Compress-Archive -Path (Join-Path $payloadDir '*') -DestinationPath $payloadZip -Force
+Remove-Item $payloadDir -Recurse -Force
+Write-Host ("  payload.zip: {0:N1} KB" -f ((Get-Item $payloadZip).Length / 1KB))
 
 Write-Host '== Build Setup.exe ==' -ForegroundColor Cyan
-$setupOut = Join-Path $outSetup 'setup-build'
-if (Test-Path $setupOut) { Remove-Item $setupOut -Recurse -Force }
 dotnet publish .\Installer\Installer.csproj -c Release -r win-x64 --self-contained false `
   -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=false `
+  -p:PublishReadyToRun=false `
   -p:DebugType=none `
   -p:DebugSymbols=false `
-  -o $setupOut
+  -o $setupPublish
 if ($LASTEXITCODE -ne 0) { throw 'Installer publish failed' }
 
-$final = Join-Path $outSetup 'DisplayProfileManager-Setup.exe'
-Copy-Item (Join-Path $setupOut 'DisplayProfileManager-Setup.exe') $final -Force
+$finalApp = Join-Path $release 'DisplayProfileManager.exe'
+$finalSetup = Join-Path $release 'DisplayProfileManager-Setup.exe'
+Copy-Item $appExe $finalApp -Force
+Copy-Item (Join-Path $setupPublish 'DisplayProfileManager-Setup.exe') $finalSetup -Force
 
-# Also keep a portable single-folder copy
-$portable = Join-Path $outSetup 'portable'
+$portable = Join-Path $release 'portable'
 if (Test-Path $portable) { Remove-Item $portable -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $portable | Out-Null
-Copy-Item (Join-Path $publish '*') $portable -Force
+Copy-Item (Join-Path $publish '*') $portable -Recurse -Force
+# Ensure portable has Assets
+if (-not (Test-Path (Join-Path $portable 'Assets\Sounds')) -and (Test-Path $soundsSrc)) {
+  New-Item -ItemType Directory -Force -Path (Join-Path $portable 'Assets') | Out-Null
+  Copy-Item $soundsSrc (Join-Path $portable 'Assets\Sounds') -Recurse -Force
+  if (Test-Path $packsSrc) { Copy-Item $packsSrc (Join-Path $portable 'Assets\Packs') -Recurse -Force }
+}
 
-# Clear Mark-of-the-Web on local artifacts (SmartScreen is quieter without Zone.Identifier)
-Get-ChildItem $outSetup -Recurse -Include '*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
+Get-ChildItem $release -Recurse -Include '*.exe','*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
   try { Unblock-File -Path $_.FullName -ErrorAction SilentlyContinue } catch {}
   $zone = $_.FullName + ':Zone.Identifier'
   if (Test-Path $zone) { Remove-Item $zone -Force -ErrorAction SilentlyContinue }
 }
 
+Remove-Item $publish -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $setupPublish -Recurse -Force -ErrorAction SilentlyContinue
+# Keep payload.zip out of repo noise after embed
+Remove-Item $payloadZip -Force -ErrorAction SilentlyContinue
+
 Write-Host ''
-Write-Host 'Done.' -ForegroundColor Green
-Get-ChildItem $publish | ForEach-Object { '  app: {0,8:N1} KB  {1}' -f ($_.Length/1KB), $_.Name }
-Get-ChildItem $final | ForEach-Object { '  setup:{0,8:N1} KB  {1}' -f ($_.Length/1KB), $_.Name }
+Write-Host 'Done. Artifacts in project-root \release :' -ForegroundColor Green
+Get-ChildItem $release -File | ForEach-Object {
+  '  {0,10:N1} KB  {1}' -f ($_.Length / 1KB), $_.Name
+}
+if (Test-Path $portable) {
+  Write-Host ("  portable\  ({0} files)" -f (Get-ChildItem $portable -Recurse -File | Measure-Object).Count)
+}
 Write-Host ''
-Write-Host "Installer: $final"
-Write-Host "Portable:  $portable"
+Write-Host "App:   $finalApp"
+Write-Host "Setup: $finalSetup"
 Write-Host ''
-Write-Host 'Note: SmartScreen "Unknown publisher" is fully removed only with a paid Authenticode certificate.' -ForegroundColor DarkYellow
-Write-Host 'Author/publisher metadata is set to Nakidev. Local builds are Unblock-File cleaned.'
+Write-Host 'AV: unsigned process/gamma tools often trip heuristics. This build drops ReadyToRun,' -ForegroundColor DarkYellow
+Write-Host 'native self-extract DLLs, installer NvAPIWrapper, and hidden cmd cleanups.'
+Write-Host 'Complete SmartScreen silence still needs a paid Authenticode certificate.'

@@ -20,6 +20,19 @@ public sealed class HotkeyService : IDisposable
     private const uint ModWin = 0x0008;
     private const uint ModNoRepeat = 0x4000;
 
+    private const int WhMouseLl = 14;
+    private const int WmXButtonDown = 0x020B;
+    private const uint XButton1Flag = 0x0001;
+    private const uint XButton2Flag = 0x0002;
+
+    /// <summary>
+    /// Pseudo virtual-key codes for mouse side buttons — outside the real VK range (0x01..0xFE),
+    /// so they can share the same binding table/mods logic as keyboard VKs without colliding.
+    /// Mouse buttons cannot be registered with RegisterHotKey; they only work via the LL hook.
+    /// </summary>
+    private const uint VkMouseXButton1 = 0x1001;
+    private const uint VkMouseXButton2 = 0x1002;
+
     [DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -54,6 +67,23 @@ public sealed class HotkeyService : IDisposable
         public IntPtr DwExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PointL
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MsLlHookStruct
+    {
+        public PointL Pt;
+        public uint MouseData;
+        public uint Flags;
+        public uint Time;
+        public IntPtr DwExtraInfo;
+    }
+
     private readonly Dictionary<int, string> _idToAction = new();
     private readonly List<(uint mods, uint vk, string action)> _bindings = new();
     private readonly object _bindGate = new();
@@ -64,6 +94,8 @@ public sealed class HotkeyService : IDisposable
     private HwndSource? _source;
     private IntPtr _llHook = IntPtr.Zero;
     private LowLevelKeyboardProc? _llProc;
+    private IntPtr _mouseHook = IntPtr.Zero;
+    private LowLevelKeyboardProc? _mouseProc;
     private string? _lastAction;
     private long _lastActionTicks;
     private volatile bool _uiTextInputFocused;
@@ -82,6 +114,7 @@ public sealed class HotkeyService : IDisposable
         _hook = WndProc;
         _source.AddHook(_hook);
         InstallLlHook();
+        InstallMouseHook();
         HookUiFocusTracking();
     }
 
@@ -127,6 +160,7 @@ public sealed class HotkeyService : IDisposable
     {
         UnregisterAll();
         RemoveLlHook();
+        RemoveMouseHook();
         if (_source != null && _hook != null)
             _source.RemoveHook(_hook);
         _source = null;
@@ -150,6 +184,7 @@ public sealed class HotkeyService : IDisposable
         TryRegister("nextPreset", hk.NextPreset);
         TryRegister("previousPreset", hk.PreviousPreset);
         TryRegister("compareAb", hk.CompareAb);
+        TryRegister("toggleZoom", hk.ToggleZoom);
 
         // Prefer live game; otherwise the game selected on Presets / Profiles so hotkeys work before launch.
         var source = activeProfile ?? fallbackProfile;
@@ -207,6 +242,7 @@ public sealed class HotkeyService : IDisposable
                      ("nextPreset", hk.NextPreset),
                      ("previousPreset", hk.PreviousPreset),
                      ("compareAb", hk.CompareAb),
+                     ("toggleZoom", hk.ToggleZoom),
                  })
         {
             if (string.IsNullOrWhiteSpace(g)) continue;
@@ -244,6 +280,7 @@ public sealed class HotkeyService : IDisposable
         "nextPreset" => "Next preset",
         "previousPreset" => "Previous preset",
         "compareAb" => "A/B compare",
+        "toggleZoom" => "Toggle zoom",
         _ when action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase)
             => "Preset " + action["preset:".Length..],
         _ => action
@@ -269,6 +306,13 @@ public sealed class HotkeyService : IDisposable
         // NumPad is registered as NumPad VK only — no Insert/arrow aliases (those stole unrelated keys).
         lock (_bindGate)
             _bindings.Add((mods, vk, action));
+
+        // Mouse side buttons have no RegisterHotKey equivalent — hook-only.
+        if (vk is VkMouseXButton1 or VkMouseXButton2)
+        {
+            AppLog.Info($"Hotkey registered (mouse hook only): {action} = {gesture}");
+            return;
+        }
 
         int id = _nextId++;
         if (RegisterHotKey(_hwnd, id, mods | ModNoRepeat, vk))
@@ -327,6 +371,70 @@ public sealed class HotkeyService : IDisposable
             _llHook = IntPtr.Zero;
         }
         _llProc = null;
+    }
+
+    /// <summary>
+    /// WH_MOUSE_LL fallback so mouse XButton1/XButton2 hotkeys keep working in exclusive
+    /// fullscreen games, mirroring the keyboard LL hook above.
+    /// </summary>
+    private void InstallMouseHook()
+    {
+        if (_mouseHook != IntPtr.Zero) return;
+        _mouseProc = MouseLlCallback;
+        _mouseHook = SetWindowsHookEx(WhMouseLl, _mouseProc, GetModuleHandle(null), 0);
+        if (_mouseHook == IntPtr.Zero)
+            AppLog.Error("Low-level mouse hook failed — mouse-button hotkeys unavailable.");
+        else
+            AppLog.Info("Low-level mouse hook installed for hotkeys.");
+    }
+
+    private void RemoveMouseHook()
+    {
+        if (_mouseHook != IntPtr.Zero)
+        {
+            UnhookWindowsHookEx(_mouseHook);
+            _mouseHook = IntPtr.Zero;
+        }
+        _mouseProc = null;
+    }
+
+    private IntPtr MouseLlCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        try
+        {
+            if (nCode >= 0 && wParam == (IntPtr)WmXButtonDown && !_uiTextInputFocused)
+            {
+                var info = Marshal.PtrToStructure<MsLlHookStruct>(lParam);
+                uint xButton = (info.MouseData >> 16) & 0xFFFF;
+                uint vk = xButton switch
+                {
+                    XButton1Flag => VkMouseXButton1,
+                    XButton2Flag => VkMouseXButton2,
+                    _ => 0
+                };
+                if (vk != 0)
+                {
+                    uint mods = ReadModifiers(0);
+                    string? action = null;
+                    lock (_bindGate)
+                    {
+                        foreach (var b in _bindings)
+                        {
+                            if (b.vk == vk && b.mods == mods)
+                            {
+                                action = b.action;
+                                break;
+                            }
+                        }
+                    }
+                    if (action != null)
+                        Raise(action);
+                }
+            }
+        }
+        catch { /* never break the hook chain */ }
+
+        return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
     }
 
     private IntPtr LlCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -462,6 +570,8 @@ public sealed class HotkeyService : IDisposable
             "space" => 0x20,
             "tab" => 0x09,
             "oemtilde" or "`" => 0xC0,
+            "mousexbutton1" or "xbutton1" => VkMouseXButton1,
+            "mousexbutton2" or "xbutton2" => VkMouseXButton2,
             _ when keyPart.Length == 1 => (uint)char.ToUpperInvariant(keyPart[0]),
             _ when keyPart.Length > 1 && Enum.TryParse<Key>(keyPart, true, out var k)
                 => (uint)KeyInterop.VirtualKeyFromKey(k),
@@ -525,6 +635,30 @@ public sealed class HotkeyService : IDisposable
             _ => key.ToString()
         };
         sb.Append(k);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds a gesture string for mouse side buttons (XButton1/XButton2) — the only mouse
+    /// buttons Windows exposes as distinct, non-primary-click input. Returns null for any
+    /// other button (left/right/middle/wheel are reserved for normal UI/game interaction).
+    /// </summary>
+    public static string? GestureFromMouse(ModifierKeys mods, MouseButton button)
+    {
+        string? name = button switch
+        {
+            MouseButton.XButton1 => "MouseXButton1",
+            MouseButton.XButton2 => "MouseXButton2",
+            _ => null
+        };
+        if (name == null) return null;
+
+        var sb = new StringBuilder();
+        if (mods.HasFlag(ModifierKeys.Control)) sb.Append("Ctrl+");
+        if (mods.HasFlag(ModifierKeys.Alt)) sb.Append("Alt+");
+        if (mods.HasFlag(ModifierKeys.Shift)) sb.Append("Shift+");
+        if (mods.HasFlag(ModifierKeys.Windows)) sb.Append("Win+");
+        sb.Append(name);
         return sb.ToString();
     }
 

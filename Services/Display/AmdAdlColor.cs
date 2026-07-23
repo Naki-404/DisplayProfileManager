@@ -218,6 +218,18 @@ internal sealed class AmdAdlColor : IDisposable
         }
     }
 
+    /// <summary>
+    /// AMD ADL has no public HUE offset control (only brightness/contrast/saturation via
+    /// ADL_DISPLAY_COLOR). Stub kept parallel to NvidiaDriverColor.TrySetHue so callers can
+    /// treat both vendors uniformly; always returns false.
+    /// </summary>
+    public bool TrySetHue(int hue)
+    {
+        _ = hue;
+        AppLog.Info("AMD HUE control not available (ADL has no HUE API) - skipped.");
+        return false;
+    }
+
     public void Restore(DriverColorSnapshot snap)
     {
         if (!_ready || snap.Vendor != "amd") return;
@@ -279,4 +291,6 @@ public sealed class DriverColorSnapshot
     public int? Saturation { get; set; }
     public int? VibranceLevel { get; set; }
     public float? NormalizedVibrance { get; set; }
+    /// <summary>NVIDIA HUE offset angle (0..359). Null on vendors/drivers without HUE support.</summary>
+    public int? HueAngle { get; set; }
 }

@@ -17,7 +17,6 @@ public sealed class AppConfig
     public bool FirstScanDone { get; set; }
     /// <summary>True after core games were seeded once — deleted cores stay deleted.</summary>
     public bool CoreProfilesSeeded { get; set; }
-    public double HotkeyStep { get; set; } = 0.05;
 
     /// <summary>UI / first-run preferences.</summary>
     public UiPreferences Ui { get; set; } = new();
@@ -29,8 +28,8 @@ public sealed class UiPreferences
     public string Locale { get; set; } = "en";
     /// <summary>dark | light | custom</summary>
     public string Theme { get; set; } = "dark";
-    public string CustomAccent { get; set; } = "#C45C84";
-    public string CustomBackground { get; set; } = "#120E11";
+    public string CustomAccent { get; set; } = "#7EB8D4";
+    public string CustomBackground { get; set; } = "#0F1216";
     /// <summary>Full palette when Theme = custom.</summary>
     public ThemePalette? CustomPalette { get; set; }
     public bool SetupCompleted { get; set; }
@@ -58,6 +57,11 @@ public sealed class UiPreferences
     public bool UiSoundsEnabled { get; set; } = true;
     /// <summary>0..100 master volume for UI sounds.</summary>
     public int UiSoundVolume { get; set; } = 70;
+    /// <summary>Suppress UI sounds while a watched game is active.</summary>
+    public bool MuteSoundsInGame { get; set; }
+
+    /// <summary>Center-screen Magnification zoom factor (2–12). Used with GlobalHotkeys.ToggleZoom.</summary>
+    public int ZoomFactor { get; set; } = 4;
 
     public UiPreferences Clone() => new()
     {
@@ -81,37 +85,39 @@ public sealed class UiPreferences
         OverlayLeft = OverlayLeft,
         OverlayTop = OverlayTop,
         UiSoundsEnabled = UiSoundsEnabled,
-        UiSoundVolume = UiSoundVolume
+        UiSoundVolume = UiSoundVolume,
+        MuteSoundsInGame = MuteSoundsInGame,
+        ZoomFactor = ZoomFactor
     };
 }
 
 /// <summary>All UI chrome colors as #RRGGBB hex strings.</summary>
 public sealed class ThemePalette
 {
-    public string Bg { get; set; } = "#120E11";
-    public string Panel { get; set; } = "#1A1418";
-    public string Border { get; set; } = "#3D2A34";
-    public string Text { get; set; } = "#F3E6EC";
-    public string Muted { get; set; } = "#B08A9A";
-    public string Accent { get; set; } = "#C45C84";
-    public string AccentHover { get; set; } = "#D4749A";
-    public string Danger { get; set; } = "#A04860";
-    public string Field { get; set; } = "#241A20";
-    public string Track { get; set; } = "#2E2228";
-    public string GhostBg { get; set; } = "#22181D";
-    public string GhostBorder { get; set; } = "#3D2A34";
-    public string GhostHover { get; set; } = "#2A1E24";
-    public string AccentButtonText { get; set; } = "#FFFFFF";
-    public string CheckCheckedBg { get; set; } = "#2A1C23";
-    public string ComboHighlight { get; set; } = "#2E1F27";
-    public string ComboSelected { get; set; } = "#3A2430";
-    public string TabSelected { get; set; } = "#2A1C23";
-    public string TabHover { get; set; } = "#22181D";
-    public string CaptionHover { get; set; } = "#2A1E24";
-    public string TitleBar { get; set; } = "#160F13";
-    public string PillBg { get; set; } = "#2A1C23";
-    public string ToastBg { get; set; } = "#2A1820";
-    public string ToastBorder { get; set; } = "#6B3A4C";
+    public string Bg { get; set; } = "#0F1216";
+    public string Panel { get; set; } = "#161B22";
+    public string Border { get; set; } = "#2A3340";
+    public string Text { get; set; } = "#E8EEF4";
+    public string Muted { get; set; } = "#8B9AAB";
+    public string Accent { get; set; } = "#7EB8D4";
+    public string AccentHover { get; set; } = "#93C7DF";
+    public string Danger { get; set; } = "#C1554F";
+    public string Field { get; set; } = "#1B212B";
+    public string Track { get; set; } = "#232B37";
+    public string GhostBg { get; set; } = "#1A212B";
+    public string GhostBorder { get; set; } = "#2A3340";
+    public string GhostHover { get; set; } = "#212938";
+    public string AccentButtonText { get; set; } = "#0F1216";
+    public string CheckCheckedBg { get; set; } = "#1E2732";
+    public string ComboHighlight { get; set; } = "#1E2733";
+    public string ComboSelected { get; set; } = "#24303D";
+    public string TabSelected { get; set; } = "#1C2430";
+    public string TabHover { get; set; } = "#171E27";
+    public string CaptionHover { get; set; } = "#1E2732";
+    public string TitleBar { get; set; } = "#10141A";
+    public string PillBg { get; set; } = "#1C2430";
+    public string ToastBg { get; set; } = "#161B22";
+    public string ToastBorder { get; set; } = "#2A3340";
 
     public ThemePalette Clone() => new()
     {
@@ -218,6 +224,12 @@ public sealed class ColorSettings
     /// </summary>
     public int Vibrance { get; set; } = 50;
 
+    /// <summary>
+    /// NVIDIA HUE offset angle, 0..359 degrees. 0 = neutral (no shift).
+    /// Only applied on the NVIDIA driver path (see NvidiaDriverColor.TrySetHue).
+    /// </summary>
+    public int Hue { get; set; } = 0;
+
     /// <summary>Lift dark tones after the RT curve (0..0.4). Not part of classic RivaTuner.</summary>
     public double ShadowLift { get; set; } = 0.0;
 
@@ -233,6 +245,7 @@ public sealed class ColorSettings
         Contrast = Contrast,
         Gamma = Gamma,
         Vibrance = Vibrance,
+        Hue = Hue,
         ShadowLift = ShadowLift,
         Backend = Backend,
         LockColor = LockColor
@@ -247,6 +260,7 @@ public sealed class ColorSettings
         // Driver CP gamma is 0.4..2.8; Low Level / GDI keep RivaTuner 0.5..6
         Gamma = Math.Clamp(Gamma, driver ? 0.4 : 0.5, driver ? 2.8 : 6.0);
         Vibrance = Math.Clamp(Vibrance, 0, 100);
+        Hue = ((Hue % 360) + 360) % 360;
         ShadowLift = Math.Clamp(ShadowLift, 0.0, 0.4);
         if (!Enum.IsDefined(typeof(ColorBackend), Backend))
             Backend = ColorBackend.LowLevel;
@@ -317,6 +331,8 @@ public sealed class GlobalHotkeys
     public string? NextPreset { get; set; }
     public string? PreviousPreset { get; set; }
     public string? CompareAb { get; set; }
+    /// <summary>Toggle center-screen Magnification zoom (no game injection).</summary>
+    public string? ToggleZoom { get; set; }
 }
 
 public sealed class QuickPreset
@@ -330,6 +346,8 @@ public sealed class QuickPreset
     public ColorSettings Color { get; set; } = ColorSettings.Neutral;
     public ColorSettings? ColorLowLevel { get; set; }
     public ColorSettings? ColorDriver { get; set; }
+    /// <summary>Per-preset FPS cap via NVIDIA DRS (see FpsLimitService). 0 = off / inherit.</summary>
+    public int FpsLimit { get; set; }
 
     public void EnsureDualColorSlots()
     {
@@ -373,7 +391,8 @@ public sealed class QuickPreset
         ApplyColor = p.ApplyColor,
         Color = p.Color.Clone(),
         ColorLowLevel = p.ColorLowLevel?.Clone(),
-        ColorDriver = p.ColorDriver?.Clone()
+        ColorDriver = p.ColorDriver?.Clone(),
+        FpsLimit = p.FpsLimit
     };
 
     [JsonIgnore]
@@ -523,6 +542,14 @@ public sealed class GameProfile
     public bool ApplyColor { get; set; }
     public bool ApplyResolution { get; set; }
     public bool ApplyPowerPlan { get; set; } = true;
+    /// <summary>FPS cap via NVIDIA DRS while this profile is active (see FpsLimitService). 0 = off.</summary>
+    public int FpsLimit { get; set; }
+    /// <summary>
+    /// When true, switching focus away from the game (Alt+Tab) softly restores the
+    /// desktop color/resolution without killing companions, and re-applies the game
+    /// state on focus return (see ProfileMonitor soft-restore polling).
+    /// </summary>
+    public bool SoftRestoreOnAltTab { get; set; }
     public List<CompanionApp> Companions { get; set; } = new();
     public List<QuickPreset> Presets { get; set; } = new();
 

@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
-using DisplayProfileManager.Services;
 
 namespace DisplayProfileManager;
 
@@ -15,13 +14,6 @@ public partial class BootSplashWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            var bmp = AssetLoader.Image("boot-splash.jpg");
-            if (bmp != null) Art.Source = bmp;
-        }
-        catch { /* optional */ }
-
         var done = false;
         void Finish()
         {
@@ -37,7 +29,7 @@ public partial class BootSplashWindow : Window
             sb.Begin(this);
         }
 
-        var safety = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+        var safety = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.4) };
         safety.Tick += (_, _) =>
         {
             safety.Stop();

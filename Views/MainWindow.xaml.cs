@@ -33,6 +33,12 @@ public partial class MainWindow : Window
     private int _lastTabIndex;
     private ColorBackend _presetEditorBackend = ColorBackend.LowLevel;
 
+    private GameProfile? _playProfile;
+    private QuickPreset? _playPreset;
+    private ColorBackend _playBackend = ColorBackend.LowLevel;
+    private bool _suppressPlayEvents;
+    private bool _suppressGameListSync;
+
     public MainWindow()
     {
         _suppressEditorEvents = true;
@@ -47,6 +53,7 @@ public partial class MainWindow : Window
             SetStatus("Autosaved");
         };
         ProfileList.ItemsSource = _profiles;
+        PlayGameList.ItemsSource = _profiles;
         PresetGameList.ItemsSource = _profiles;
         PresetList.ItemsSource = _presets;
         FooterText.Text = "Config: " + App.Services.Config.ConfigPath;
@@ -57,6 +64,7 @@ public partial class MainWindow : Window
         ApplyLocalization();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
         _suppressEditorEvents = false;
+        RefreshPlayTab();
 
         Loaded += (_, _) => MaybeFirstScan();
         Loc.Changed += () => Dispatcher.Invoke(ApplyLocalization);
@@ -170,6 +178,10 @@ public partial class MainWindow : Window
         _lastTabIndex = MainTabs.SelectedIndex;
         if (ReferenceEquals(MainTabs.SelectedItem, TabPresets))
             FocusPresetsForActiveOrSelectedGame();
+        if (ReferenceEquals(MainTabs.SelectedItem, TabPlay))
+            RefreshPlayTab();
+        if (ReferenceEquals(MainTabs.SelectedItem, TabLog))
+            RefreshLog_Click(this, new RoutedEventArgs());
         if (MainTabs.SelectedContent is FrameworkElement fe)
             UiMotion.SoftContentIn(fe);
     }
@@ -266,6 +278,16 @@ public partial class MainWindow : Window
     {
         try
         {
+            Icon = System.Windows.Media.Imaging.BitmapFrame.Create(
+                new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute));
+        }
+        catch { }
+
+        if (MainTabs.SelectedItem != TabPlay)
+            MainTabs.SelectedItem = TabPlay;
+
+        try
+        {
             var hwnd = new WindowInteropHelper(this).Handle;
             bool light = string.Equals(App.Services.Config.Current.Ui?.Theme, "light", StringComparison.OrdinalIgnoreCase);
             int useDark = light ? 0 : 1;
@@ -283,13 +305,16 @@ public partial class MainWindow : Window
 
     private static DateTime _lastClickSoundUtc = DateTime.MinValue;
 
+    /// <summary>Only "primary" action buttons get the click chime — Ghost/secondary buttons stay silent.</summary>
+    private static readonly HashSet<string> ClickSoundButtons = new(StringComparer.Ordinal)
+    {
+        "BtnApply", "BtnSave", "BtnEmergency", "BtnScan", "BtnLaunchGame", "BtnLaunchGamePreset"
+    };
+
     private static void OnAnyButtonClick(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.Button btn) return;
-        // Skip title-bar chrome
-        if (Equals(btn.Style, btn.TryFindResource("CaptionButton"))
-            || Equals(btn.Style, btn.TryFindResource("CaptionCloseButton"))
-            || btn.Name == "BtnSettingsCaption")
+        if (string.IsNullOrEmpty(btn.Name) || !ClickSoundButtons.Contains(btn.Name))
             return;
         var now = DateTime.UtcNow;
         if ((now - _lastClickSoundUtc).TotalMilliseconds < 160) return;
@@ -297,9 +322,10 @@ public partial class MainWindow : Window
         UiSound.Click();
     }
 
-    private void LaunchGame_Click(object sender, RoutedEventArgs e)
+    private void LaunchGame_Click(object sender, RoutedEventArgs e) => LaunchProfile(_selected ?? _presetGame);
+
+    private void LaunchProfile(GameProfile? profile)
     {
-        var profile = _selected ?? _presetGame;
         if (profile == null)
         {
             ThemedDialog.Show(this, "Select a game profile first.", "Launch");
@@ -328,6 +354,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            UiSound.Error();
             ThemedDialog.Show(this, "Could not start game:\n" + ex.Message, "Launch");
         }
     }
@@ -358,6 +385,19 @@ public partial class MainWindow : Window
     private void Close_Click(object sender, RoutedEventArgs e)
         => Close();
 
+    private void NakidevCredit_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "https://t.me/nakidev",
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
         if (!TryResolveUnsavedChanges())
@@ -377,15 +417,13 @@ public partial class MainWindow : Window
 
     public void ApplyLocalization()
     {
-        TitleAppName.Text = Loc.T("app.name");
-        Title = Loc.T("app.name");
+        UpdateTitleDirtyState();
         BtnApply.Content = Loc.T("btn.apply");
         if (BtnEmergency != null)
         {
-            BtnEmergency.Content = Loc.T("btn.emergency");
+            BtnEmergency.Content = Loc.T("btn.emergency.short");
             BtnEmergency.ToolTip = Loc.T("btn.emergency.tip");
         }
-        if (InfoEmergency != null) SetTip(InfoEmergency, "btn.emergency.tip");
         if (BtnReset != null) BtnReset.Content = Loc.T("btn.reset.global");
         if (LblResetGlobalHint != null) LblResetGlobalHint.Text = Loc.T("btn.reset.global.hint");
         BtnScan.Content = Loc.T("btn.scan");
@@ -393,21 +431,34 @@ public partial class MainWindow : Window
         BtnRestore.Content = Loc.T("btn.restore");
         BtnDup.Content = Loc.T("btn.dup");
         BtnDelete.Content = Loc.T("btn.delete");
+        TabPlay.Header = Loc.T("tab.play");
         TabProfiles.Header = Loc.T("tab.profiles");
         TabPresets.Header = Loc.T("tab.presets");
         TabGlobal.Header = Loc.T("tab.global");
         TabLog.Header = Loc.T("tab.log");
+        if (LblPlayTitle != null) LblPlayTitle.Text = Loc.T("play.title");
+        if (LblPlayFps != null) LblPlayFps.Text = Loc.T("profile.fpsLimit");
+        if (LblPlayColor != null) LblPlayColor.Text = Loc.T("play.color");
+        if (LblPlayColorHint != null) LblPlayColorHint.Text = Loc.T("play.color.hint");
+        if (LblPlayPresets != null) LblPlayPresets.Text = Loc.T("play.presets");
+        if (ExpPlayHotkeys != null) ExpPlayHotkeys.Header = Loc.T("play.hotkeys");
+        if (ExpPlaySession != null) ExpPlaySession.Header = Loc.T("play.session");
+        if (BtnPlayLaunch != null) BtnPlayLaunch.Content = Loc.T("btn.launchGame");
+        if (BtnPlayOverlay != null) BtnPlayOverlay.Content = Loc.T("btn.overlay");
+        if (ChkPlaySoftAltTab != null) ChkPlaySoftAltTab.Content = Loc.T("profile.softAltTab");
         TxtSettingsCaption.Text = Loc.T("btn.settings");
         BtnSettingsCaption.ToolTip = Loc.T("btn.settings");
         TxtSearch.ToolTip = Loc.T("search.placeholder");
         LblDisplay.Text = Loc.T("display");
 
-        if (LblSessionTitle != null) LblSessionTitle.Text = Loc.T("session.title");
+        if (LblUnsaved != null) LblUnsaved.Text = Loc.T("dirty.unsaved");
+        if (BtnOpenPresets != null) BtnOpenPresets.Content = Loc.T("btn.openPresets");
+        if (ExpSession != null) ExpSession.Header = Loc.T("session.advanced");
+        if (LblHotkeyCheat != null) LblHotkeyCheat.Text = Loc.T("hotkey.cheatsheet");
         if (LblSessionSub != null) LblSessionSub.Text = Loc.T("session.sub");
         if (ChkQuietToast != null) ChkQuietToast.Content = Loc.T("session.quiet");
         if (ChkNoNightLight != null) ChkNoNightLight.Content = Loc.T("session.night");
         if (ChkNoAutoHdr != null) ChkNoAutoHdr.Content = Loc.T("session.hdr");
-        if (ChkIsolateMon != null) ChkIsolateMon.Content = Loc.T("session.primary");
         if (ChkMonBright != null) ChkMonBright.Content = Loc.T("session.bright");
         if (ChkSwitchAudio != null) ChkSwitchAudio.Content = Loc.T("session.audio");
         if (LblScaling != null) LblScaling.Text = Loc.T("session.scaling");
@@ -423,7 +474,11 @@ public partial class MainWindow : Window
         if (LblRefreshRate != null) LblRefreshRate.Text = Loc.T("display.refresh");
         if (LblStartupPreset != null) LblStartupPreset.Text = Loc.T("profile.startup");
         if (LblAliases != null) LblAliases.Text = Loc.T("profile.aliases");
+        if (ExpAdvanced != null) ExpAdvanced.Header = Loc.T("profile.advanced");
         if (ChkApplyOnFocus != null) ChkApplyOnFocus.Content = Loc.T("profile.focus");
+        if (ChkSoftAltTab != null) ChkSoftAltTab.Content = Loc.T("profile.softAltTab");
+        if (LblFpsLimit != null) LblFpsLimit.Text = Loc.T("profile.fpsLimit");
+        UpdateFpsLimitAvailability();
         if (LblMonitorLayout != null) LblMonitorLayout.Text = Loc.T("session.layout");
         if (LblSessionTemplates != null) LblSessionTemplates.Text = Loc.T("session.templates");
         if (BtnTplCompetitive != null) BtnTplCompetitive.Content = Loc.T("session.tpl.competitive");
@@ -432,7 +487,17 @@ public partial class MainWindow : Window
         if (LblHkNext != null) LblHkNext.Text = Loc.T("hotkey.next");
         if (LblHkPrev != null) LblHkPrev.Text = Loc.T("hotkey.prev");
         if (LblHkAb != null) LblHkAb.Text = Loc.T("hotkey.compareAb");
+        if (LblHkZoom != null) LblHkZoom.Text = Loc.T("hotkey.zoom");
+        if (LblHkOverlay != null) LblHkOverlay.Text = Loc.T("hotkey.overlay");
+        if (LblHkEmergency != null) LblHkEmergency.Text = Loc.T("hotkey.emergency");
+        if (LblAppHotkeys != null) LblAppHotkeys.Text = Loc.T("hotkey.app");
+        if (LblZoomFactor != null) LblZoomFactor.Text = Loc.T("zoom.factor");
+        if (LblZoomHint != null) LblZoomHint.Text = Loc.T("zoom.hint");
         if (LblAppHotkeysHint != null) LblAppHotkeysHint.Text = Loc.T("hotkey.hint");
+        if (StatusText != null && !_dirty) StatusText.Text = Loc.T("status.monitoring");
+        if (BtnLogRefresh != null) BtnLogRefresh.Content = Loc.T("log.refresh");
+        if (BtnLogFolder != null) BtnLogFolder.Content = Loc.T("log.openFolder");
+        if (TabLog != null) TabLog.Header = Loc.T("tab.log");
 
         if (BtnOverlay != null) BtnOverlay.Content = Loc.T("btn.overlay");
 
@@ -443,27 +508,17 @@ public partial class MainWindow : Window
 
     private void ApplyInfoTips()
     {
-        SetTip(InfoApply, "btn.apply.tip");
-        if (InfoEmergency != null) SetTip(InfoEmergency, "btn.emergency.tip");
         if (BtnOverlay != null) BtnOverlay.ToolTip = Loc.T("btn.overlay.tip");
-        SetTip(InfoRes, "display.res.tip");
-        SetTip(InfoPower, "display.power.tip");
         if (InfoRestoreMode != null) SetTip(InfoRestoreMode, "restore.mode.tip");
         if (LblRestoreMode != null) LblRestoreMode.Text = Loc.T("restore.mode.lbl");
-        SetTip(InfoSession, "session.sub");
-        SetTip(InfoDeferred, "session.deferred.tip");
-        SetTip(InfoQuiet, "session.quiet.tip");
+        SetTip(InfoSoftAltTab, "profile.softAltTab.tip");
+        SetTip(InfoFpsLimit, "profile.fpsLimit.tip");
         SetTip(InfoNight, "session.night.tip");
         SetTip(InfoHdr, "session.hdr.tip");
-        SetTip(InfoPrimary, "session.primary.tip");
         SetTip(InfoMonBright, "session.bright.tip");
-        SetTip(InfoAudio, "session.audio.tip");
-        SetTip(InfoScaling, "session.scaling.tip");
         SetTip(InfoCompanions, "companions.tip");
         SetTip(InfoPresetBackend, "color.backend.tip");
         SetTip(InfoPresetLock, "color.lock.tip");
-        SetTip(InfoAutostart, "global.autostart.tip");
-        SetTip(InfoStartMin, "global.startmin.tip");
         if (BtnPresetExport != null) BtnPresetExport.ToolTip = Loc.T("presets.export.tip");
         if (BtnPresetImport != null) BtnPresetImport.ToolTip = Loc.T("presets.import.tip");
     }
@@ -472,6 +527,46 @@ public partial class MainWindow : Window
     {
         if (hint != null)
             hint.Tip = Loc.T(key);
+    }
+
+    /// <summary>Reflects _dirty in the title bar (" •" suffix) — call after any _dirty change.</summary>
+    private void UpdateTitleDirtyState()
+    {
+        string baseTitle = Loc.T("app.name");
+        string shown = _dirty ? baseTitle + " •" : baseTitle;
+        Title = shown;
+        if (TitleAppName != null) TitleAppName.Text = shown;
+    }
+
+    private void OpenPresets_Click(object sender, RoutedEventArgs e)
+    {
+        MainTabs.SelectedItem = TabPresets;
+        FocusPresetsForActiveOrSelectedGame(_selected);
+    }
+
+    /// <summary>Shows the startup preset (and its color, if applied) for the selected profile.</summary>
+    private void UpdateColorSummary(GameProfile? p)
+    {
+        if (LblColorSummary == null) return;
+        if (p == null)
+        {
+            LblColorSummary.Text = Loc.T("color.summary.default");
+            return;
+        }
+
+        var preset = !string.IsNullOrWhiteSpace(p.StartupPresetId)
+            ? p.Presets?.FirstOrDefault(pr => pr.Id == p.StartupPresetId)
+            : null;
+        if (preset == null)
+        {
+            LblColorSummary.Text = Loc.T("color.summary.none");
+            return;
+        }
+
+        string summary = $"Startup preset: {preset.Name}";
+        if (preset.ApplyColor && preset.Color != null)
+            summary += $"  ·  B{(int)Math.Round(preset.Color.Brightness * 100)}%  C{preset.Color.Contrast:F2}  G{preset.Color.Gamma:F2}";
+        LblColorSummary.Text = summary;
     }
 
     public void UpdateActiveHeader(GameProfile? profile)
@@ -487,6 +582,7 @@ public partial class MainWindow : Window
                 bits.Add(profile.Resolution!);
             ActiveHeaderText.Text = string.Join(" · ", bits);
         }
+        RefreshPlayTab();
     }
 
     /// <summary>Game whose preset hotkeys stay registered when no match is running.</summary>
@@ -573,7 +669,7 @@ public partial class MainWindow : Window
             CmbPresetRes.Items.Add(r);
         }
         CmbDefaultRes.SelectedItem = cfg.Defaults.Resolution ?? DisplayEngine.GetCurrentResolution();
-        SelectComboByContent(CmbDefaultPower, cfg.Defaults.PowerPlan ?? "balanced");
+        SelectComboByTag(CmbDefaultPower, cfg.Defaults.PowerPlan ?? "balanced");
 
         cfg.Defaults.Color = ColorSettings.Neutral;
         UpdateDriverUiAvailability();
@@ -584,9 +680,8 @@ public partial class MainWindow : Window
         if (HkNextPreset != null) HkNextPreset.Text = cfg.GlobalHotkeys.NextPreset ?? "";
         if (HkPrevPreset != null) HkPrevPreset.Text = cfg.GlobalHotkeys.PreviousPreset ?? "";
         if (HkCompareAb != null) HkCompareAb.Text = cfg.GlobalHotkeys.CompareAb ?? "";
-
-        ChkAutostart.IsChecked = cfg.StartWithWindows;
-        ChkStartMin.IsChecked = cfg.StartMinimized;
+        if (HkToggleZoom != null) HkToggleZoom.Text = cfg.GlobalHotkeys.ToggleZoom ?? "";
+        SelectZoomFactor(cfg.Ui?.ZoomFactor ?? 4);
 
         FillAudioDevices();
 
@@ -644,6 +739,8 @@ public partial class MainWindow : Window
 
         _suppressEditorEvents = false;
         _dirty = false;
+        if (LblUnsaved != null) LblUnsaved.Visibility = Visibility.Collapsed;
+        UpdateTitleDirtyState();
         RefreshLog_Click(this, new RoutedEventArgs());
     }
 
@@ -751,6 +848,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             UiSound.EndWork(UiWorkResult.Cancel);
+            UiSound.Error();
             ScanBusy.HideAnimated();
             ThemedDialog.Show(this, "Scan failed:\n" + ex.Message, "Scan");
             return;
@@ -824,6 +922,47 @@ public partial class MainWindow : Window
         if (_dirty && _selected != null) PushEditorToSelected();
         _selected = ProfileList.SelectedItem as GameProfile;
         LoadEditor(_selected);
+        SyncPlayGameListSelection(_selected);
+        RefreshPlayTab();
+    }
+
+    /// <summary>Play tab's own game list — keeps ProfileList (Library) and PlayGameList (Play) in sync without looping.</summary>
+    private void PlayGameList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressGameListSync) return;
+        var picked = PlayGameList.SelectedItem as GameProfile;
+        if (picked == null) return;
+
+        if (_dirty && _selected != null) PushEditorToSelected();
+        _selected = picked;
+        LoadEditor(_selected);
+
+        _suppressGameListSync = true;
+        try
+        {
+            if (!ReferenceEquals(ProfileList.SelectedItem, picked))
+                ProfileList.SelectedItem = picked;
+        }
+        finally
+        {
+            _suppressGameListSync = false;
+        }
+        RefreshPlayTab();
+    }
+
+    private void SyncPlayGameListSelection(GameProfile? profile)
+    {
+        if (_suppressGameListSync || PlayGameList == null) return;
+        _suppressGameListSync = true;
+        try
+        {
+            if (!ReferenceEquals(PlayGameList.SelectedItem, profile))
+                PlayGameList.SelectedItem = profile;
+        }
+        finally
+        {
+            _suppressGameListSync = false;
+        }
     }
 
     private void LoadEditor(GameProfile? p)
@@ -858,6 +997,8 @@ public partial class MainWindow : Window
         FillStartupPresetCombo(p, p.StartupPresetId);
         if (SldApplyDelay != null) SldApplyDelay.Value = Math.Clamp(p.ApplyDelaySeconds, 0, 30);
         if (ChkApplyOnFocus != null) ChkApplyOnFocus.IsChecked = p.ApplyOnFocus;
+        if (ChkSoftAltTab != null) ChkSoftAltTab.IsChecked = p.SoftRestoreOnAltTab;
+        if (CmbFpsLimit != null) SelectOrSetFpsLimit(CmbFpsLimit, p.FpsLimit);
 
         SelectComboByTag(CmbPower, p.PowerPlan ?? "");
         SelectComboByTag(CmbDisplay, p.DisplayDevice ?? "");
@@ -867,7 +1008,6 @@ public partial class MainWindow : Window
         ChkQuietToast.IsChecked = sx.QuietNotifications;
         ChkNoNightLight.IsChecked = sx.DisableNightLight;
         ChkNoAutoHdr.IsChecked = sx.DisableAutoHdr;
-        ChkIsolateMon.IsChecked = sx.IsolatePrimaryMonitor;
         var layout = sx.MonitorLayout;
         if (string.IsNullOrWhiteSpace(layout))
             layout = sx.IsolatePrimaryMonitor ? "isolatePrimary" : "keepAll";
@@ -880,6 +1020,7 @@ public partial class MainWindow : Window
         UpdateSessionLabels();
         CompanionList.ItemsSource = null;
         CompanionList.ItemsSource = p.Companions;
+        UpdateColorSummary(p);
         _suppressEditorEvents = false;
         // Keep _dirty — profile switch must not pretend changes were saved to disk
     }
@@ -890,6 +1031,243 @@ public partial class MainWindow : Window
         TxtProcess.Text = "";
         if (TxtAliases != null) TxtAliases.Text = "";
         CompanionList.ItemsSource = null;
+        UpdateColorSummary(null);
+    }
+
+    // -- Play tab --------------------------------------------------------
+
+    /// <summary>Play tab shows the running game if any, else whatever is selected on Profiles.</summary>
+    private GameProfile? ResolvePlayTargetProfile()
+    {
+        string? id = App.Services.Monitor.CurrentProfile?.Id ?? _selected?.Id;
+        return id == null ? null : _profiles.FirstOrDefault(p => p.Id == id);
+    }
+
+    public void RefreshPlayTab()
+    {
+        if (TxtPlayName == null) return; // not yet initialized
+        var profile = ResolvePlayTargetProfile();
+        _playProfile = profile;
+        SyncPlayGameListSelection(profile);
+
+        _suppressPlayEvents = true;
+        try
+        {
+            if (profile == null)
+            {
+                TxtPlayName.Text = Loc.T("play.noGame");
+                TxtPlayProcess.Text = "";
+                TxtPlayStatus.Text = "";
+                PlayPresetChips.Children.Clear();
+                if (ChkPlaySoftAltTab != null) ChkPlaySoftAltTab.IsChecked = false;
+                SelectOrSetFpsLimit(CmbPlayFps, 0);
+                if (TxtPlayHotkeys != null) TxtPlayHotkeys.Text = "";
+                SetPlaySlidersEnabled(false);
+                _playPreset = null;
+                return;
+            }
+
+            SetPlaySlidersEnabled(true);
+            TxtPlayName.Text = profile.Name;
+            TxtPlayProcess.Text = profile.ProcessName;
+            bool active = App.Services.Monitor.CurrentProfile?.Id == profile.Id;
+            TxtPlayStatus.Text = active ? Loc.T("play.status.active") : Loc.T("play.status.idle");
+
+            if (ChkPlaySoftAltTab != null) ChkPlaySoftAltTab.IsChecked = profile.SoftRestoreOnAltTab;
+            SelectOrSetFpsLimit(CmbPlayFps, profile.FpsLimit);
+
+            string? activePresetId = active ? App.Services.Monitor.ActivePresetId : null;
+            QuickPreset? preset = activePresetId != null
+                ? profile.Presets?.FirstOrDefault(p => p.Id == activePresetId)
+                : (_playPreset != null ? profile.Presets?.FirstOrDefault(p => p.Id == _playPreset.Id) : null);
+            if (preset == null && !string.IsNullOrWhiteSpace(profile.StartupPresetId))
+                preset = profile.Presets?.FirstOrDefault(p => p.Id == profile.StartupPresetId);
+            preset ??= profile.Presets?.FirstOrDefault();
+            _playPreset = preset;
+
+            RebuildPlayPresetChips(profile, preset);
+            LoadPlaySlidersFrom(preset, profile);
+            RefreshPlayHotkeyCheatSheet(profile);
+        }
+        finally
+        {
+            _suppressPlayEvents = false;
+        }
+    }
+
+    private void SetPlaySlidersEnabled(bool enabled)
+    {
+        if (PlayEditor != null) PlayEditor.IsEnabled = enabled;
+    }
+
+    private void RebuildPlayPresetChips(GameProfile profile, QuickPreset? selected)
+    {
+        if (PlayPresetChips == null) return;
+        PlayPresetChips.Children.Clear();
+
+        var liveChip = MakePlayChip(Loc.T("play.liveChip"), selected == null);
+        liveChip.Click += (_, _) => PlayPresetChip_Click(null);
+        PlayPresetChips.Children.Add(liveChip);
+
+        foreach (var p in profile.Presets ?? new List<QuickPreset>())
+        {
+            var chip = MakePlayChip(p.Name, selected != null && selected.Id == p.Id);
+            chip.Click += (_, _) => PlayPresetChip_Click(p);
+            PlayPresetChips.Children.Add(chip);
+        }
+    }
+
+    private System.Windows.Controls.Button MakePlayChip(string text, bool selected) => new()
+    {
+        Content = text,
+        Style = (Style)FindResource(selected ? "ChipButtonSelected" : "ChipButton"),
+        Margin = new Thickness(0, 0, 8, 8)
+    };
+
+    private void PlayPresetChip_Click(QuickPreset? preset)
+    {
+        if (_playProfile == null) return;
+        _playPreset = preset;
+        RebuildPlayPresetChips(_playProfile, preset);
+        LoadPlaySlidersFrom(preset, _playProfile);
+
+        if (preset != null)
+        {
+            if (App.Services.Monitor.CurrentProfile?.Id == _playProfile.Id)
+                App.Services.Monitor.ApplyPreset(preset);
+            else
+            {
+                var c = (preset.Color ?? ColorSettings.Neutral).Clone();
+                c.Clamp();
+                App.Services.Display.ApplyColor(c);
+            }
+        }
+    }
+
+    private void LoadPlaySlidersFrom(QuickPreset? preset, GameProfile profile)
+    {
+        ColorSettings source;
+        if (preset != null)
+        {
+            preset.EnsureDualColorSlots();
+            source = preset.Color.Clone();
+        }
+        else
+        {
+            source = App.Services.Display.LiveColor.Clone();
+        }
+        _playBackend = source.Backend;
+
+        bool wasSuppressed = _suppressPlayEvents;
+        _suppressPlayEvents = true;
+        try
+        {
+            ColorUiHelper.ApplyColorSliders(source, SldPlayB, SldPlayC, SldPlayG, SldPlayV, SldPlayS, SldPlayH);
+            RefreshPlayLabels();
+        }
+        finally
+        {
+            _suppressPlayEvents = wasSuppressed;
+        }
+    }
+
+    private void RefreshPlayLabels()
+    {
+        if (LblPlayB == null) return;
+        ColorUiHelper.UpdateLabels(LblPlayB, LblPlayC, LblPlayG, LblPlayV, SldPlayB, SldPlayC, SldPlayG, SldPlayV, _playBackend, LblPlayH, SldPlayH);
+        if (ValPlayB != null) ValPlayB.Text = LblPlayB.Text.Replace("Bright ", "");
+        if (ValPlayC != null) ValPlayC.Text = LblPlayC.Text.Replace("Contr ", "");
+        if (ValPlayG != null) ValPlayG.Text = LblPlayG.Text.Replace("Gamma ", "");
+        if (ValPlayV != null && LblPlayV != null) ValPlayV.Text = LblPlayV.Text.Replace("Vibr ", "");
+        if (ValPlayH != null && LblPlayH != null) ValPlayH.Text = LblPlayH.Text.Replace("Hue ", "").Replace("°", "");
+        if (LblPlayS != null) LblPlayS.Text = $"Shadow {(int)SldPlayS.Value}";
+        if (ValPlayS != null) ValPlayS.Text = $"{(int)SldPlayS.Value}";
+    }
+
+    private void PlaySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppressPlayEvents || !IsInitialized || _playProfile == null) return;
+        RefreshPlayLabels();
+
+        var c = ColorUiHelper.ReadColorFromSliders(_playBackend, SldPlayB, SldPlayC, SldPlayG, SldPlayV, SldPlayS,
+            lockColor: _playPreset?.Color?.LockColor ?? true, hue: SldPlayH);
+        App.Services.Display.ApplyColor(c);
+
+        if (_playPreset != null)
+        {
+            _playPreset.ApplyColor = true;
+            _playPreset.Color = c;
+            _playPreset.SaveActiveToDualSlots();
+            MarkDirty();
+
+            if (App.Services.Monitor.CurrentProfile?.Id == _playProfile.Id
+                && App.Services.Monitor.ActivePresetId == _playPreset.Id)
+                App.Services.Monitor.SetColorLockPaused(false);
+        }
+    }
+
+    private void PlayLaunch_Click(object sender, RoutedEventArgs e) => LaunchProfile(_playProfile);
+
+    private void PlayOverlay_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.Application.Current is App app)
+            app.ToggleGameOverlay();
+    }
+
+    private void PlaySoftAltTab_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressPlayEvents || _playProfile == null) return;
+        _playProfile.SoftRestoreOnAltTab = ChkPlaySoftAltTab.IsChecked == true;
+        MarkDirty();
+        if (_selected != null && _selected.Id == _playProfile.Id && ChkSoftAltTab != null)
+            ChkSoftAltTab.IsChecked = _playProfile.SoftRestoreOnAltTab;
+    }
+
+    private void PlayFps_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressPlayEvents || _playProfile == null) return;
+        _playProfile.FpsLimit = ReadFpsLimit(CmbPlayFps);
+        MarkDirty();
+        if (_selected != null && _selected.Id == _playProfile.Id)
+            SelectOrSetFpsLimit(CmbFpsLimit, _playProfile.FpsLimit);
+    }
+
+    private void PlayFps_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_suppressPlayEvents || _playProfile == null) return;
+        int fps = ReadFpsLimit(CmbPlayFps);
+        SelectOrSetFpsLimit(CmbPlayFps, fps);
+        _playProfile.FpsLimit = fps;
+        MarkDirty();
+        if (_selected != null && _selected.Id == _playProfile.Id)
+            SelectOrSetFpsLimit(CmbFpsLimit, fps);
+    }
+
+    private void RefreshPlayHotkeyCheatSheet(GameProfile profile)
+    {
+        if (TxtPlayHotkeys == null) return;
+        var gh = App.Services.Config.Current.GlobalHotkeys;
+        var lines = new List<string>();
+
+        void AddGlobal(string? gesture, string labelKey)
+        {
+            if (!string.IsNullOrWhiteSpace(gesture))
+                lines.Add($"{Loc.T(labelKey)}: {gesture}");
+        }
+        AddGlobal(gh?.ToggleOverlay, "tray.overlay");
+        AddGlobal(gh?.EmergencyRestore, "tray.reset");
+        AddGlobal(gh?.NextPreset, "hotkey.next");
+        AddGlobal(gh?.PreviousPreset, "hotkey.prev");
+        AddGlobal(gh?.CompareAb, "hotkey.compareAb");
+        AddGlobal(gh?.ToggleZoom, "hotkey.zoom");
+
+        if (profile.Presets != null)
+        {
+            foreach (var p in profile.Presets.Where(p => !string.IsNullOrWhiteSpace(p.Hotkey)))
+                lines.Add($"{p.Name}: {p.Hotkey}");
+        }
+
+        TxtPlayHotkeys.Text = lines.Count > 0 ? string.Join("   ·   ", lines) : Loc.T("play.hotkeys.none");
     }
 
     private void EditorChanged(object sender, RoutedEventArgs e)
@@ -897,7 +1275,18 @@ public partial class MainWindow : Window
         if (_suppressEditorEvents || _selected == null) return;
         MarkDirty();
         PushEditorToSelected();
+        UpdateColorSummary(_selected);
         ProfileList.Items.Refresh();
+        RefreshPlayQuickFields();
+    }
+
+    /// <summary>Syncs the Play tab's Soft-restore/FPS fields without rebuilding preset chips
+    /// (avoids clobbering a manually-selected "Live" chip on unrelated Profiles-tab edits).</summary>
+    private void RefreshPlayQuickFields()
+    {
+        if (_playProfile == null || TxtPlayName == null || _selected == null || _selected.Id != _playProfile.Id) return;
+        if (ChkPlaySoftAltTab != null) ChkPlaySoftAltTab.IsChecked = _playProfile.SoftRestoreOnAltTab;
+        SelectOrSetFpsLimit(CmbPlayFps, _playProfile.FpsLimit);
     }
 
     private void ColorSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -918,6 +1307,8 @@ public partial class MainWindow : Window
     private void MarkDirty()
     {
         _dirty = true;
+        if (LblUnsaved != null) LblUnsaved.Visibility = Visibility.Visible;
+        UpdateTitleDirtyState();
         _autoSaveTimer.Stop();
         _autoSaveTimer.Start();
     }
@@ -930,6 +1321,55 @@ public partial class MainWindow : Window
         if (_selectedPreset != null) PushPresetEditor();
         SyncPresetsBackToGame();
         PersistConfigToDisk(showBusy: false);
+    }
+
+    private static void SelectOrSetFpsLimit(System.Windows.Controls.ComboBox? combo, int fps)
+    {
+        if (combo == null) return;
+        foreach (var item in combo.Items)
+        {
+            if (item is ComboBoxItem ci && string.Equals(ci.Tag?.ToString(), fps.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                combo.SelectedItem = ci;
+                combo.Text = ci.Content?.ToString() ?? fps.ToString();
+                return;
+            }
+        }
+        combo.SelectedItem = null;
+        combo.Text = fps > 0 ? fps.ToString() : "(off)";
+    }
+
+    private static int ReadFpsLimit(System.Windows.Controls.ComboBox? combo)
+    {
+        if (combo == null) return 0;
+        string? text = (combo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
+        if (text == null || !int.TryParse(text, out var fromTag))
+        {
+            var typed = combo.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(typed) || string.Equals(typed, "(off)", StringComparison.OrdinalIgnoreCase))
+                return 0;
+            fromTag = int.TryParse(typed, out var n) ? n : 0;
+        }
+        return Math.Clamp(fromTag, 0, 1023);
+    }
+
+    private void FpsLimit_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEditorEvents || _selected == null) return;
+        int fps = ReadFpsLimit(CmbFpsLimit);
+        SelectOrSetFpsLimit(CmbFpsLimit, fps);
+        MarkDirty();
+        PushEditorToSelected();
+    }
+
+    private void UpdateFpsLimitAvailability()
+    {
+        if (LblFpsLimitHint == null) return;
+        bool available = FpsLimitService.IsNvidiaAvailable;
+        LblFpsLimitHint.Text = available
+            ? Loc.T("profile.fpsLimit.hint")
+            : Loc.T("profile.fpsLimit.unavailable");
+        if (CmbFpsLimit != null) CmbFpsLimit.ToolTip = LblFpsLimitHint.Text;
     }
 
     private void UpdateSessionLabels()
@@ -963,7 +1403,7 @@ public partial class MainWindow : Window
         }
 
         _selectedPreset.EnsureDualColorSlots();
-        var prev = ColorUiHelper.ReadColorFromSliders(_presetEditorBackend, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, ChkPresetLock.IsChecked == true);
+        var prev = ColorUiHelper.ReadColorFromSliders(_presetEditorBackend, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, ChkPresetLock.IsChecked == true, SldPresetH);
         _selectedPreset.Color = prev;
         _selectedPreset.SaveActiveToDualSlots();
         _presetEditorBackend = next;
@@ -972,7 +1412,7 @@ public partial class MainWindow : Window
         _suppressEditorEvents = true;
         try
         {
-            ColorUiHelper.ApplyColorSliders(loaded, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
+            ColorUiHelper.ApplyColorSliders(loaded, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, SldPresetH);
             ChkPresetLock.IsChecked = loaded.LockColor;
             ColorUiHelper.ConfigureGammaRangeForBackend(next, SldPresetG);
         }
@@ -1031,6 +1471,10 @@ public partial class MainWindow : Window
             _selected.ApplyDelaySeconds = (int)SldApplyDelay.Value;
         if (ChkApplyOnFocus != null)
             _selected.ApplyOnFocus = ChkApplyOnFocus.IsChecked == true;
+        if (ChkSoftAltTab != null)
+            _selected.SoftRestoreOnAltTab = ChkSoftAltTab.IsChecked == true;
+        if (CmbFpsLimit != null)
+            _selected.FpsLimit = ReadFpsLimit(CmbFpsLimit);
 
         if (CmbPower.SelectedItem is ComboBoxItem pi)
             _selected.PowerPlan = string.IsNullOrWhiteSpace(pi.Tag?.ToString()) ? null : pi.Tag!.ToString();
@@ -1047,7 +1491,6 @@ public partial class MainWindow : Window
         _selected.Session.QuietNotifications = ChkQuietToast.IsChecked == true;
         _selected.Session.DisableNightLight = ChkNoNightLight.IsChecked == true;
         _selected.Session.DisableAutoHdr = ChkNoAutoHdr.IsChecked == true;
-        _selected.Session.IsolatePrimaryMonitor = ChkIsolateMon.IsChecked == true;
         if (CmbMonitorLayout?.SelectedItem is ComboBoxItem layoutItem)
         {
             var layout = layoutItem.Tag?.ToString() ?? "keepAll";
@@ -1093,9 +1536,10 @@ public partial class MainWindow : Window
 
     private void EmergencyRestore_Click(object sender, RoutedEventArgs e)
     {
+        App.Services.Zoom.Off();
         App.Services.Monitor.EmergencyRestore();
         ShowToast(Loc.T("toast.emergency"));
-        SetStatus("Emergency Restore");
+        SetStatus(Loc.T("toast.emergency"));
     }
 
     private void Apply_Click(object sender, RoutedEventArgs e)
@@ -1162,8 +1606,7 @@ public partial class MainWindow : Window
             p.ApplyColor = false;
         cfg.Presets = null;
         cfg.Defaults.Resolution = CmbDefaultRes.SelectedItem?.ToString();
-        cfg.Defaults.PowerPlan = (CmbDefaultPower.SelectedItem as ComboBoxItem)?.Content?.ToString()
-                                 ?? CmbDefaultPower.SelectedItem?.ToString()
+        cfg.Defaults.PowerPlan = (CmbDefaultPower.SelectedItem as ComboBoxItem)?.Tag?.ToString()
                                  ?? "balanced";
         cfg.Defaults.Color = ColorSettings.Neutral;
 
@@ -1182,9 +1625,12 @@ public partial class MainWindow : Window
             cfg.GlobalHotkeys.PreviousPreset = NormHotkey(HkPrevPreset.Text);
         if (HkCompareAb != null)
             cfg.GlobalHotkeys.CompareAb = NormHotkey(HkCompareAb.Text);
+        if (HkToggleZoom != null)
+            cfg.GlobalHotkeys.ToggleZoom = NormHotkey(HkToggleZoom.Text);
+        cfg.Ui ??= new UiPreferences();
+        cfg.Ui.ZoomFactor = ReadZoomFactor();
+        App.Services.Zoom.ApplyFromConfig(cfg.Ui);
 
-        cfg.StartWithWindows = ChkAutostart.IsChecked == true;
-        cfg.StartMinimized = ChkStartMin.IsChecked == true;
         cfg.ConfigVersion = ConfigService.CurrentVersion;
 
         App.Services.Config.Save(cfg, raiseChanged: false);
@@ -1194,6 +1640,8 @@ public partial class MainWindow : Window
             HotkeyPresetFallback);
         App.Services.Monitor.NotifyConfigSaved();
         _dirty = false;
+        if (LblUnsaved != null) LblUnsaved.Visibility = Visibility.Collapsed;
+        UpdateTitleDirtyState();
 
         if (showBusy)
             UiSound.Save();
@@ -1256,7 +1704,7 @@ public partial class MainWindow : Window
 
         _suppressEditorEvents = true;
         CmbDefaultRes.SelectedItem = factory.Resolution;
-        SelectComboByContent(CmbDefaultPower, factory.PowerPlan ?? "balanced");
+        SelectComboByTag(CmbDefaultPower, factory.PowerPlan ?? "balanced");
         _suppressEditorEvents = false;
 
         App.Services.Monitor.EmergencyRestore();
@@ -1425,6 +1873,7 @@ public partial class MainWindow : Window
         }
 
         RefreshHotkeyBindings();
+        UpdatePresetEmptyCta();
     }
 
     private void SyncPresetsBackToGame()
@@ -1479,7 +1928,7 @@ public partial class MainWindow : Window
                 CmbPresetRes.SelectedItem = p.Resolution;
             else if (CmbPresetRes.Items.Count > 0)
                 CmbPresetRes.SelectedIndex = 0;
-            ColorUiHelper.ApplyColorSliders(p.Color, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow);
+            ColorUiHelper.ApplyColorSliders(p.Color, SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow, SldPresetH);
             UpdatePresetLabels();
             UpdatePresetShadowEnabled();
             UpdateBackendActiveLabel(TogPresetBackend, p.Color.Backend == ColorBackend.LowLevel);
@@ -1543,6 +1992,16 @@ public partial class MainWindow : Window
                 PresetList.SelectedItem = match;
         }
         _suppressEditorEvents = false;
+        UpdatePresetEmptyCta();
+    }
+
+    private void UpdatePresetEmptyCta()
+    {
+        if (PresetEmptyCta == null) return;
+        bool empty = _presets.Count == 0 && PresetGameList.SelectedItem != null;
+        PresetEmptyCta.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        if (LblPresetEmpty != null) LblPresetEmpty.Text = Loc.T("presets.empty");
+        if (BtnPresetEmptyGallery != null) BtnPresetEmptyGallery.Content = Loc.T("presets.empty.gallery");
     }
 
     private void UpdatePresetLabels()
@@ -1576,6 +2035,7 @@ public partial class MainWindow : Window
                 : $"Digital vibrance: {(int)SldPresetV.Value}%  ({label} CP)";
         }
         if (LblPresetShadow != null) LblPresetShadow.Text = $"Shadow Boost: {(int)Math.Round(SldPresetShadow.Value)}";
+        if (LblPresetH != null && SldPresetH != null) LblPresetH.Text = $"Hue: {(int)Math.Round(SldPresetH.Value)}°";
     }
 
     private void PushPresetEditor()
@@ -1594,7 +2054,7 @@ public partial class MainWindow : Window
         var c = ColorUiHelper.ReadColorFromSliders(
             ReadBackendToggle(TogPresetBackend),
             SldPresetB, SldPresetC, SldPresetG, SldPresetV, SldPresetShadow,
-            ChkPresetLock.IsChecked == true);
+            ChkPresetLock.IsChecked == true, SldPresetH);
         // Guard against saving unloaded slider defaults (0/0/0/0) over a good preset.
         if (c.Brightness <= 0.02 && c.Contrast <= 0.02 && c.Vibrance == 0
             && _selectedPreset.Color != null
@@ -1662,6 +2122,30 @@ public partial class MainWindow : Window
         }
 
         var gesture = HotkeyService.GestureFromKeys(Keyboard.Modifiers, key);
+        ApplyCapturedGesture(box, gesture);
+    }
+
+    /// <summary>
+    /// Captures mouse XButton1/XButton2 as hotkeys on the same textboxes as keyboard capture
+    /// (see HotkeyService's WH_MOUSE_LL fallback for how these are recognized at runtime).
+    /// </summary>
+    private void HotkeyBox_PreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TextBox box) return;
+        if (e.ChangedButton is not (System.Windows.Input.MouseButton.XButton1 or System.Windows.Input.MouseButton.XButton2))
+            return;
+
+        var gesture = HotkeyService.GestureFromMouse(Keyboard.Modifiers, e.ChangedButton);
+        if (gesture == null) return;
+
+        e.Handled = true;
+        box.Focus();
+        ApplyCapturedGesture(box, gesture);
+    }
+
+    /// <summary>Shared conflict-check + assignment logic for keyboard and mouse hotkey capture.</summary>
+    private void ApplyCapturedGesture(System.Windows.Controls.TextBox box, string gesture)
+    {
         string? ignorePresetId = box == TxtPresetHotkey ? _selectedPreset?.Id : null;
         var conflict = HotkeyService.FindConflictInConfig(
             App.Services.Config.Current,
@@ -1711,23 +2195,43 @@ public partial class MainWindow : Window
 
     private void RefreshLog_Click(object sender, RoutedEventArgs e)
     {
-        TxtLog.Text = string.Join(Environment.NewLine, AppLog.Tail(300));
+        TxtLog.Text = string.Join(Environment.NewLine, AppLog.Tail(400));
         TxtLog.ScrollToEnd();
     }
 
     private void OpenLogFolder_Click(object sender, RoutedEventArgs e)
     {
-        var dir = App.Services.Config.ConfigDirectory;
-        if (!Directory.Exists(dir)) return;
-        // explorer.exe + ArgumentList — avoid UseShellExecute on a path string
-        var psi = new ProcessStartInfo
+        try
         {
-            FileName = "explorer.exe",
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add(dir);
-        Process.Start(psi);
+            var path = AppLog.LogFilePath;
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            if (File.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"/select,\"{path}\"",
+                    UseShellExecute = true
+                });
+            }
+            else if (!string.IsNullOrWhiteSpace(dir))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"\"{dir}\"",
+                    UseShellExecute = true
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Open log");
+            ShowToast(ex.Message);
+        }
     }
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
@@ -1792,7 +2296,10 @@ public partial class MainWindow : Window
             foreach (var d in AudioEndpoint.ListDevices())
                 CmbAudio.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Id });
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Enumerate audio devices");
+        }
         SelectAudioDevice(prev);
     }
 
@@ -1887,6 +2394,7 @@ public partial class MainWindow : Window
     private void PackGallery_Click(object sender, RoutedEventArgs e)
     {
         var win = new PackGalleryWindow { Owner = this };
+        win.AcceptTargetGame((_presetGame ?? _selected)?.Name);
         win.ShowDialog();
     }
 
@@ -1895,6 +2403,7 @@ public partial class MainWindow : Window
     {
         if (_presetGame == null)
         {
+            UiSound.Error();
             ThemedDialog.Show(this, Loc.T("presets.pick.game"), Loc.T("presets.gallery"));
             return;
         }
@@ -1933,17 +2442,7 @@ public partial class MainWindow : Window
     private void MonitorLayout_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressEditorEvents || _selected == null) return;
-        if (CmbMonitorLayout?.SelectedItem is ComboBoxItem item)
-        {
-            var layout = item.Tag?.ToString() ?? "keepAll";
-            _suppressEditorEvents = true;
-            if (string.Equals(layout, "isolatePrimary", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(layout, "primaryOnly", StringComparison.OrdinalIgnoreCase))
-                ChkIsolateMon.IsChecked = true;
-            else if (string.Equals(layout, "keepAll", StringComparison.OrdinalIgnoreCase))
-                ChkIsolateMon.IsChecked = false;
-            _suppressEditorEvents = false;
-        }
+        // IsolatePrimaryMonitor is derived from the CmbMonitorLayout tag inside PushEditorToSelected.
         MarkDirty();
         PushEditorToSelected();
     }
@@ -1966,8 +2465,6 @@ public partial class MainWindow : Window
         ChkNoNightLight.IsChecked = night;
         ChkNoAutoHdr.IsChecked = hdr;
         SelectComboByTag(CmbMonitorLayout, layout);
-        ChkIsolateMon.IsChecked = string.Equals(layout, "isolatePrimary", StringComparison.OrdinalIgnoreCase)
-                                  || string.Equals(layout, "primaryOnly", StringComparison.OrdinalIgnoreCase);
         SelectComboByTag(CmbScaling, scaling);
         ChkMonBright.IsChecked = bright;
         if (bright) SldMonBright.Value = brightPct;
@@ -2000,6 +2497,8 @@ public partial class MainWindow : Window
         ApplyColor = p.ApplyColor,
         ApplyResolution = p.ApplyResolution,
         ApplyPowerPlan = p.ApplyPowerPlan,
+        FpsLimit = p.FpsLimit,
+        SoftRestoreOnAltTab = p.SoftRestoreOnAltTab,
         RestoreMode = p.RestoreMode,
         Color = p.Color.Clone(),
         ColorLowLevel = p.ColorLowLevel?.Clone(),
@@ -2019,19 +2518,6 @@ public partial class MainWindow : Window
         Presets = (p.Presets ?? new List<QuickPreset>()).Select(QuickPreset.CloneOf).ToList()
     };
 
-    private static void SelectComboByContent(System.Windows.Controls.ComboBox cmb, string value)
-    {
-        foreach (var item in cmb.Items)
-        {
-            var text = (item as ComboBoxItem)?.Content?.ToString() ?? item?.ToString();
-            if (string.Equals(text, value, StringComparison.OrdinalIgnoreCase))
-            {
-                cmb.SelectedItem = item;
-                return;
-            }
-        }
-    }
-
     private static void SelectComboByTag(System.Windows.Controls.ComboBox cmb, string tag)
     {
         foreach (var item in cmb.Items)
@@ -2043,6 +2529,21 @@ public partial class MainWindow : Window
             }
         }
         if (cmb.Items.Count > 0) cmb.SelectedIndex = 0;
+    }
+
+    private void SelectZoomFactor(int factor)
+    {
+        if (CmbZoomFactor == null) return;
+        SelectComboByTag(CmbZoomFactor, factor.ToString());
+    }
+
+    private int ReadZoomFactor()
+    {
+        if (CmbZoomFactor?.SelectedItem is ComboBoxItem item
+            && int.TryParse(item.Tag?.ToString(), out int f)
+            && f >= 2 && f <= 12)
+            return f;
+        return 4;
     }
 }
 

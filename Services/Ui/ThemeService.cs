@@ -54,42 +54,68 @@ public static class ThemeService
         SetSystem(System.Windows.SystemColors.ControlTextBrushKey, Hex(p.Text));
     }
 
-    public static ThemePalette DarkPalette() => new();
+    public static ThemePalette DarkPalette() => new()
+    {
+        Bg = "#0F1216",
+        Panel = "#161B22",
+        Border = "#2A3340",
+        Text = "#E8EEF4",
+        Muted = "#8B9AAB",
+        Accent = "#7EB8D4",
+        AccentHover = "#93C7DF",
+        Danger = "#C1554F",
+        Field = "#1B212B",
+        Track = "#232B37",
+        GhostBg = "#1A212B",
+        GhostBorder = "#2A3340",
+        GhostHover = "#212938",
+        AccentButtonText = "#0F1216",
+        CheckCheckedBg = "#1E2732",
+        ComboHighlight = "#1E2733",
+        ComboSelected = "#24303D",
+        TabSelected = "#1C2430",
+        TabHover = "#171E27",
+        CaptionHover = "#1E2732",
+        TitleBar = "#10141A",
+        PillBg = "#1C2430",
+        ToastBg = "#161B22",
+        ToastBorder = "#2A3340"
+    };
 
     public static ThemePalette LightPalette() => new()
     {
-        Bg = "#F4F0F2",
+        Bg = "#F1F4F7",
         Panel = "#FFFFFF",
-        Border = "#D4C4CC",
-        Text = "#2A1A22",
-        Muted = "#7A5A68",
-        Accent = "#B84A72",
-        AccentHover = "#C45C84",
-        Danger = "#B04050",
+        Border = "#D7DEE6",
+        Text = "#1B232C",
+        Muted = "#667180",
+        Accent = "#3B7E9D",
+        AccentHover = "#4C93B4",
+        Danger = "#B3453F",
         Field = "#FFFFFF",
-        Track = "#E4D8DE",
-        GhostBg = "#F8F4F6",
-        GhostBorder = "#D4C4CC",
-        GhostHover = "#EFE6EA",
+        Track = "#E1E7ED",
+        GhostBg = "#F5F7FA",
+        GhostBorder = "#D7DEE6",
+        GhostHover = "#EAEFF3",
         AccentButtonText = "#FFFFFF",
-        CheckCheckedBg = "#F3E4EA",
-        ComboHighlight = "#F0E4EA",
-        ComboSelected = "#E8D4DC",
-        TabSelected = "#F0E4EA",
-        TabHover = "#F8F0F4",
-        CaptionHover = "#EDE4E8",
-        TitleBar = "#EDE6EA",
-        PillBg = "#F3E4EA",
+        CheckCheckedBg = "#E4EEF3",
+        ComboHighlight = "#EAF1F5",
+        ComboSelected = "#DCE9EF",
+        TabSelected = "#EAF1F5",
+        TabHover = "#F2F6F9",
+        CaptionHover = "#E7EDF1",
+        TitleBar = "#E9EDF1",
+        PillBg = "#E4EEF3",
         ToastBg = "#FFFFFF",
-        ToastBorder = "#D4C4CC"
+        ToastBorder = "#D7DEE6"
     };
 
     public static ThemePalette SeedCustom(string? accentHex, string? bgHex)
     {
-        var accent = Hex(accentHex, Hex("#C45C84"));
-        var bg = Hex(bgHex, Hex("#120E11"));
+        var accent = Hex(accentHex, Hex("#7EB8D4"));
+        var bg = Hex(bgHex, Hex("#0F1216"));
         bool dark = IsDark(bg);
-        var text = dark ? Hex("#F3E6EC") : Hex("#1E1218");
+        var text = dark ? Hex("#E8EEF4") : Hex("#1B232C");
         var panel = Blend(bg, dark ? Hex("#FFFFFF") : Hex("#000000"), dark ? 0.07 : 0.04);
         var border = Blend(accent, bg, 0.55);
         var muted = Blend(text, bg, 0.42);
@@ -105,7 +131,7 @@ public static class ThemeService
             Muted = ToHex(muted),
             Accent = ToHex(accent),
             AccentHover = ToHex(hover),
-            Danger = "#A04860",
+            Danger = "#C1554F",
             Field = ToHex(field),
             Track = ToHex(Blend(bg, accent, 0.22)),
             GhostBg = ToHex(Blend(panel, text, dark ? 0.06 : 0.04)),

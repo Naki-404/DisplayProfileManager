@@ -1,0 +1,35 @@
+{
+  "id": "pubg-stretch",
+  "name": "PUBG stretch",
+  "subtitle": "2560×1440 / 1920×1080 stretch helpers",
+  "presets": [
+    {
+      "name": "2560×1440 stretch",
+      "applyResolution": true,
+      "resolution": "2560x1440",
+      "applyColor": false,
+      "brightness": 0.5,
+      "contrast": 1.0,
+      "gamma": 1.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": false
+    },
+    {
+      "name": "1920×1080 stretch",
+      "applyResolution": true,
+      "resolution": "1920x1080",
+      "applyColor": false,
+      "brightness": 0.5,
+      "contrast": 1.0,
+      "gamma": 1.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": false
+    }
+  ]
+}

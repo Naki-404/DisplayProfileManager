@@ -43,6 +43,7 @@ public partial class SetupWizardWindow : Window
         ChkNotify.Content = Loc.T("setup.notify");
         ChkBackup.Content = Loc.T("setup.backup");
         ChkTrayClose.Content = Loc.T("setup.trayClose");
+        if (LblTips != null) LblTips.Text = Loc.T("setup.tips");
         BtnFinish.Content = Loc.T("btn.finish");
         BtnEditPalette.Content = Loc.T("setup.editPalette");
 
@@ -66,13 +67,13 @@ public partial class SetupWizardWindow : Window
     {
         BtnEditPalette.Visibility = CmbTheme.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
         if (CmbTheme.SelectedIndex == 2)
-            _customPalette ??= ThemeService.SeedCustom("#C45C84", "#120E11");
+            _customPalette ??= ThemeService.SeedCustom("#7EB8D4", "#0F1216");
         ApplyThemePreview();
     }
 
     private void EditPalette_Click(object sender, RoutedEventArgs e)
     {
-        _customPalette ??= ThemeService.SeedCustom("#C45C84", "#120E11");
+        _customPalette ??= ThemeService.SeedCustom("#7EB8D4", "#0F1216");
         var win = new CustomThemeWindow(_customPalette) { Owner = this };
         if (win.ShowDialog() == true && win.ResultPalette != null)
         {
@@ -86,7 +87,7 @@ public partial class SetupWizardWindow : Window
         var theme = (CmbTheme.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "dark";
         if (theme == "custom")
         {
-            _customPalette ??= ThemeService.SeedCustom("#C45C84", "#120E11");
+            _customPalette ??= ThemeService.SeedCustom("#7EB8D4", "#0F1216");
             ThemeService.ApplyPalette(_customPalette);
         }
         else
@@ -112,7 +113,7 @@ public partial class SetupWizardWindow : Window
         };
         if (theme == "custom")
         {
-            cfg.Ui.CustomPalette = (_customPalette ?? ThemeService.SeedCustom("#C45C84", "#120E11")).Clone();
+            cfg.Ui.CustomPalette = (_customPalette ?? ThemeService.SeedCustom("#7EB8D4", "#0F1216")).Clone();
             cfg.Ui.CustomAccent = cfg.Ui.CustomPalette.Accent;
             cfg.Ui.CustomBackground = cfg.Ui.CustomPalette.Bg;
         }

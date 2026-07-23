@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
-using DisplayProfileManager.Services;
 
 namespace DisplayProfileManager;
 
@@ -19,20 +18,13 @@ public partial class ScanOverlay : System.Windows.Controls.UserControl
 
     public void ShowAnimated()
     {
-        try
-        {
-            var bmp = AssetLoader.Image("scan-shelf.jpg");
-            if (bmp != null) Art.Source = bmp;
-        }
-        catch { /* optional */ }
-
         IsHitTestVisible = true;
         Visibility = Visibility.Visible;
         Opacity = 0;
         BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220))
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))
             {
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             });
 
         _loop = FindResource("ScanLoop") as Storyboard;
@@ -44,14 +36,14 @@ public partial class ScanOverlay : System.Windows.Controls.UserControl
 
     public void HideAnimated(Action? done = null)
     {
-        var fade = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(220))
+        var fade = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(180))
         {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
         };
         fade.Completed += (_, _) => FinishHide(done);
         BeginAnimation(OpacityProperty, fade);
 
-        var safety = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        var safety = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
         safety.Tick += (_, _) =>
         {
             safety.Stop();

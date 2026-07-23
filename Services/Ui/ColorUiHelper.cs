@@ -27,7 +27,7 @@ public static class ColorUiHelper
 
     public static void ApplyColorSliders(
         ColorSettings c,
-        Slider b, Slider co, Slider g, Slider v, Slider? shadowBoost = null)
+        Slider b, Slider co, Slider g, Slider v, Slider? shadowBoost = null, Slider? hue = null)
     {
         c.Clamp();
         ConfigureGammaRangeForBackend(c.Backend, g);
@@ -37,6 +37,8 @@ public static class ColorUiHelper
         v.Value = c.Vibrance;
         if (shadowBoost != null)
             shadowBoost.Value = ShadowBoostFromLift(c.ShadowLift);
+        if (hue != null)
+            hue.Value = c.Hue;
     }
 
     public static void ConfigureGammaRangeForBackend(ColorBackend backend, Slider gamma)
@@ -56,7 +58,8 @@ public static class ColorUiHelper
         ColorBackend backend,
         Slider b, Slider co, Slider g, Slider v,
         Slider? shadowBoost = null,
-        bool lockColor = true)
+        bool lockColor = true,
+        Slider? hue = null)
     {
         var c = new ColorSettings
         {
@@ -65,6 +68,7 @@ public static class ColorUiHelper
             Contrast = co.Value,
             Gamma = g.Value,
             Vibrance = (int)v.Value,
+            Hue = hue != null ? (int)hue.Value : 0,
             ShadowLift = shadowBoost != null ? ShadowLiftFromBoost(shadowBoost.Value) : 0,
             LockColor = lockColor
         };
@@ -74,7 +78,8 @@ public static class ColorUiHelper
 
     public static void UpdateLabels(
         TextBlock lblB, TextBlock lblC, TextBlock lblG, TextBlock? lblV,
-        Slider b, Slider co, Slider g, Slider v, ColorBackend backend)
+        Slider b, Slider co, Slider g, Slider v, ColorBackend backend,
+        TextBlock? lblH = null, Slider? h = null)
     {
         var tmp = new ColorSettings
         {
@@ -86,22 +91,24 @@ public static class ColorUiHelper
         if (backend == ColorBackend.LowLevel)
         {
             var (rb, rc, rg) = tmp.ToRivaTunerUnits();
-            lblB.Text = $"B {rb}";
-            lblC.Text = $"C {rc}";
-            lblG.Text = $"G {rg:F2}";
+            lblB.Text = $"Bright {rb}";
+            lblC.Text = $"Contr {rc}";
+            lblG.Text = $"Gamma {rg:F2}";
         }
         else
         {
-            lblB.Text = $"B {(int)Math.Round(tmp.Brightness * 100)}%";
-            lblC.Text = $"C {(int)Math.Round(Math.Clamp(tmp.Contrast / 2.0, 0, 1) * 100)}%";
-            lblG.Text = $"G {Math.Clamp(tmp.Gamma, 0.4, 2.8):F2}";
+            lblB.Text = $"Bright {(int)Math.Round(tmp.Brightness * 100)}%";
+            lblC.Text = $"Contr {(int)Math.Round(Math.Clamp(tmp.Contrast / 2.0, 0, 1) * 100)}%";
+            lblG.Text = $"Gamma {Math.Clamp(tmp.Gamma, 0.4, 2.8):F2}";
         }
         if (lblV != null)
         {
             lblV.Text = backend == ColorBackend.LowLevel
-                ? $"V {(int)v.Value}"
-                : $"V {(int)v.Value}%";
+                ? $"Vibr {(int)v.Value}"
+                : $"Vibr {(int)v.Value}%";
         }
+        if (lblH != null && h != null)
+            lblH.Text = $"Hue {(int)h.Value}°";
     }
 
     public static void PlaceOverlayDefault(Window win, double margin = 16)

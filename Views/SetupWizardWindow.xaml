@@ -33,7 +33,7 @@
 
                     <TextBlock x:Name="LblTheme" Text="Theme" FontWeight="SemiBold" Margin="0,16,0,6"/>
                     <ComboBox x:Name="CmbTheme" SelectionChanged="Theme_Changed">
-                        <ComboBoxItem Content="Dark pink" Tag="dark"/>
+                        <ComboBoxItem Content="Dark" Tag="dark"/>
                         <ComboBoxItem Content="Light" Tag="light"/>
                         <ComboBoxItem Content="Custom" Tag="custom"/>
                     </ComboBox>
@@ -49,6 +49,10 @@
                     <CheckBox x:Name="ChkNotify" Content="Toast when a game starts" IsChecked="True"/>
                     <CheckBox x:Name="ChkBackup" Content="Backup config before save" IsChecked="True"/>
                     <CheckBox x:Name="ChkTrayClose" Content="Close window → stay in tray" IsChecked="True"/>
+
+                    <TextBlock x:Name="LblTips" Margin="0,16,0,0" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedBrush}"
+                               Text="After setup: use the Play tab for live color while gaming, Presets for hotkey profiles, and Pack gallery for ready-made packs."/>
                 </StackPanel>
             </ScrollViewer>
 

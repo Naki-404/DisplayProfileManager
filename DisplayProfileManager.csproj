@@ -10,9 +10,9 @@
     <AssemblyName>DisplayProfileManager</AssemblyName>
     <RootNamespace>DisplayProfileManager</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>1.7.0</Version>
-    <FileVersion>1.7.0.0</FileVersion>
-    <InformationalVersion>1.7.0</InformationalVersion>
+    <Version>1.8.0</Version>
+    <FileVersion>1.8.0.0</FileVersion>
+    <InformationalVersion>1.8.0</InformationalVersion>
     <Product>Display Profile Manager</Product>
     <Company>Nakidev</Company>
     <Authors>Nakidev</Authors>
@@ -21,13 +21,14 @@
     <AssemblyTitle>Display Profile Manager</AssemblyTitle>
     <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
     <DebugType>embedded</DebugType>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Installer\**;dist\**;obj\**;bin\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Installer\**;dist\**;release\**;obj\**;bin\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">
     <SelfContained>false</SelfContained>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <PublishReadyToRun>true</PublishReadyToRun>
+    <!-- Avoid R2R + native self-extract — both commonly trip AV heuristics on unsigned builds -->
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <PublishReadyToRun>false</PublishReadyToRun>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
@@ -39,8 +40,10 @@
 
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
-    <Resource Include="Assets\*.jpg" />
     <Content Include="Assets\Sounds\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\Packs\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

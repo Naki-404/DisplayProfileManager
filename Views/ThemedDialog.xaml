@@ -13,7 +13,7 @@
         Opacity="0"
         Loaded="Window_Loaded">
     <Border x:Name="Card" Margin="12" CornerRadius="10"
-            Background="#1A1418" BorderBrush="#3D2A34" BorderThickness="1">
+            Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.45" Color="#000000"/>
         </Border.Effect>
@@ -24,25 +24,25 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0" Background="#160F13" CornerRadius="10,10,0,0" Padding="14,10">
+            <Border Grid.Row="0" Background="{DynamicResource TitleBarBrush}" CornerRadius="10,10,0,0" Padding="14,10">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Style="{StaticResource CaptionCloseButton}"
                             Width="28" Height="28" Click="Close_Click" Margin="8,0,0,0">
                         <Path Width="8" Height="8" Stretch="Uniform"
-                              Stroke="#B08A9A" StrokeThickness="1.2"
+                              Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
                               Data="M1,1 L9,9 M9,1 L1,9"/>
                     </Button>
                     <TextBlock x:Name="TitleText" Text="Display Profile Manager"
-                               Foreground="#F3E6EC" FontWeight="SemiBold" FontSize="13"
+                               Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" FontSize="13"
                                VerticalAlignment="Center"/>
                 </DockPanel>
             </Border>
 
             <TextBlock Grid.Row="1" x:Name="MessageText" Text="Saved."
-                       Margin="18,16" Foreground="#F3E6EC" FontSize="13"
+                       Margin="18,16" Foreground="{DynamicResource TextBrush}" FontSize="13"
                        TextWrapping="Wrap"/>
 
-            <Border Grid.Row="2" Background="#140F12" CornerRadius="0,0,10,10" Padding="14,10">
+            <Border Grid.Row="2" Background="{DynamicResource TitleBarBrush}" CornerRadius="0,0,10,10" Padding="14,10">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button x:Name="BtnDiscard" Content="Don't save" Style="{StaticResource GhostButton}"
                             MinWidth="90" Margin="0,0,8,0" Visibility="Collapsed" Click="Discard_Click"/>

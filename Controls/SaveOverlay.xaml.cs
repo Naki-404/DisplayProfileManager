@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
-using DisplayProfileManager.Services;
 
 namespace DisplayProfileManager;
 
@@ -21,18 +20,11 @@ public partial class SaveOverlay : System.Windows.Controls.UserControl
         _hold?.Stop();
         int gen = ++_gen;
 
-        try
-        {
-            var bmp = AssetLoader.Image("save-shelf.jpg");
-            if (bmp != null) Art.Source = bmp;
-        }
-        catch { }
-
         Visibility = Visibility.Visible;
         if (FindResource("SaveIn") is Storyboard inn)
             inn.Begin(this, true);
 
-        _hold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
+        _hold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
         _hold.Tick += (_, _) =>
         {
             _hold.Stop();

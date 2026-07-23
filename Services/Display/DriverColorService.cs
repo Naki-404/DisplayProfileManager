@@ -57,6 +57,7 @@ public sealed class DriverColorService : IDisposable
                     if (_baseline == null || _baseline.Vendor != "nvidia")
                         _baseline = _nvidia.Capture();
                     _nvidia.Apply(color.Vibrance);
+                    _nvidia.TrySetHue(color.Hue);
                     _driverTweaksActive = true;
                     break;
                 }
@@ -67,6 +68,7 @@ public sealed class DriverColorService : IDisposable
                     if (_baseline == null || _baseline.Vendor != "amd")
                         _baseline = _amd.Capture();
                     _amd.Apply(color, color.Vibrance);
+                    _amd.TrySetHue(color.Hue);
                     _driverTweaksActive = true;
                     break;
                 }
@@ -77,6 +79,7 @@ public sealed class DriverColorService : IDisposable
                     if (_baseline == null || _baseline.Vendor != "nvidia")
                         _baseline = _nvidia.Capture();
                     _nvidia.Apply(color.Vibrance);
+                    _nvidia.TrySetHue(color.Hue);
                     _driverTweaksActive = true;
                     break;
                 }

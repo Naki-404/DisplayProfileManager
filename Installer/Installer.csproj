@@ -9,9 +9,9 @@
     <AssemblyName>DisplayProfileManager-Setup</AssemblyName>
     <RootNamespace>DisplayProfileManager.Setup</RootNamespace>
     <ApplicationIcon>..\Assets\app.ico</ApplicationIcon>
-    <Version>1.7.0</Version>
-    <FileVersion>1.7.0.0</FileVersion>
-    <InformationalVersion>1.7.0</InformationalVersion>
+    <Version>1.8.0</Version>
+    <FileVersion>1.8.0.0</FileVersion>
+    <InformationalVersion>1.8.0</InformationalVersion>
     <Product>Display Profile Manager Setup</Product>
     <Company>Nakidev</Company>
     <Authors>Nakidev</Authors>
@@ -20,15 +20,14 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <PublishReadyToRun>false</PublishReadyToRun>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="NvAPIWrapper.Net" Version="0.8.1.101" />
-  </ItemGroup>
-  <ItemGroup>
     <Resource Include="..\Assets\app.ico" Link="Assets\app.ico" />
-    <EmbeddedResource Include="payload\**\*" Condition="Exists('payload')" />
+    <!-- Single zip payload — avoids shipping NvAPI / loose DLL extract patterns -->
+    <EmbeddedResource Include="payload.zip" Condition="Exists('payload.zip')" LogicalName="payload.zip" />
   </ItemGroup>
 </Project>

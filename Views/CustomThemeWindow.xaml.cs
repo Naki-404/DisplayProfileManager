@@ -140,7 +140,7 @@ public partial class CustomThemeWindow : Window
 
     private void Reset_Click(object sender, RoutedEventArgs e)
     {
-        _working = ThemeService.SeedCustom("#C45C84", "#120E11");
+        _working = ThemeService.SeedCustom("#7EB8D4", "#0F1216");
         foreach (var f in Fields)
         {
             if (_boxes.TryGetValue(f.Key, out var box))

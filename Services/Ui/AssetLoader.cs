@@ -3,7 +3,7 @@ using System.Windows.Media.Imaging;
 
 namespace DisplayProfileManager.Services;
 
-/// <summary>Loads embedded pack:// assets — no loose Assets folder on disk.</summary>
+/// <summary>Loads embedded pack:// assets.</summary>
 public static class AssetLoader
 {
     private const string PackRoot = "pack://application:,,,/Assets/";
@@ -38,11 +38,4 @@ public static class AssetLoader
             return null;
         }
     }
-
-    public static readonly string[] KnownImages =
-    {
-        "banner-walk.jpg", "banner-shelf.jpg", "banner-desk.jpg", "banner-wave.jpg", "banner-run.jpg",
-        "hall-walk.jpg", "hall-shelf.jpg", "hall-desk.jpg", "hall-wave.jpg", "hall-run.jpg",
-        "save-shelf.jpg", "scan-shelf.jpg", "boot-splash.jpg"
-    };
 }

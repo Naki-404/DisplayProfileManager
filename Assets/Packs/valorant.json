@@ -1,0 +1,76 @@
+{
+  "id": "valorant-stretch",
+  "name": "Valorant stretch",
+  "subtitle": "Stretch resolutions + Vibrance+",
+  "presets": [
+    {
+      "name": "1920×1080 stretch",
+      "applyResolution": true,
+      "resolution": "1920x1080",
+      "applyColor": false,
+      "brightness": 0.5,
+      "contrast": 1.0,
+      "gamma": 1.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": false
+    },
+    {
+      "name": "1728×1080 stretch",
+      "applyResolution": true,
+      "resolution": "1728x1080",
+      "applyColor": false,
+      "brightness": 0.5,
+      "contrast": 1.0,
+      "gamma": 1.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": false
+    },
+    {
+      "name": "1620×1080 stretch",
+      "applyResolution": true,
+      "resolution": "1620x1080",
+      "applyColor": false,
+      "brightness": 0.5,
+      "contrast": 1.0,
+      "gamma": 1.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": false
+    },
+    {
+      "name": "1440×1080 stretch",
+      "applyResolution": true,
+      "resolution": "1440x1080",
+      "applyColor": false,
+      "brightness": 0.5,
+      "contrast": 1.0,
+      "gamma": 1.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": false
+    },
+    {
+      "name": "Vibrance+",
+      "applyResolution": false,
+      "applyColor": true,
+      "brightness": 0.5,
+      "contrast": 1.05,
+      "gamma": 1.0,
+      "vibrance": 80,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "driver",
+      "lockColor": true
+    }
+  ]
+}

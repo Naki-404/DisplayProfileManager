@@ -1,0 +1,63 @@
+{
+  "id": "tarkov-riva",
+  "name": "Tarkov Riva presets",
+  "subtitle": "gamma-1 / gamma-2 / Night / Neutral",
+  "presets": [
+    {
+      "name": "gamma-1",
+      "hotkey": "Ctrl+Alt+NumPad1",
+      "applyColor": true,
+      "brightness": 0.5,
+      "contrast": 1.121951,
+      "gamma": 1.5,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": true,
+      "applyResolution": false
+    },
+    {
+      "name": "gamma-2",
+      "hotkey": "Ctrl+Alt+NumPad2",
+      "applyColor": true,
+      "brightness": 0.36,
+      "contrast": 1.060976,
+      "gamma": 3.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": true,
+      "applyResolution": false
+    },
+    {
+      "name": "Night",
+      "hotkey": "Ctrl+Alt+NumPad3",
+      "applyColor": true,
+      "brightness": 0.436,
+      "contrast": 1.060976,
+      "gamma": 3.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": true,
+      "applyResolution": false
+    },
+    {
+      "name": "Neutral",
+      "hotkey": "Ctrl+Alt+NumPad0",
+      "applyColor": true,
+      "brightness": 0.5,
+      "contrast": 1.0,
+      "gamma": 1.0,
+      "vibrance": 50,
+      "shadowLift": 0,
+      "hue": 0,
+      "backend": "lowLevel",
+      "lockColor": true,
+      "applyResolution": false
+    }
+  ]
+}

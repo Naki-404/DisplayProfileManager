@@ -23,6 +23,8 @@ public sealed class ProfileMonitor : IDisposable
     private readonly DispatcherTimer _colorLockTimer;
     private DispatcherTimer? _deferredTimer;
     private CancellationTokenSource? _activationCts;
+    private DispatcherTimer? _focusPollTimer;
+    private bool _focusPollHasFocus = true;
 
     private readonly HashSet<string> _activeProcesses = new(StringComparer.OrdinalIgnoreCase);
     private GameProfile? _currentProfile;
@@ -127,6 +129,7 @@ public sealed class ProfileMonitor : IDisposable
             CancelPendingActivation();
             StopDeferred();
             StopColorLock();
+            StopFocusPoll();
             ClearActivePreset();
             _engine.ClearAbCompare();
 
@@ -140,12 +143,16 @@ public sealed class ProfileMonitor : IDisposable
                 _currentCompanionsKey = null;
             }
 
+            if (cur != null)
+                TryClearFpsLimit(cur);
+
             bool restoredSnap = false;
             if (_snapshots.HasSnapshot)
                 restoredSnap = _snapshots.RestoreAll(_session, _config.Current.FactoryDefaults ?? _config.Current.Defaults);
             else
             {
-                try { _session.Restore(); } catch { }
+                try { _session.Restore(); }
+                catch (Exception ex) { AppLog.Warn(ex, "Session.Restore"); }
                 var factory = _config.Current.FactoryDefaults ?? _config.Current.Defaults;
                 _engine.RestoreFactory(factory);
             }
@@ -154,6 +161,7 @@ public sealed class ProfileMonitor : IDisposable
                 ? "Emergency Restore: snapshot restored"
                 : "Emergency Restore: factory settings");
             ActiveProfileChanged?.Invoke(null);
+            UiSound.Warn();
             AppLog.Info("Emergency Restore completed.");
         });
     }
@@ -203,6 +211,19 @@ public sealed class ProfileMonitor : IDisposable
         lock (_gate) _activePresetId = null;
     }
 
+    /// <summary>
+    /// Manually apply a profile's display/power/session settings on demand (tray "Profiles"
+    /// menu, CLI --apply-profile), independent of whether its process is actually running.
+    /// </summary>
+    public void ForceApplyProfile(GameProfile profile)
+    {
+        RunOnUi(() =>
+        {
+            var fresh = _config.Current.Profiles.FirstOrDefault(p => p.Id == profile.Id) ?? profile;
+            ActivateProfile(fresh, relaunchCompanions: true);
+        });
+    }
+
     public bool CyclePreset(int direction)
     {
         GameProfile? cur;
@@ -226,6 +247,7 @@ public sealed class ProfileMonitor : IDisposable
         ApplyPreset(preset);
         LastPresetHotkeyName = preset.Name;
         StatusChanged?.Invoke($"Preset: {preset.Name}");
+        RunOnUi(UiSound.PresetApply);
         return true;
     }
 
@@ -242,6 +264,7 @@ public sealed class ProfileMonitor : IDisposable
                     ApplyPreset(preset);
                     StatusChanged?.Invoke($"Preset: {preset.Name}");
                     LastPresetHotkeyName = preset.Name;
+                    UiSound.PresetApply();
                 }
                 else
                 {
@@ -522,6 +545,7 @@ public sealed class ProfileMonitor : IDisposable
                 {
                     restoreMode = cur.RestoreMode;
                     StopCompanionsFor(cur);
+                    TryClearFpsLimit(cur);
                 }
                 _currentProfile = null;
                 _currentCompanionsKey = null;
@@ -554,6 +578,7 @@ public sealed class ProfileMonitor : IDisposable
 
             StopDeferred();
             StopColorLock();
+            StopFocusPoll();
             ClearActivePreset();
             _engine.ClearAbCompare();
             ApplyRestoreMode(restoreMode);
@@ -572,7 +597,8 @@ public sealed class ProfileMonitor : IDisposable
                 AppLog.Info("RestoreMode=DoNothing — left tuned state.");
                 break;
             case RestoreMode.GlobalDefaults:
-                try { _session.Restore(); } catch { }
+                try { _session.Restore(); }
+                catch (Exception ex) { AppLog.Warn(ex, "Session.Restore"); }
                 _engine.RestoreDefaults(_config.Current.Defaults);
                 _snapshots.Clear();
                 AppLog.Info("RestoreMode=GlobalDefaults.");
@@ -585,7 +611,8 @@ public sealed class ProfileMonitor : IDisposable
                 }
                 else
                 {
-                    try { _session.Restore(); } catch { }
+                    try { _session.Restore(); }
+                catch (Exception ex) { AppLog.Warn(ex, "Session.Restore"); }
                     _engine.RestoreDefaults(_config.Current.Defaults);
                     AppLog.Info("No snapshot — fell back to Global Defaults.");
                 }
@@ -609,8 +636,11 @@ public sealed class ProfileMonitor : IDisposable
             StopCompanionsFor(previous);
             StopDeferred();
             StopColorLock();
+            StopFocusPoll();
+            TryClearFpsLimit(previous);
             // Leaving previous game: restore its extras before new capture.
-            try { _session.Restore(); } catch { }
+            try { _session.Restore(); }
+                catch (Exception ex) { AppLog.Warn(ex, "Session.Restore"); }
         }
 
         if (same)
@@ -635,8 +665,10 @@ public sealed class ProfileMonitor : IDisposable
                     _companions.Launch(c);
                 _currentCompanionsKey = profile.Id;
             }
+            UpdateSoftRestoreMonitoring(profile);
             StatusChanged?.Invoke($"Active: {profile.Name}");
             ActiveProfileChanged?.Invoke(profile);
+            RunOnUi(UiSound.Armed);
             return;
         }
 
@@ -692,8 +724,10 @@ public sealed class ProfileMonitor : IDisposable
             }
         }
 
+        UpdateSoftRestoreMonitoring(profile);
         StatusChanged?.Invoke($"Active: {profile.Name}");
         ActiveProfileChanged?.Invoke(profile);
+        RunOnUi(UiSound.Armed);
     }
 
     private void ApplyProfileCore(GameProfile profile)
@@ -713,6 +747,18 @@ public sealed class ProfileMonitor : IDisposable
         catch (Exception ex)
         {
             AppLog.Error("Display apply: " + ex.Message);
+        }
+
+        try
+        {
+            if (profile.FpsLimit > 0)
+                FpsLimitService.TryApply(profile.ExePath ?? profile.ProcessName, profile.FpsLimit);
+            else
+                FpsLimitService.Clear(profile.ExePath ?? profile.ProcessName);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("FPS limit profile apply: " + ex.Message);
         }
 
         try
@@ -824,6 +870,118 @@ public sealed class ProfileMonitor : IDisposable
         catch (Exception ex) { AppLog.Error("Color lock reapply failed: " + ex.Message); }
     }
 
+    private static void TryClearFpsLimit(GameProfile profile)
+    {
+        if (profile.FpsLimit <= 0) return;
+        try { FpsLimitService.Clear(profile.ExePath ?? profile.ProcessName); }
+        catch (Exception ex) { AppLog.Error("FPS limit clear on deactivate: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// Alt+Tab soft-restore: while <see cref="GameProfile.SoftRestoreOnAltTab"/> is set on the
+    /// active profile, poll the foreground window and softly restore the desktop when focus
+    /// leaves the game, then re-apply the game's color/preset (not companions) when it returns.
+    /// Independent of ApplyOnFocus, which only gates the *initial* apply.
+    /// </summary>
+    private void UpdateSoftRestoreMonitoring(GameProfile? profile)
+    {
+        if (profile == null || !profile.SoftRestoreOnAltTab)
+        {
+            StopFocusPoll();
+            return;
+        }
+
+        // Assume the game has focus right after activation (ApplyOnFocus already waited for it
+        // when configured); the next tick will correct this if it's wrong.
+        _focusPollHasFocus = true;
+
+        if (_focusPollTimer == null)
+        {
+            _focusPollTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(750)
+            };
+            _focusPollTimer.Tick += (_, _) => OnFocusPollTick();
+        }
+        if (!_focusPollTimer.IsEnabled)
+            _focusPollTimer.Start();
+    }
+
+    private void StopFocusPoll()
+    {
+        _focusPollTimer?.Stop();
+    }
+
+    private void OnFocusPollTick()
+    {
+        GameProfile? profile;
+        lock (_gate) profile = _currentProfile;
+        if (profile == null || !profile.SoftRestoreOnAltTab)
+        {
+            StopFocusPoll();
+            return;
+        }
+
+        bool focused;
+        try { focused = ForegroundProcessHelper.IsForegroundOwnedBy(EnumerateProcessNames(profile)); }
+        catch { return; }
+
+        if (focused == _focusPollHasFocus) return;
+        _focusPollHasFocus = focused;
+
+        if (focused)
+            SoftReapplyGame(profile);
+        else
+            SoftRestoreDesktop(profile);
+    }
+
+    /// <summary>Focus left the game: restore pre-game display (color/resolution/power) from the
+    /// session snapshot without touching companions or deleting the snapshot.</summary>
+    private void SoftRestoreDesktop(GameProfile profile)
+    {
+        try
+        {
+            StopColorLock();
+            bool restored = _snapshots.RestoreDisplay(_config.Current.Defaults);
+            AppLog.Info($"SoftRestore: desktop restored on focus loss ({profile.Name}), fromSnapshot={restored}");
+            StatusChanged?.Invoke($"Soft restore: {profile.Name} (background)");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("SoftRestore desktop restore failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>Focus returned to the game: re-apply resolution + active preset color only
+    /// (companions/session extras are left alone — they were never stopped).</summary>
+    private void SoftReapplyGame(GameProfile profile)
+    {
+        try
+        {
+            if (profile.ApplyResolution && !string.IsNullOrWhiteSpace(profile.Resolution))
+                _engine.SetResolution(profile.Resolution!, profile.RefreshRate, profile.DisplayDevice);
+
+            string? presetId;
+            lock (_gate) presetId = _activePresetId;
+            var preset = presetId == null ? null : profile.Presets?.FirstOrDefault(p => p.Id == presetId);
+            if (preset != null && preset.ApplyColor)
+            {
+                var color = (preset.Color ?? ColorSettings.Neutral).Clone();
+                color.Clamp();
+                _engine.ApplyColor(color);
+                if (color.LockColor)
+                    StartColorLock(color);
+            }
+
+            AppLog.Info($"SoftRestore: game state re-applied on focus return ({profile.Name})");
+            StatusChanged?.Invoke($"Active: {profile.Name}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("SoftRestore game reapply failed: " + ex.Message);
+        }
+    }
+
     private void StopCompanionsFor(GameProfile profile)
     {
         foreach (var c in profile.Companions)
@@ -929,6 +1087,7 @@ public sealed class ProfileMonitor : IDisposable
         _activationCts = null;
         StopDeferred();
         StopColorLock();
+        StopFocusPoll();
         try { _session.Dispose(); } catch { }
         _watcher.ProcessStarted -= OnProcessStarted;
         _watcher.ProcessStopped -= OnProcessStopped;
