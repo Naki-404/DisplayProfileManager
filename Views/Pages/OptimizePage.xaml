@@ -1,0 +1,88 @@
+<local:ShellPageBase x:Class="Visor.OptimizePage"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Visor">
+    <!-- Optimize: suggestions from measured facts, reversible SafeAction tweaks (journal + undo), read-only info cards. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  CanContentScroll="False" PanningMode="VerticalOnly">
+        <StackPanel Margin="0,4,0,8">
+
+            <!-- Summary: counts + last change; honest numbers, no "boost" promises. -->
+            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,4">
+                        <Button x:Name="BtnOptimizeRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                Click="OptimizeRefresh_Click"/>
+                        <TextBlock x:Name="LblOptSummary" Style="{StaticResource SubHeader}" Margin="0" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBlock x:Name="TxtOptSummaryHint" Style="{StaticResource Hint}" Margin="0,0,0,12" TextWrapping="Wrap"/>
+                    <UniformGrid Columns="3">
+                        <StackPanel Margin="0,0,12,0">
+                            <TextBlock x:Name="TxtSumSuggestions" Style="{StaticResource CardValue}"/>
+                            <TextBlock x:Name="LblSumSuggestions" Style="{StaticResource CardCaption}"/>
+                        </StackPanel>
+                        <StackPanel Margin="0,0,12,0">
+                            <TextBlock x:Name="TxtSumApplied" Style="{StaticResource CardValue}"/>
+                            <TextBlock x:Name="LblSumApplied" Style="{StaticResource CardCaption}"/>
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock x:Name="TxtSumLast" Style="{StaticResource CardValue}"/>
+                            <TextBlock x:Name="LblSumLast" Style="{StaticResource CardCaption}"/>
+                        </StackPanel>
+                    </UniformGrid>
+                    <TextBlock x:Name="TxtOptLoading" Style="{StaticResource Hint}" Margin="0,10,0,0" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Suggestions (RecommendationEngine over the full measured context). -->
+            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="LblRec" Text="Suggestions" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtRecHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="RecList"/>
+                    <TextBlock x:Name="TxtRecEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                    <Button x:Name="BtnRecReset" Style="{StaticResource LinkButton}" HorizontalAlignment="Left"
+                            Margin="0,4,0,0" Visibility="Collapsed" Click="RecReset_Click"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Actions: one card per global SafeAction target (apply / undo, blocked while a session owns it). -->
+            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="LblActions" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtActionsHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="ActionList"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Per game: fullscreen optimizations per enabled profile with an exe. -->
+            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="LblPerGame" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtPerGameHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="PerGameList"/>
+                    <TextBlock x:Name="TxtPerGameEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Managed / info: read-only cards (no buttons that do nothing; links to the Windows dialog instead). -->
+            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="LblInfo" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtInfoHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="InfoList"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Journal: every change Visor made that can still be undone. -->
+            <Border Style="{StaticResource CardSurface}">
+                <StackPanel>
+                    <TextBlock x:Name="LblJournal" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtJournalHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="JournalList"/>
+                    <TextBlock x:Name="TxtJournalEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</local:ShellPageBase>

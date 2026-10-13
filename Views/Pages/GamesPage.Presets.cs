@@ -1,24 +1,25 @@
-using System.Collections.ObjectModel;
-using System.Diagnostics;
-using System.IO;
-using System.Runtime.InteropServices;
-using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Data;
 using System.Windows.Input;
-using System.Windows.Interop;
 using System.Windows.Threading;
 using Visor.Models;
 using Visor.Services;
+using WpfTextBox = System.Windows.Controls.TextBox;
 
 namespace Visor;
 
-/// <summary>Presets page: per-game preset editor, pack import, hotkey capture, live color backend.</summary>
-public partial class MainWindow : Window
+/// <summary>Games → Presets section: per-game preset editor, pack import, hotkey capture, color backend.</summary>
+public partial class GamesPage
 {
-    // -- Presets (per-game) ------------------------------------------------------------------------------
+    private GameProfile? _presetGame;
+    private QuickPreset? _selectedPreset;
+    private ColorBackend _presetEditorBackend = ColorBackend.LowLevel;
+    /// <summary>
+    /// True only while the preset editor holds changes not yet pushed into _selectedPreset.
+    /// Guards against a stale editor overwriting edits made elsewhere (Color sliders) on autosave.
+    /// </summary>
+    private bool _presetEditorDirty;
+    private readonly Dictionary<WpfTextBox, string> _hotkeyOriginal = new();
 
     // Color slider rows (ColorSliderRow control) — the old Sld*/Lbl*/Val* names stay reachable.
     private Slider SldPresetB => RowPresetB.Slider;
@@ -40,9 +41,40 @@ public partial class MainWindow : Window
     private TextBlock LblPresetShadow => RowPresetShadow.LabelBlock;
     private TextBlock ValPresetShadow => RowPresetShadow.ValueBlock;
 
+    private void ApplyPresetsLocalization()
+    {
+        BtnPresetAdd.Content = Loc.T("btn.add");
+        BtnPresetAdd.ToolTip = Loc.T("presets.add.tip");
+        BtnPresetDelete.Content = Loc.T("btn.delete");
+        BtnPresetExport.Content = Loc.T("presets.export");
+        BtnPresetImport.Content = Loc.T("presets.import");
+        BtnPackGallery.Content = Loc.T("presets.gallery");
+        BtnPackGallery.ToolTip = Loc.T("presets.gallery.hint");
+        LblPresetEditorTitle.Text = Loc.T("preset.title");
+        BtnApplyPreset.Content = Loc.T("btn.applyNow");
+        BtnApplyPreset.ToolTip = Loc.T("preset.applyNow.tip");
+        LblPresetName.Text = Loc.T("preset.name");
+        LblPresetHotkey.Text = Loc.T("preset.hotkey");
+        LblPresetHotkeyHint.Text = Loc.T("preset.hotkey.hint");
+        BtnPresetHotkeyClear.Content = Loc.T("btn.clear");
+        ChkPresetRes.Content = Loc.T("preset.setRes");
+        LblPresetColor.Text = Loc.T("preset.color");
+        LblPresetColorHint.Text = Loc.T("preset.color.hint");
+        LblPresetBackend.Text = Loc.T("color.backend");
+        ChkPresetLock.Content = Loc.T("color.lock");
+        ColorUiHelper.ApplyLabelNames(LblPresetB, LblPresetC, LblPresetG, LblPresetV, LblPresetH, LblPresetShadow);
+        LblPresetH.ToolTip = Loc.T("color.hue.tip");
+        LblPresetShadow.ToolTip = Loc.T("color.shadow.tip");
+        LblPresetV.ToolTip = Loc.T("color.vibrance.tip");
+        LblPresetB.ToolTip = Loc.T("color.brightness.tip");
+        ColorUiHelper.LabelBackendToggle(TogPresetBackend);
+        TxtPresetHotkey.Tag = Loc.T("hotkey.placeholder");
+        LblPresetGame.Text = _presetGame != null ? Loc.Tf("presets.for", _presetGame.Name) : Loc.T("tab.presets");
+    }
+
     /// <summary>
-    /// Presets are per-game. When opening the Presets tab (or when a game starts), select that game
-    /// so its hotkeyed presets are visible.
+    /// Presets are per-game and follow the selected game. Kept as the shell seam for "a game started": the
+    /// shell already selected the running game, this only re-syncs if something slipped.
     /// </summary>
     public void FocusPresetsForActiveOrSelectedGame(GameProfile? prefer = null)
     {
@@ -53,46 +85,17 @@ public partial class MainWindow : Window
                     ?? _profiles.FirstOrDefault(p =>
                         string.Equals(p.ProcessName, prefer.ProcessName, StringComparison.OrdinalIgnoreCase));
         if (match == null || ReferenceEquals(match, _presetGame)) return;
-        SelectPresetGame(match);
+        if (!ReferenceEquals(match, _selected))
+            SelectProfile(match);
+        else
+            SelectPresetGame(match);
     }
 
-    private void PresetGameList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (SuppressingEditor) return;
-        SelectPresetGame(PresetGameList.SelectedItem as GameProfile);
-    }
+    /// <summary>Every game with its live preset list (the working copy for the open game) — for hotkey conflicts.</summary>
+    public IEnumerable<(GameProfile Game, IEnumerable<QuickPreset> Presets)> PresetHotkeyScope() =>
+        _profiles.Select(p => (p, ReferenceEquals(p, _presetGame) ? (IEnumerable<QuickPreset>)_presets : p.Presets ?? new List<QuickPreset>()));
 
-    /// <summary>Compact game picker (shown instead of the tile column on narrow windows).</summary>
-    private void PresetGameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (SuppressingEditor) return;
-        var game = CmbPresetGame.SelectedItem as GameProfile;
-        if (ReferenceEquals(game, _presetGame)) return;
-        SelectPresetGame(game);
-    }
-
-    private bool _presetsCompact;
-
-    /// <summary>Below ~760 DIP of page width (≈1000 DIP window) the game column collapses into CmbPresetGame.</summary>
-    private void PresetsPage_SizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        if (PresetGamesCard == null) return;
-        bool compact = e.NewSize.Width < 760;
-        if (compact == _presetsCompact && e.PreviousSize.Width > 0) return;
-        _presetsCompact = compact;
-        PresetGamesCard.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        ColPresetGames.Width = compact ? new GridLength(0) : new GridLength(2, GridUnitType.Star);
-        ColPresetGames.MinWidth = compact ? 0 : 170;
-        ColPresetGamesGap.Width = new GridLength(compact ? 0 : 12);
-        CmbPresetGame.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
-        if (compact)
-        {
-            using (SuppressEditor())
-                CmbPresetGame.SelectedItem = _presetGame;
-        }
-    }
-
-    /// <summary>Switches the Presets tab to a game and explicitly loads the editor for the chosen preset.</summary>
+    /// <summary>Switches the Presets section to a game and explicitly loads the editor for the chosen preset.</summary>
     private void SelectPresetGame(GameProfile? game, string? preferPresetId = null)
     {
         PushPresetEditorIfDirty();
@@ -104,8 +107,6 @@ public partial class MainWindow : Window
             _selectedPreset = null;
             _presetGame = null;
             _presets.Clear();
-            PresetGameList.SelectedItem = game;
-            CmbPresetGame.SelectedItem = game;
             _presetGame = game;
 
             if (game != null)
@@ -114,7 +115,6 @@ public partial class MainWindow : Window
                 foreach (var p in game.Presets)
                     _presets.Add(p);
                 LblPresetGame.Text = Loc.Tf("presets.for", game.Name);
-                PresetGameList.ScrollIntoView(game);
             }
             else
             {
@@ -131,7 +131,7 @@ public partial class MainWindow : Window
         BtnPresetExport.IsEnabled = hasGame && _presets.Count > 0;
         BtnPresetImport.IsEnabled = hasGame;
         BtnPackGallery.IsEnabled = hasGame;
-        RefreshHotkeyBindings();
+        Host.RefreshHotkeyBindings();
         UpdatePresetEmptyCta();
     }
 
@@ -348,7 +348,7 @@ public partial class MainWindow : Window
         RefreshPresetListSafe();
     }
 
-    private void UpdateDriverUiAvailability()
+    public void UpdateDriverUiAvailability()
     {
         ColorUiHelper.LabelBackendToggle(TogPresetBackend);
         TogPresetBackend.IsEnabled = true;
@@ -444,7 +444,7 @@ public partial class MainWindow : Window
         if (_selectedPreset == null || _presetGame == null) return;
         var victim = _selectedPreset;
         var game = _presetGame;
-        if (!ConfirmDestructive(Loc.Tf("confirm.deletePreset", victim.Name, game.Name), Loc.T("confirm.deletePreset.title"), Loc.T("btn.delete")))
+        if (!Host.ConfirmDestructive(Loc.Tf("confirm.deletePreset", victim.Name, game.Name), Loc.T("confirm.deletePreset.title"), Loc.T("btn.delete")))
             return;
 
         PushPresetEditorIfDirty();
@@ -457,13 +457,13 @@ public partial class MainWindow : Window
         SelectPreset(_presets.Count == 0 ? null : _presets[Math.Clamp(index, 0, _presets.Count - 1)]);
         MarkDirty();
         FlushAutosave();
-        RefreshHotkeyBindings();
+        Host.RefreshHotkeyBindings();
         UpdatePresetEmptyCta();
 
-        ShowUndoToast(Loc.Tf("toast.deleted", victim.Name), () =>
+        Host.ShowUndoToast(Loc.Tf("toast.deleted", victim.Name), () =>
         {
             if (!ReferenceEquals(_presetGame, game))
-                SelectPresetGame(game);
+                SelectProfile(game);
             using (SuppressEditor())
                 _presets.Insert(Math.Clamp(index, 0, _presets.Count), victim);
             if (wasStartup) game.StartupPresetId = victim.Id;
@@ -523,13 +523,13 @@ public partial class MainWindow : Window
 
     private void PackGallery_Click(object sender, RoutedEventArgs e)
     {
-        var win = new PackGalleryWindow { Owner = this };
+        var win = new PackGalleryWindow { Owner = Host.Window };
         win.AcceptTargetGame((_presetGame ?? _selected)?.Name);
         win.ShowDialog();
     }
 
     /// <summary>
-    /// Apply a built-in preset pack onto the Presets-tab game. Re-applying the same pack replaces presets
+    /// Apply a built-in preset pack onto the Presets-section game. Re-applying the same pack replaces presets
     /// with the same name (keeping their Id and the user's hotkey) instead of duplicating them.
     /// </summary>
     public void ApplyPackPresets(IEnumerable<QuickPreset> presets, string packName)
@@ -538,7 +538,7 @@ public partial class MainWindow : Window
         if (game == null)
         {
             UiSound.Error();
-            ThemedDialog.Show(this, Loc.T("presets.pick.game"), Loc.T("presets.gallery"));
+            ThemedDialog.Show(Host.Window, Loc.T("presets.pick.game"), Loc.T("presets.gallery"));
             return;
         }
         if (!ReferenceEquals(game, _presetGame))
@@ -581,55 +581,35 @@ public partial class MainWindow : Window
         ShowToast(Loc.Tf("toast.pack.applied", packName, added, replaced));
     }
 
-    // -- Hotkey capture -----------------------------------------------------------------------------------
-
-    private IEnumerable<(System.Windows.Controls.TextBox Box, string LabelKey)> GlobalHotkeyBoxes()
-    {
-        yield return (HkToggleOverlay, "hotkey.overlay");
-        yield return (HkEmergency, "hotkey.emergency");
-        yield return (HkNextPreset, "hotkey.next");
-        yield return (HkPrevPreset, "hotkey.prev");
-        yield return (HkCompareAb, "hotkey.compareAb");
-        yield return (HkToggleZoom, "hotkey.zoom");
-    }
-
-    private static bool SameGesture(string? a, uint mods, uint vk) =>
-        !string.IsNullOrWhiteSpace(a)
-        && HotkeyService.TryParseGesture(a!, out var am, out var av)
-        && am == mods && av == vk;
+    // -- Hotkey capture (preset box) ---------------------------------------------------------------------
 
     private bool HotkeyFreeInGame(string? gesture, string? ignorePresetId)
     {
         if (string.IsNullOrWhiteSpace(gesture) || !HotkeyService.TryParseGesture(gesture!, out var m, out var vk))
             return true;
-        if (GlobalHotkeyBoxes().Any(g => SameGesture(g.Box.Text, m, vk))) return false;
-        return !_presets.Any(p => p.Id != ignorePresetId && SameGesture(p.Hotkey, m, vk));
+        if (Host.GlobalHotkeyBoxes.Any(g => HotkeyCapture.SameGesture(g.Box.Text, m, vk))) return false;
+        return !_presets.Any(p => p.Id != ignorePresetId && HotkeyCapture.SameGesture(p.Hotkey, m, vk));
     }
 
     /// <summary>Localized description of what already uses this gesture, or null when it's free.</summary>
-    private string? FindHotkeyConflict(System.Windows.Controls.TextBox box, string gesture)
+    private string? FindHotkeyConflict(string gesture)
     {
         if (!HotkeyService.TryParseGesture(gesture, out var mods, out var vk)) return null;
 
-        foreach (var (other, labelKey) in GlobalHotkeyBoxes())
+        foreach (var (other, labelKey) in Host.GlobalHotkeyBoxes)
         {
-            if (ReferenceEquals(other, box)) continue;
-            if (SameGesture(other.Text, mods, vk))
+            if (HotkeyCapture.SameGesture(other.Text, mods, vk))
                 return Loc.Tf("hotkey.conflict.global", Loc.T(labelKey));
         }
 
-        // Preset hotkeys are per game; global hotkeys must not collide with any game's presets.
-        IEnumerable<(GameProfile Game, IEnumerable<QuickPreset> Presets)> scope = ReferenceEquals(box, TxtPresetHotkey)
-            ? (_presetGame != null ? new[] { (_presetGame, (IEnumerable<QuickPreset>)_presets) } : Array.Empty<(GameProfile, IEnumerable<QuickPreset>)>())
-            : _profiles.Select(p => (p, ReferenceEquals(p, _presetGame) ? (IEnumerable<QuickPreset>)_presets : p.Presets ?? new List<QuickPreset>()));
-
-        foreach (var (game, list) in scope)
+        // Preset hotkeys are per game: only the open game's presets can collide.
+        if (_presetGame != null)
         {
-            foreach (var preset in list)
+            foreach (var preset in _presets)
             {
-                if (ReferenceEquals(box, TxtPresetHotkey) && ReferenceEquals(preset, _selectedPreset)) continue;
-                if (SameGesture(preset.Hotkey, mods, vk))
-                    return Loc.Tf("hotkey.conflict.preset", preset.Name, game.Name);
+                if (ReferenceEquals(preset, _selectedPreset)) continue;
+                if (HotkeyCapture.SameGesture(preset.Hotkey, mods, vk))
+                    return Loc.Tf("hotkey.conflict.preset", preset.Name, _presetGame.Name);
             }
         }
         return null;
@@ -637,82 +617,48 @@ public partial class MainWindow : Window
 
     private void HotkeyBox_GotFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (sender is not System.Windows.Controls.TextBox box) return;
-        _hotkeyOriginal[box] = box.Text;
-        box.Tag = Loc.T("hotkey.listening");
-        // Announce the capture state to assistive tech (the watermark alone is visual only).
-        System.Windows.Automation.AutomationProperties.SetLiveSetting(box, System.Windows.Automation.AutomationLiveSetting.Polite);
-        System.Windows.Automation.AutomationProperties.SetItemStatus(box, Loc.T("hotkey.listening"));
-        System.Windows.Automation.AutomationProperties.SetHelpText(box, Loc.T("hotkey.listening"));
-        box.SelectAll();
+        if (sender is WpfTextBox box) HotkeyCapture.OnGotFocus(box, _hotkeyOriginal);
     }
 
     private void HotkeyBox_LostFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (sender is System.Windows.Controls.TextBox box)
-        {
-            box.Tag = Loc.T("hotkey.placeholder");
-            System.Windows.Automation.AutomationProperties.SetItemStatus(box, "");
-            System.Windows.Automation.AutomationProperties.SetHelpText(box, Loc.T("hotkey.placeholder"));
-        }
+        if (sender is WpfTextBox box) HotkeyCapture.OnLostFocus(box);
     }
 
     private void HotkeyBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (sender is not System.Windows.Controls.TextBox box) return;
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        var mods = Keyboard.Modifiers;
-
-        // Tab / Shift+Tab keep normal keyboard navigation.
-        if (key == Key.Tab && (mods & (ModifierKeys.Control | ModifierKeys.Alt)) == 0)
-            return;
-
-        e.Handled = true;
-        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
-            return;
-
-        // Esc cancels capture and keeps the previous binding.
-        if (key == Key.Escape && mods == ModifierKeys.None)
+        if (sender is not WpfTextBox box) return;
+        switch (HotkeyCapture.Read(e, out var gesture))
         {
-            box.Text = _hotkeyOriginal.TryGetValue(box, out var orig) ? orig : box.Text;
-            Keyboard.ClearFocus();
-            return;
+            case HotkeyCaptureKind.Cancel:
+                // Esc cancels capture and keeps the previous binding.
+                box.Text = _hotkeyOriginal.TryGetValue(box, out var orig) ? orig : box.Text;
+                Keyboard.ClearFocus();
+                break;
+            case HotkeyCaptureKind.Clear:
+                CommitHotkey(box, "");
+                break;
+            case HotkeyCaptureKind.Gesture:
+                ApplyCapturedGesture(box, gesture);
+                break;
         }
-
-        // Backspace / Delete clear the binding.
-        if ((key is Key.Back or Key.Delete) && mods == ModifierKeys.None)
-        {
-            CommitHotkey(box, "");
-            return;
-        }
-
-        var gesture = HotkeyService.GestureFromKeys(mods, key);
-        ApplyCapturedGesture(box, gesture);
     }
 
-    /// <summary>
-    /// Captures mouse XButton1/XButton2 as hotkeys on the same textboxes as keyboard capture
-    /// (see HotkeyService's WH_MOUSE_LL fallback for how these are recognized at runtime).
-    /// </summary>
     private void HotkeyBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not System.Windows.Controls.TextBox box) return;
-        if (e.ChangedButton is not (MouseButton.XButton1 or MouseButton.XButton2))
-            return;
-
-        var gesture = HotkeyService.GestureFromMouse(Keyboard.Modifiers, e.ChangedButton);
+        if (sender is not WpfTextBox box) return;
+        var gesture = HotkeyCapture.ReadMouse(e);
         if (gesture == null) return;
-
         e.Handled = true;
         box.Focus();
         ApplyCapturedGesture(box, gesture);
     }
 
     /// <summary>Conflicts are blocked: the old binding stays and the message names who owns the key.</summary>
-    private void ApplyCapturedGesture(System.Windows.Controls.TextBox box, string gesture)
+    private void ApplyCapturedGesture(WpfTextBox box, string gesture)
     {
         if (string.IsNullOrWhiteSpace(gesture)) return;
-        var conflict = FindHotkeyConflict(box, gesture);
+        var conflict = FindHotkeyConflict(gesture);
         if (conflict != null)
         {
             UiSound.Warn();
@@ -725,28 +671,17 @@ public partial class MainWindow : Window
         box.SelectAll();
     }
 
-    private void CommitHotkey(System.Windows.Controls.TextBox box, string gesture)
+    private void CommitHotkey(WpfTextBox box, string gesture)
     {
-        if (ReferenceEquals(box, TxtPresetHotkey) && _selectedPreset == null) return;
+        if (_selectedPreset == null) return;
         box.Text = gesture;
         _hotkeyOriginal[box] = gesture;
-        if (ReferenceEquals(box, TxtPresetHotkey))
-        {
-            PushPresetEditor();
-            RefreshPresetListSafe();
-        }
+        PushPresetEditor();
+        RefreshPresetListSafe();
         MarkDirty();
         FlushAutosave(); // persists and re-registers hotkeys immediately
         RefreshGamesTab();
     }
 
-    private void ClearHotkey_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not System.Windows.Controls.Button { Tag: System.Windows.Controls.TextBox box })
-            return;
-        CommitHotkey(box, "");
-    }
-
-    private static string? NormHotkey(string? text)
-        => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+    private void ClearHotkey_Click(object sender, RoutedEventArgs e) => CommitHotkey(TxtPresetHotkey, "");
 }

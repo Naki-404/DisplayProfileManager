@@ -259,7 +259,9 @@ internal static class InstallerCore
     private static bool IsAllowedPayloadPath(string rel) =>
         rel.Equals(Product.ExeName, StringComparison.OrdinalIgnoreCase) ||
         rel.Equals(Product.UninstallerName, StringComparison.OrdinalIgnoreCase) ||
-        rel.StartsWith(@"Assets\", StringComparison.OrdinalIgnoreCase);
+        rel.StartsWith(@"Assets\", StringComparison.OrdinalIgnoreCase) ||
+        rel.Equals(Product.PresentMonExe, StringComparison.OrdinalIgnoreCase) ||
+        rel.Equals(Product.PresentMonReadme, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Moves old owned files to a backup folder, moves staged files in, writes the manifest; rolls back on failure.</summary>
     private static void SwapIn(string dir, string staging, string backup, List<string> oldFiles, List<string> newFiles)

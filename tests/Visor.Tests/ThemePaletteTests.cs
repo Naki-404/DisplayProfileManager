@@ -85,4 +85,56 @@ public class ThemePaletteTests
         var label = ThemeService.BestContrastingLabel(ThemeService.Hex("#15803D"));
         Assert.Equal("#FFFFFF", ThemeService.ToHex(label));
     }
+
+    // -- Stage 1 shell: card tokens + AA contrast on card surfaces ------------------------------------
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public void Text_and_muted_text_meet_AA_on_panel_and_background(string theme)
+    {
+        var p = theme == "light" ? ThemeService.LightPalette() : ThemeService.DarkPalette();
+        var panel = ThemeService.Hex(p.Panel);
+        var bg = ThemeService.Hex(p.Bg);
+        var text = ThemeService.Hex(p.Text);
+        var muted = ThemeService.Hex(p.Muted);
+        Assert.True(ThemeService.ContrastRatio(text, panel) >= 4.5, $"{theme}: text on panel");
+        Assert.True(ThemeService.ContrastRatio(muted, panel) >= 4.5, $"{theme}: muted on panel");
+        Assert.True(ThemeService.ContrastRatio(text, bg) >= 4.5, $"{theme}: text on bg");
+        Assert.True(ThemeService.ContrastRatio(muted, bg) >= 4.5, $"{theme}: muted on bg");
+    }
+
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public void Status_colors_are_distinguishable_from_card_surface(string theme)
+    {
+        var p = theme == "light" ? ThemeService.LightPalette() : ThemeService.DarkPalette();
+        var panel = ThemeService.Hex(p.Panel);
+        foreach (var hex in new[] { p.Success, p.Warning, p.Danger })
+            Assert.True(ThemeService.ContrastRatio(ThemeService.Hex(hex), panel) >= 3.0, $"{theme}: {hex} on panel");
+    }
+
+    [Fact]
+    public void CardColors_hover_border_leans_toward_accent_and_differs_from_rest()
+    {
+        var p = ThemeService.DarkPalette();
+        var (border, hover) = ThemeService.CardColors(p);
+        Assert.Equal(p.Border, ThemeService.ToHex(border));
+        Assert.NotEqual(ThemeService.ToHex(border), ThemeService.ToHex(hover));
+        // Hover sits between the rest border and the accent (cyan): more blue/green than the rest border.
+        var accent = ThemeService.Hex(p.Accent);
+        Assert.True(hover.B >= border.B && hover.B <= Math.Max(border.B, accent.B));
+        Assert.True(hover.G >= border.G && hover.G <= Math.Max(border.G, accent.G));
+    }
+
+    [Fact]
+    public void ContrastRatio_is_symmetric_and_bounded()
+    {
+        var a = ThemeService.Hex("#000000");
+        var b = ThemeService.Hex("#FFFFFF");
+        Assert.Equal(ThemeService.ContrastRatio(a, b), ThemeService.ContrastRatio(b, a), 6);
+        Assert.Equal(21.0, ThemeService.ContrastRatio(a, b), 1);
+        Assert.Equal(1.0, ThemeService.ContrastRatio(a, a), 6);
+    }
 }

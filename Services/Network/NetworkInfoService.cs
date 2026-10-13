@@ -20,6 +20,15 @@ public sealed class NetworkAdapterInfo
     public IReadOnlyList<string> DnsServers { get; init; } = Array.Empty<string>();
     /// <summary>True when the OS routing table named this adapter for the default route.</summary>
     public bool OwnsDefaultRoute { get; init; }
+    /// <summary>OS adapter Id (GUID string) — used to re-find the NIC for byte counters.</summary>
+    public string? Id { get; init; }
+    public int? InterfaceIndex { get; init; }
+    public string? Description { get; init; }
+    public int? Mtu { get; init; }
+    /// <summary>IPv4 address assigned by DHCP (null = unknown, false = static).</summary>
+    public bool? IsDhcpEnabled { get; init; }
+    public string? DhcpServer { get; init; }
+    public bool IPv6Enabled { get; init; }
 }
 
 /// <summary>Read-only view of the active (preferred) network interface. Never exposes Wi-Fi passwords.</summary>
@@ -108,6 +117,27 @@ public static class NetworkInfoService
             }
             catch { /* some adapters throw */ }
 
+            int? mtu = null;
+            bool? dhcp = null;
+            int? ifIndex = InterfaceIndexV4(nic) ?? InterfaceIndexV6(nic);
+            try
+            {
+                var v4 = nic.Supports(NetworkInterfaceComponent.IPv4) ? props.GetIPv4Properties() : null;
+                if (v4 != null)
+                {
+                    mtu = v4.Mtu > 0 ? v4.Mtu : null;
+                    dhcp = v4.IsDhcpEnabled;
+                }
+            }
+            catch { /* unsupported on some adapters */ }
+            string? dhcpServer = null;
+            try
+            {
+                dhcpServer = props.DhcpServerAddresses
+                    .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)?.ToString();
+            }
+            catch { /* ignore */ }
+
             return new NetworkAdapterInfo
             {
                 Name = nic.Name,
@@ -119,7 +149,14 @@ public static class NetworkInfoService
                 Gateway = gw4 ?? gw6,
                 GatewayV6 = gw6,
                 DnsServers = dns,
-                OwnsDefaultRoute = bestIndex is int b && (InterfaceIndexV4(nic) == b || InterfaceIndexV6(nic) == b)
+                OwnsDefaultRoute = bestIndex is int b && (InterfaceIndexV4(nic) == b || InterfaceIndexV6(nic) == b),
+                Id = nic.Id,
+                InterfaceIndex = ifIndex,
+                Description = nic.Description,
+                Mtu = mtu,
+                IsDhcpEnabled = dhcp,
+                DhcpServer = dhcpServer,
+                IPv6Enabled = ipv6 != null
             };
         }
         catch (Exception ex)

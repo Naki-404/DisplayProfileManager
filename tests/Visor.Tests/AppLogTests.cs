@@ -8,6 +8,13 @@ namespace Visor.Tests;
 /// AppLog is process-wide, so each test points it at its own temp file and back again. Other test
 /// classes may log concurrently — assertions only look for this test's own marker lines.
 /// </summary>
+// AppLog is process-global: other test classes log WARN/ERROR (immediate flush) and the 1 s timer
+// flush runs on its own thread, so ordering assertions against an external writer are only
+// deterministic when nothing else runs. xunit runs a DisableParallelization collection alone.
+[CollectionDefinition("AppLog serial", DisableParallelization = true)]
+public sealed class AppLogSerialCollection { }
+
+[Collection("AppLog serial")]
 public class AppLogTests
 {
     /// <summary>Redirects AppLog to a temp file for the test; restores the shared test log afterwards.</summary>

@@ -329,6 +329,10 @@ public partial class App : System.Windows.Application
                     if (_cleanedUp) return;
                     SetupAutostart();
                     RunConflictCheckFireAndForget();
+                    // Hardware inventory (WMI) + crash-event scan on the thread pool; My PC / Home read
+                    // the cached results and never block on them.
+                    try { Services.BeginHardwareProbes(); }
+                    catch (Exception ex) { AppLog.Warn(ex, "Hardware probes"); }
                 });
             };
 

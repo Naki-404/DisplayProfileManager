@@ -1,60 +1,52 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using Visor.Controls;
 using Visor.Models;
 using Visor.Services;
 
 namespace Visor;
 
-/// <summary>Shell: ctor, lifecycle, window chrome / Win32 / DPI, keyboard routing, navigation, command palette, toasts, autosave.</summary>
-public partial class MainWindow : Window
+/// <summary>
+/// Shell: chrome / Win32 / DPI, nav rail, top bar, page host, keyboard routing, command palette, toasts,
+/// autosave + config reload. Page content lives in <c>Views\Pages</c>; pages talk back through <see cref="IShellHost"/>.
+/// </summary>
+public partial class MainWindow : Window, IShellHost
 {
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
     private const int DwmwaUseImmersiveDarkMode = 20;
     private const int DwmwaUseImmersiveDarkModeBefore20 = 19;
+    private const string HelpUrl = "https://github.com/Naki-404/DisplayProfileManager";
 
     private readonly ObservableCollection<GameProfile> _profiles = new();
-    private readonly ObservableCollection<QuickPreset> _presets = new();
-    /// <summary>Live, filterable view used by the Library list only (Play / Presets lists stay unfiltered).</summary>
-    private readonly ListCollectionView _libraryView;
     private readonly DispatcherTimer _autoSaveTimer;
-    private readonly DispatcherTimer _tileRefreshTimer;
     private readonly DispatcherTimer _statusTimer;
-    private readonly DispatcherTimer _presetListRefreshTimer;
 
-    private GameProfile? _selected;
-    private GameProfile? _presetGame;
-    private QuickPreset? _selectedPreset;
-    private ColorBackend _presetEditorBackend = ColorBackend.LowLevel;
-    /// <summary>
-    /// True only while the Presets-tab editor holds changes not yet pushed into _selectedPreset.
-    /// Guards against a stale editor overwriting edits made elsewhere (Play sliders) on autosave.
-    /// </summary>
-    private bool _presetEditorDirty;
+    private readonly HomePage _home;
+    private readonly MyPcPage _myPc;
+    private readonly GamesPage _games;
+    private readonly OptimizePage _optimize;
+    private readonly NetworkPage _network;
+    private readonly MonitorPage _monitor;
+    private readonly SettingsPage _settings;
+    private readonly ShellPageBase[] _pages;
+
     private bool _dirty;
     private int _lastTabIndex;
-    private string? _lastActiveProfileId;
-
-    private GameProfile? _playProfile;
-    private QuickPreset? _playPreset;
-    private ColorBackend _playBackend = ColorBackend.LowLevel;
-    private bool _previewOnDesktop;
-    /// <summary>User picked the "Live" chip (one-off color, not saved to a preset).</summary>
-    private bool _playLive;
-
     private Action? _toastAction;
     private bool _restoreMaximized;
+    private bool _railCompact;
+    private bool _suppressNav;
+    private bool _suppressThemeCombo;
+    private bool _paletteOpen;
 
     // Service subscriptions are kept as fields so OnClosed can unsubscribe them (the window is a singleton,
     // but the services outlive a crashed/re-created window and must not call into a dead one).
@@ -66,14 +58,10 @@ public partial class MainWindow : Window
     private readonly CancellationTokenSource _gpuDetectCts = new();
     /// <summary>Locale the labels were last built for — lets the Loc.Changed and explicit ApplyLocalization triggers dedupe.</summary>
     private string? _appliedLocale;
-    private readonly Dictionary<System.Windows.Controls.TextBox, string> _hotkeyOriginal = new();
 
-    // -- Re-entrant suppression scopes (replaces the old boolean that nested calls used to reset) ----------
+    // -- Re-entrant suppression scope (shared by every page editor) ------------------------------------
 
     private int _editorSuppress;
-    private int _playSuppress;
-    private bool SuppressingEditor => _editorSuppress > 0;
-    private bool SuppressingPlay => _playSuppress > 0;
 
     private sealed class Scope : IDisposable
     {
@@ -86,17 +74,12 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Programmatic editor updates inside this scope don't fire change handlers. Nesting is safe.</summary>
-    private IDisposable SuppressEditor()
+    public bool SuppressingEditor => _editorSuppress > 0;
+
+    public IDisposable SuppressEditor()
     {
         _editorSuppress++;
         return new Scope(() => _editorSuppress--);
-    }
-
-    private IDisposable SuppressPlay()
-    {
-        _playSuppress++;
-        return new Scope(() => _playSuppress--);
     }
 
     static MainWindow()
@@ -111,9 +94,24 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _editorSuppress = 1; // InitializeComponent fires Checked/SelectionChanged events
+        _editorSuppress = 1; // InitializeComponent (window + pages) fires Checked/SelectionChanged events
         InitializeComponent();
-        _libraryView = new ListCollectionView(_profiles) { Filter = LibraryFilter };
+
+        _home = new HomePage(this);
+        _myPc = new MyPcPage(this);
+        _games = new GamesPage(this);
+        _optimize = new OptimizePage(this);
+        _network = new NetworkPage(this);
+        _monitor = new MonitorPage(this);
+        _settings = new SettingsPage(this);
+        _pages = new ShellPageBase[] { _home, _myPc, _games, _optimize, _network, _monitor, _settings };
+        TabHome.Content = _home;
+        TabMyPc.Content = _myPc;
+        TabGames.Content = _games;
+        TabOptimize.Content = _optimize;
+        TabNetwork.Content = _network;
+        TabMonitor.Content = _monitor;
+        TabSettings.Content = _settings;
 
         _autoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
         _autoSaveTimer.Tick += (_, _) =>
@@ -123,18 +121,6 @@ public partial class MainWindow : Window
             // Always push editors first — otherwise dual-slot / slider state can save as 0/0/0/0.
             FlushAutosave();
         };
-        _tileRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-        _tileRefreshTimer.Tick += (_, _) =>
-        {
-            _tileRefreshTimer.Stop();
-            RefreshGameTiles();
-        };
-        _presetListRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
-        _presetListRefreshTimer.Tick += (_, _) =>
-        {
-            _presetListRefreshTimer.Stop();
-            RefreshPresetListSafe();
-        };
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _statusTimer.Tick += (_, _) =>
         {
@@ -142,25 +128,23 @@ public partial class MainWindow : Window
             StatusText.Text = "";
         };
 
-        ProfileList.ItemsSource = _libraryView;
-        PresetGameList.ItemsSource = _profiles;
-        CmbPresetGame.ItemsSource = _profiles;
-        PresetList.ItemsSource = _presets;
         TitleLogo.Source = AssetLoader.AppIcon(32);
+        RailLogo.Source = AssetLoader.AppIcon(32);
+        LblMachine.Text = Environment.MachineName;
 
         ApplyInitialBounds();
-        LoadResolutions();
-        FillDisplays();
-        FillAudioDevices();
+        var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
+        InfoHint.TooltipMode = ui.TooltipMode;
+        TogTooltipMode.IsChecked = ui.TooltipMode;
+        SetRailCompact(ui.SidebarCollapsed, animate: false);
         _editorSuppress = 0;
 
-        PruneDismissedRecommendations();
+        OptimizePage.PruneDismissedRecommendations();
         ReloadFromConfig();
         ApplyLocalization();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
-        RefreshGamesTab();
 
-        Loaded += (_, _) => MaybeFirstScan();
+        Loaded += (_, _) => _games.MaybeFirstScan();
         // Deferred so the explicit ApplyLocalization() that App/Settings call right after Loc.SetLocale wins
         // and this one becomes a no-op (one relabel per locale change instead of two).
         _onLocChanged = () => Dispatcher.BeginInvoke(() =>
@@ -174,28 +158,23 @@ public partial class MainWindow : Window
         _lastTabIndex = MainTabs.SelectedIndex;
         _onMonitorStatusChanged = _ => Dispatcher.BeginInvoke(() =>
         {
-            RefreshPauseButton();
-            RefreshHomeDashboard();
+            _home.Refresh();
+            _optimize.Refresh();
         });
         App.Services.Monitor.StatusChanged += _onMonitorStatusChanged;
-        _onActiveProfileChanged = _ => Dispatcher.BeginInvoke(RefreshHomeDashboard);
+        _onActiveProfileChanged = _ => Dispatcher.BeginInvoke(() => _home.Refresh());
         App.Services.Monitor.ActiveProfileChanged += _onActiveProfileChanged;
         _onHistoryChanged = () => Dispatcher.BeginInvoke(() =>
         {
-            if (HomePageIsLive)
-                RefreshHomeActivity();
-            else
-                _homeStale = true;
-            if (RbMoreHistory?.IsChecked == true)
-                RefreshHistoryPanel();
+            _home.Refresh();
+            _settings.OnHistoryChanged();
         });
         App.Services.History.Changed += _onHistoryChanged;
-        _onConfigChanged = () => Dispatcher.BeginInvoke(RefreshHomeDashboard);
+        _onConfigChanged = () => Dispatcher.BeginInvoke(() => _home.Refresh());
         App.Services.Config.ConfigChanged += _onConfigChanged;
         _ = GpuVendorDetect.WhenDetected.ContinueWith(_ =>
-            Dispatcher.BeginInvoke(RefreshHomeDashboard),
+            Dispatcher.BeginInvoke(() => _home.Refresh()),
             _gpuDetectCts.Token, TaskContinuationOptions.None, TaskScheduler.Default);
-        RefreshPauseButton();
         SyncNavFromTabs();
         System.Windows.Automation.AutomationProperties.SetName(MainTabs, "");
 
@@ -226,9 +205,9 @@ public partial class MainWindow : Window
         try
         {
             _autoSaveTimer.Stop();
-            _tileRefreshTimer.Stop();
-            _presetListRefreshTimer.Stop();
             _statusTimer.Stop();
+            _games.StopTimers();
+            _monitor.Shutdown();
             _shellFitTimer?.Stop();
             _gpuDetectCts.Cancel();
             Loc.Changed -= _onLocChanged;
@@ -248,13 +227,10 @@ public partial class MainWindow : Window
     private void RefreshStalePages()
     {
         if (!IsVisible) return;
-        if (_homeStale && ReferenceEquals(MainTabs.SelectedItem, TabHome))
-            RefreshHomeDashboard();
-        if (_systemStale && ReferenceEquals(MainTabs.SelectedItem, TabSystem))
-            RefreshSystemPage(includeProcesses: false);
-        if (_networkStale && ReferenceEquals(MainTabs.SelectedItem, TabNetwork))
-            RefreshNetworkPage();
+        CurrentPage?.RefreshIfStale();
     }
+
+    private ShellPageBase? CurrentPage => MainTabs.SelectedContent as ShellPageBase;
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
         Dispatcher.BeginInvoke(ScheduleShellFitRefresh);
@@ -402,7 +378,7 @@ public partial class MainWindow : Window
         _restoreMaximized = st.WindowMaximized;
     }
 
-    /// <summary>Sidebar + Presets columns prefer ≥1100 DIP when the work area allows it.</summary>
+    /// <summary>Sidebar + Games columns prefer ≥1100 DIP when the work area allows it.</summary>
     private void ApplyShellMinWidth(double workAreaWidthDip)
     {
         MinWidth = ShellFit.MinWidthFor(workAreaWidthDip);
@@ -554,7 +530,7 @@ public partial class MainWindow : Window
 
     public void HideWithFade()
     {
-        StopDesktopPreview();
+        _games.StopDesktopPreview();
         SaveWindowBounds();
         int gen = ++_visibilityGen;
         UiMotion.PopOut(ChromeRoot, () =>
@@ -585,11 +561,7 @@ public partial class MainWindow : Window
             MainTabs.SelectedItem = TabHome;
         RefreshStalePages();
         UpdateMaximizeCaption();
-
         ApplyChromeTheme();
-        // Nested MaxHeight lists inside page ScrollViewers — don't let them trap the wheel.
-        NestedScroll.ForwardWheelAtEdge(CompanionList);
-        NestedScroll.ForwardWheelAtEdge(ProcessList);
     }
 
     private static DateTime _lastClickSoundUtc = DateTime.MinValue;
@@ -597,8 +569,7 @@ public partial class MainWindow : Window
     /// <summary>Only "primary" action buttons get the click chime — Ghost/secondary buttons stay silent.</summary>
     private static readonly HashSet<string> ClickSoundButtons = new(StringComparer.Ordinal)
     {
-        "BtnEmergency", "BtnScan", "BtnLaunchGame",
-        "BtnApplyProfileNow", "BtnApplyPreset", "BtnApplyDefaults"
+        "BtnScan", "BtnLaunchGame", "BtnApplyProfileNow", "BtnApplyPreset", "BtnApplyDefaults", "BtnHomeScan"
     };
 
     private static void OnAnyButtonClick(object sender, RoutedEventArgs e)
@@ -644,27 +615,29 @@ public partial class MainWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(BtnMaximize, text);
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e)
-        => Close();
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
-    private void NakidevCredit_Click(object sender, MouseButtonEventArgs e)
+    private void NakidevCredit_Click(object sender, MouseButtonEventArgs e) => OpenUrl("https://t.me/nakidev");
+
+    private void HelpLink_Click(object sender, RoutedEventArgs e) => OpenUrl(HelpUrl);
+
+    private static void OpenUrl(string url)
     {
         try
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "https://t.me/nakidev",
-                UseShellExecute = true
-            });
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Open URL");
+        }
     }
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
     {
         if (App.Current is App app && !app.IsExitRequested)
         {
-            CancelNetworkProbes();
+            _network.CancelProbes();
             FlushAutosave();
             SaveWindowBounds();
 
@@ -690,8 +663,8 @@ public partial class MainWindow : Window
     /// <summary>Used by tray Exit. Autosave is always flushed (no discard prompt).</summary>
     public bool PromptUnsavedBeforeExit()
     {
-        CancelNetworkProbes();
-        StopDesktopPreview();
+        _network.CancelProbes();
+        _games.StopDesktopPreview();
         FlushAutosave();
         SaveWindowBounds();
         return true;
@@ -700,10 +673,8 @@ public partial class MainWindow : Window
     // -- Keyboard shortcuts ----------------------------------------------------------------------
 
     private bool IsHotkeyCaptureFocused() =>
-        Keyboard.FocusedElement is System.Windows.Controls.TextBox tb && IsHotkeyBox(tb);
-
-    private bool IsHotkeyBox(System.Windows.Controls.TextBox tb) =>
-        tb == TxtPresetHotkey || GlobalHotkeyBoxes().Any(b => b.Box == tb);
+        Keyboard.FocusedElement is System.Windows.Controls.TextBox tb
+        && (_games.IsHotkeyBox(tb) || _settings.IsHotkeyBox(tb));
 
     private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
@@ -711,32 +682,28 @@ public partial class MainWindow : Window
 
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {
-            TabItem? target = e.Key switch
+            ShellSection? target = e.Key switch
             {
-                Key.D1 or Key.NumPad1 => TabHome,
-                Key.D2 or Key.NumPad2 => TabGames,
-                Key.D3 or Key.NumPad3 => TabPresets,
-                Key.D4 or Key.NumPad4 => TabSystem,
-                Key.D5 or Key.NumPad5 => TabNetwork,
-                Key.D6 or Key.NumPad6 => TabMore,
+                Key.D1 or Key.NumPad1 => ShellSection.Home,
+                Key.D2 or Key.NumPad2 => ShellSection.MyPc,
+                Key.D3 or Key.NumPad3 => ShellSection.Games,
+                Key.D4 or Key.NumPad4 => ShellSection.Optimize,
+                Key.D5 or Key.NumPad5 => ShellSection.Network,
+                Key.D6 or Key.NumPad6 => ShellSection.Monitor,
+                Key.D7 or Key.NumPad7 => ShellSection.Settings,
                 _ => null
             };
-            if (target != null)
+            if (target is { } section)
             {
-                MainTabs.SelectedItem = target;
-                SyncNavFromTabs();
-                FocusNavForTab(target);
+                Navigate(section);
+                FocusNavFor(section);
                 e.Handled = true;
                 return;
             }
             if (e.Key == Key.F)
             {
-                MainTabs.SelectedItem = TabGames;
-                Dispatcher.BeginInvoke(() =>
-                {
-                    TxtSearch.Focus();
-                    TxtSearch.SelectAll();
-                }, DispatcherPriority.Input);
+                Navigate(ShellSection.Games);
+                _games.FocusSearch();
                 e.Handled = true;
                 return;
             }
@@ -748,11 +715,8 @@ public partial class MainWindow : Window
             }
         }
 
-        if (e.Key == Key.Escape && ReferenceEquals(Keyboard.FocusedElement, TxtSearch) && TxtSearch.Text.Length > 0)
-        {
-            TxtSearch.Text = "";
+        if (e.Key == Key.Escape && _games.TryClearSearchOnEscape())
             e.Handled = true;
-        }
     }
 
     /// <summary>Del removes the selected item of the focused list (with confirmation).</summary>
@@ -760,25 +724,61 @@ public partial class MainWindow : Window
     {
         if (e.Key != Key.Delete || Keyboard.Modifiers != ModifierKeys.None) return;
         if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase) return;
-
-        if (ProfileList.IsKeyboardFocusWithin && _selected != null)
-        {
-            DeleteProfile_Click(this, new RoutedEventArgs());
+        if (_games.HandleDeleteKey())
             e.Handled = true;
-        }
-        else if (PresetList.IsKeyboardFocusWithin && _selectedPreset != null)
-        {
-            DeletePreset_Click(this, new RoutedEventArgs());
-            e.Handled = true;
-        }
-        else if (CompanionList.IsKeyboardFocusWithin && CompanionList.SelectedItem != null)
-        {
-            RemoveCompanion_Click(this, new RoutedEventArgs());
-            e.Handled = true;
-        }
     }
 
-    // -- Tabs --------------------------------------------------------------------------------------
+    // -- Navigation ----------------------------------------------------------------------------------
+
+    private static readonly ShellSection[] SectionOrder =
+    {
+        ShellSection.Home, ShellSection.MyPc, ShellSection.Games, ShellSection.Optimize, ShellSection.Network,
+        ShellSection.Monitor, ShellSection.Settings
+    };
+
+    private TabItem TabFor(ShellSection s) => s switch
+    {
+        ShellSection.MyPc => TabMyPc,
+        ShellSection.Games => TabGames,
+        ShellSection.Optimize => TabOptimize,
+        ShellSection.Network => TabNetwork,
+        ShellSection.Monitor => TabMonitor,
+        ShellSection.Settings => TabSettings,
+        _ => TabHome
+    };
+
+    private NavRailItem NavFor(ShellSection s) => s switch
+    {
+        ShellSection.MyPc => NavMyPc,
+        ShellSection.Games => NavGames,
+        ShellSection.Optimize => NavOptimize,
+        ShellSection.Network => NavNetwork,
+        ShellSection.Monitor => NavMonitor,
+        ShellSection.Settings => NavSettings,
+        _ => NavHome
+    };
+
+    private static ShellSection SectionForTag(string? tag) => tag switch
+    {
+        "mypc" => ShellSection.MyPc,
+        "games" or "play" or "library" => ShellSection.Games,
+        "optimize" => ShellSection.Optimize,
+        "network" => ShellSection.Network,
+        "monitor" or "fps" => ShellSection.Monitor,
+        "settings" => ShellSection.Settings,
+        _ => ShellSection.Home
+    };
+
+    public ShellSection CurrentSection => CurrentPage?.Section ?? ShellSection.Home;
+
+    public bool IsSectionLive(ShellSection section) => IsVisible && CurrentSection == section;
+
+    public void Navigate(ShellSection section)
+    {
+        var tab = TabFor(section);
+        if (!ReferenceEquals(MainTabs.SelectedItem, tab))
+            MainTabs.SelectedItem = tab;
+    }
 
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -794,36 +794,11 @@ public partial class MainWindow : Window
         if (_dirty)
             FlushAutosave();
 
-        if (!ReferenceEquals(MainTabs.SelectedItem, TabGames) || RbGamesColor?.IsChecked != true)
-            StopDesktopPreview();
+        foreach (var removed in e.RemovedItems.OfType<TabItem>())
+            (removed.Content as ShellPageBase)?.OnDeactivated();
 
         _lastTabIndex = newIndex;
-        if (ReferenceEquals(MainTabs.SelectedItem, TabPresets))
-        {
-            FocusPresetsForActiveOrSelectedGame(_selected);
-            // Color-tab sliders may have edited the same preset object — show fresh values.
-            LoadPresetEditor(_selectedPreset);
-        }
-        if (ReferenceEquals(MainTabs.SelectedItem, TabHome))
-            RefreshHomeDashboard();
-        if (ReferenceEquals(MainTabs.SelectedItem, TabSystem))
-            RefreshSystemPage(includeProcesses: false);
-        if (ReferenceEquals(MainTabs.SelectedItem, TabNetwork))
-            RefreshNetworkPage();
-        else
-            CancelNetworkProbes();
-        if (ReferenceEquals(MainTabs.SelectedItem, TabGames))
-        {
-            if (RbGamesColor?.IsChecked == true)
-                RefreshGamesTab();
-        }
-        if (ReferenceEquals(MainTabs.SelectedItem, TabMore))
-        {
-            if (RbMoreLog?.IsChecked == true)
-                RefreshLog();
-            if (RbMoreHistory?.IsChecked == true)
-                RefreshHistoryPanel();
-        }
+        CurrentPage?.OnActivated();
         SyncNavFromTabs();
         // Soft nudge — avoid blanking opacity to 0 (hard PageFadeIn flash on every switch).
         if (MainTabs.SelectedContent is FrameworkElement fe)
@@ -837,52 +812,143 @@ public partial class MainWindow : Window
             if (!ReferenceEquals(MainTabs.SelectedItem, target)) return;
             if (MainTabs.SelectedContent is FrameworkElement page && page.IsKeyboardFocusWithin) return;
             if (NavRail.IsKeyboardFocusWithin) return;
-            FocusNavForTab(target);
+            FocusNavFor(CurrentSection);
         }, DispatcherPriority.Input);
     }
-
-    private bool _suppressNav;
 
     private void Nav_Checked(object sender, RoutedEventArgs e)
     {
         if (_suppressNav) return;
-        if (sender is not System.Windows.Controls.RadioButton rb || rb.IsChecked != true) return;
-        string tag = rb.Tag as string ?? "home";
-
-        var tab = TabForNav(tag);
-        if (tab != null && !ReferenceEquals(MainTabs.SelectedItem, tab))
+        if (sender is not NavRailItem rb || rb.IsChecked != true) return;
+        var section = SectionForTag(rb.Tag as string);
+        var tab = TabFor(section);
+        if (!ReferenceEquals(MainTabs.SelectedItem, tab))
             MainTabs.SelectedItem = tab;
         else
-            UpdatePageTitle(tag);
+            UpdatePageTitle();
     }
 
     private void NavGames_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
         EggBusy?.NotifyProfilesClick();
 
-    private void PauseMonitoring_Click(object sender, RoutedEventArgs e)
+    private void SyncNavFromTabs()
     {
-        App.Services.Monitor.IsPaused = !App.Services.Monitor.IsPaused;
-        RefreshPauseButton();
-        RefreshHomeDashboard();
+        if (_suppressNav) return;
+        _suppressNav = true;
+        NavFor(CurrentSection).IsChecked = true;
+        _suppressNav = false;
+        UpdatePageTitle();
+    }
+
+    private void FocusNavFor(ShellSection section) => NavFor(section).Focus();
+
+    private void UpdatePageTitle()
+    {
+        if (LblPageTitle == null) return;
+        LblPageTitle.Text = Loc.T(CurrentPage?.TitleKey ?? "nav.home");
+    }
+
+    // -- Nav rail: collapse + themes ----------------------------------------------------------------------
+
+    private void RailCollapse_Click(object sender, RoutedEventArgs e)
+    {
+        SetRailCompact(!_railCompact, animate: true);
+        var cfg = App.Services.Config.Current;
+        cfg.Ui ??= new UiPreferences();
+        cfg.Ui.SidebarCollapsed = _railCompact;
+        App.Services.Config.Save(cfg, raiseChanged: false);
+    }
+
+    private void SetRailCompact(bool compact, bool animate)
+    {
+        _railCompact = compact;
+        foreach (ShellSection s in SectionOrder)
+            NavFor(s).IsCompact = compact;
+        LblNavMain.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        LblBrand.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        BetaPill.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RailFooter.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RailCollapseIcon.SetResourceReference(System.Windows.Shapes.Path.DataProperty, compact ? "IconExpand" : "IconCollapse");
+        string tip = Loc.T(compact ? "nav.expand" : "nav.collapse");
+        BtnRailCollapse.ToolTip = tip;
+        System.Windows.Automation.AutomationProperties.SetName(BtnRailCollapse, tip);
+
+        double target = compact ? ShellFit.NavRailCompactWidth : ShellFit.NavRailWidth;
+        NavRailPanel.BeginAnimation(FrameworkElement.WidthProperty, null);
+        if (!animate || UiMotion.Reduced)
+        {
+            NavRailPanel.Width = target;
+            return;
+        }
+        var anim = new System.Windows.Media.Animation.DoubleAnimation(NavRailPanel.ActualWidth, target,
+            TimeSpan.FromMilliseconds(UiMotion.NormalMs))
+        {
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+            FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+        };
+        anim.Completed += (_, _) => NavRailPanel.Width = target;
+        NavRailPanel.BeginAnimation(FrameworkElement.WidthProperty, anim);
+    }
+
+    private void SyncThemeCombo()
+    {
+        _suppressThemeCombo = true;
+        try
+        {
+            ComboUi.SelectByTag(CmbRailTheme, App.Services.Config.Current.Ui?.Theme ?? "dark");
+        }
+        finally
+        {
+            _suppressThemeCombo = false;
+        }
+    }
+
+    private void RailTheme_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressThemeCombo || CmbRailTheme.SelectedItem is not ComboBoxItem item) return;
+        string theme = item.Tag?.ToString() ?? "dark";
+        var cfg = App.Services.Config.Current;
+        cfg.Ui ??= new UiPreferences();
+        if (string.Equals(cfg.Ui.Theme, theme, StringComparison.OrdinalIgnoreCase)) return;
+        cfg.Ui.Theme = theme;
+        if (theme == "custom")
+            cfg.Ui.CustomPalette ??= ThemeService.SeedCustom(cfg.Ui.CustomAccent, cfg.Ui.CustomBackground);
+        ThemeService.Apply(cfg.Ui);
+        App.Services.Config.Save(cfg, raiseChanged: false);
+        ApplyChromeTheme();
         if (System.Windows.Application.Current is App app)
             app.RebuildTrayMenu();
     }
 
-    private void RefreshPauseButton()
+    // -- Tooltip mode -------------------------------------------------------------------------------------
+
+    public bool TooltipMode
     {
-        if (BtnPause == null) return;
-        bool paused = App.Services.Monitor.IsPaused;
-        BtnPause.Content = Loc.T(paused ? "nav.resume" : "nav.pause");
-        BtnPause.ToolTip = Loc.T(paused ? "nav.resume.tip" : "nav.pause.tip");
-        System.Windows.Automation.AutomationProperties.SetName(BtnPause, BtnPause.Content?.ToString() ?? "");
-        if (BtnHomePause != null)
+        get => InfoHint.TooltipMode;
+        set
         {
-            BtnHomePause.Content = Loc.T(paused ? "nav.resume" : "nav.pause");
-            BtnHomePause.ToolTip = Loc.T(paused ? "nav.resume.tip" : "nav.pause.tip");
+            if (InfoHint.TooltipMode == value && TogTooltipMode.IsChecked == value) return;
+            InfoHint.TooltipMode = value;
+            if (TogTooltipMode.IsChecked != value)
+                TogTooltipMode.IsChecked = value; // re-enters through TooltipMode_Changed with the same value
+            var cfg = App.Services.Config.Current;
+            cfg.Ui ??= new UiPreferences();
+            if (cfg.Ui.TooltipMode != value)
+            {
+                cfg.Ui.TooltipMode = value;
+                App.Services.Config.Save(cfg, raiseChanged: false);
+            }
+            _home.Refresh();
         }
     }
 
-    private bool _paletteOpen;
+    private void TooltipMode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsInitialized) return;
+        TooltipMode = TogTooltipMode.IsChecked == true;
+    }
+
+    // -- Command palette ------------------------------------------------------------------------------------
 
     private void OpenCommandPalette()
     {
@@ -892,8 +958,7 @@ public partial class MainWindow : Window
         {
             var win = new CommandPaletteWindow(BuildCommandPaletteItems(), id => id switch
             {
-                "cmd.scan" => !_scanRunning,
-                "cmd.emergency" => !_systemBusy,
+                "cmd.scan" => !_games.ScanRunning,
                 _ => true
             }) { Owner = this };
             if (win.ShowDialog() == true && win.Selected != null)
@@ -915,12 +980,13 @@ public partial class MainWindow : Window
         var items = new List<CommandPaletteItem>
         {
             new() { Id = "nav.home", Title = Loc.T("nav.home"), Group = nav, SearchText = "ctrl+1" },
-            new() { Id = "nav.games", Title = Loc.T("nav.games"), Group = nav, SearchText = "ctrl+2" },
-            new() { Id = "nav.presets", Title = Loc.T("nav.presets"), Group = nav, SearchText = "ctrl+3" },
-            new() { Id = "nav.system", Title = Loc.T("nav.system"), Group = nav, SearchText = "ctrl+4" },
+            new() { Id = "nav.mypc", Title = Loc.T("nav.mypc"), Group = nav, SearchText = "ctrl+2" },
+            new() { Id = "nav.games", Title = Loc.T("nav.games"), Group = nav, SearchText = "ctrl+3" },
+            new() { Id = "nav.optimize", Title = Loc.T("nav.optimize"), Group = nav, SearchText = "ctrl+4" },
             new() { Id = "nav.network", Title = Loc.T("nav.network"), Group = nav, SearchText = "ctrl+5" },
-            new() { Id = "nav.tools", Title = Loc.T("nav.tools"), Group = nav, SearchText = "ctrl+6" },
-            new() { Id = "nav.settings", Title = Loc.T("nav.settings"), Group = nav },
+            new() { Id = "nav.monitor", Title = Loc.T("nav.monitor"), Group = nav, SearchText = "ctrl+6 fps frametime presentmon" },
+            new() { Id = "nav.settings", Title = Loc.T("nav.settings"), Group = nav, SearchText = "ctrl+7" },
+            new() { Id = "cmd.preferences", Title = Loc.T("shell.preferences"), Subtitle = Loc.T("shell.preferences.tip"), Group = nav },
             new()
             {
                 Id = paused ? "cmd.resume" : "cmd.pause",
@@ -952,130 +1018,93 @@ public partial class MainWindow : Window
     {
         switch (item.Id)
         {
-            case "nav.home":
-                MainTabs.SelectedItem = TabHome;
-                break;
-            case "nav.games":
-                MainTabs.SelectedItem = TabGames;
-                break;
-            case "nav.presets":
-                MainTabs.SelectedItem = TabPresets;
-                break;
-            case "nav.system":
-                MainTabs.SelectedItem = TabSystem;
-                break;
-            case "nav.network":
-                MainTabs.SelectedItem = TabNetwork;
-                break;
-            case "nav.tools":
-                MainTabs.SelectedItem = TabMore;
-                break;
-            case "nav.settings":
-                Settings_Click(this, new RoutedEventArgs());
-                break;
+            case "nav.home": Navigate(ShellSection.Home); break;
+            case "nav.mypc": Navigate(ShellSection.MyPc); break;
+            case "nav.games": Navigate(ShellSection.Games); break;
+            case "nav.optimize": Navigate(ShellSection.Optimize); break;
+            case "nav.network": Navigate(ShellSection.Network); break;
+            case "nav.monitor": Navigate(ShellSection.Monitor); break;
+            case "nav.settings": Navigate(ShellSection.Settings); break;
+            case "cmd.preferences": OpenPreferences(); break;
             case "cmd.pause":
             case "cmd.resume":
-                PauseMonitoring_Click(this, new RoutedEventArgs());
+                TogglePauseMonitoring();
                 break;
-            case "cmd.emergency":
-                EmergencyRestore_Click(this, new RoutedEventArgs());
-                break;
-            case "cmd.scan":
-                MainTabs.SelectedItem = TabGames;
-                ScanGames_Click(this, new RoutedEventArgs());
-                break;
-            case "cmd.add":
-                HomeAddGame_Click(this, new RoutedEventArgs());
-                break;
-            case "cmd.overlay":
-                Overlay_Click(this, new RoutedEventArgs());
-                break;
-            case "cmd.history":
-                HomeOpenHistory_Click(this, new RoutedEventArgs());
-                break;
+            case "cmd.emergency": EmergencyRestore(); break;
+            case "cmd.scan": ScanGames(); break;
+            case "cmd.add": AddGame(); break;
+            case "cmd.overlay": _games.Overlay_Click(this, new RoutedEventArgs()); break;
+            case "cmd.history": OpenHistory(); break;
             default:
-                if (item.Id.StartsWith("game.", StringComparison.Ordinal)
-                    && item.Id.Length > 5)
+                if (item.Id.StartsWith("game.", StringComparison.Ordinal) && item.Id.Length > 5)
                 {
                     var id = item.Id["game.".Length..];
                     var match = _profiles.FirstOrDefault(p => p.Id == id);
                     if (match != null)
-                    {
-                        MainTabs.SelectedItem = TabGames;
-                        SelectProfile(match);
-                    }
+                        OpenGame(match);
                 }
                 break;
         }
         SyncNavFromTabs();
     }
 
-    private void SyncNavFromTabs()
+    // -- IShellHost: navigation helpers + session actions ---------------------------------------------------
+
+    public void OpenGame(GameProfile profile)
     {
-        string tag = NavTagForTab(MainTabs.SelectedItem as TabItem);
-        if (_suppressNav) return;
-        _suppressNav = true;
-        SelectNavRadio(tag);
-        _suppressNav = false;
-        UpdatePageTitle(tag);
+        Navigate(ShellSection.Games);
+        _games.SelectProfile(profile);
     }
 
-    private string NavTagForTab(TabItem? tab)
+    public void AddGame() => _games.AddProfile_Click(this, new RoutedEventArgs());
+
+    public void ScanGames()
     {
-        if (ReferenceEquals(tab, TabGames)) return "games";
-        if (ReferenceEquals(tab, TabPresets)) return "presets";
-        if (ReferenceEquals(tab, TabSystem)) return "system";
-        if (ReferenceEquals(tab, TabNetwork)) return "network";
-        if (ReferenceEquals(tab, TabMore)) return "tools";
-        return "home";
+        Navigate(ShellSection.Games);
+        _games.ScanGames_Click(this, new RoutedEventArgs());
     }
 
-    private TabItem? TabForNav(string tag) => tag switch
+    public void OpenHistory()
     {
-        "home" => TabHome,
-        "games" or "play" or "library" => TabGames,
-        "presets" => TabPresets,
-        "system" => TabSystem,
-        "network" => TabNetwork,
-        "tools" => TabMore,
-        _ => null
-    };
-
-    private void SelectNavRadio(string tag)
-    {
-        var rb = NavRadioForTag(tag);
-        if (rb != null)
-            rb.IsChecked = true;
+        Navigate(ShellSection.Settings);
+        _settings.ShowHistory();
     }
 
-    private System.Windows.Controls.RadioButton? NavRadioForTag(string tag) => tag switch
-    {
-        "home" => NavHome,
-        "games" or "play" or "library" => NavGames,
-        "presets" => NavPresets,
-        "system" => NavSystem,
-        "network" => NavNetwork,
-        "tools" => NavTools,
-        _ => NavHome
-    };
+    public void OpenPreferences() => Settings_Click(this, new RoutedEventArgs());
 
-    private void FocusNavForTab(TabItem? tab) =>
-        NavRadioForTag(NavTagForTab(tab))?.Focus();
-
-    private void UpdatePageTitle(string tag)
+    public void TogglePauseMonitoring()
     {
-        if (LblPageTitle == null) return;
-        LblPageTitle.Visibility = Visibility.Visible;
-        LblPageTitle.Text = Loc.T(tag switch
-        {
-            "games" => "nav.games",
-            "presets" => "nav.presets",
-            "system" => "nav.system",
-            "network" => "nav.network",
-            "tools" => "nav.tools",
-            _ => "nav.home"
-        });
+        App.Services.Monitor.IsPaused = !App.Services.Monitor.IsPaused;
+        _home.Refresh();
+        _optimize.Refresh();
+        if (System.Windows.Application.Current is App app)
+            app.RebuildTrayMenu();
     }
+
+    public void EmergencyRestore()
+    {
+        App.Services.Zoom.Off();
+        App.Services.Monitor.EmergencyRestore();
+        _games.OnEmergencyRestored();
+        ShowToast(Loc.T("toast.emergency"));
+    }
+
+    public ScanOverlay ScanBusy => ScanBusyOverlay;
+
+    public bool ConfirmDestructive(string message, string title, string actionText)
+    {
+        if (App.Services.Config.Current.Ui?.ConfirmDelete == false)
+            return true;
+        return ThemedDialog.Confirm(this, message, title, actionText, danger: true);
+    }
+
+    public ObservableCollection<GameProfile> Profiles => _profiles;
+    public bool IsDirty => _dirty;
+    public GameProfile? SelectedProfile => _games.SelectedProfile;
+    public IEnumerable<(System.Windows.Controls.TextBox Box, string LabelKey)> GlobalHotkeyBoxes => _settings.GlobalHotkeyBoxes;
+    public IEnumerable<(GameProfile Game, IEnumerable<QuickPreset> Presets)> PresetHotkeyScope() => _games.PresetHotkeyScope();
+    public void NotifyGlobalHotkeysChanged() => _games.RefreshGamesTab();
+    Window IShellHost.Window => this;
 
     // -- Settings / localization -------------------------------------------------------------------
 
@@ -1090,13 +1119,61 @@ public partial class MainWindow : Window
         if (!string.Equals(_appliedLocale, Loc.Locale, StringComparison.Ordinal))
             ApplyLocalization();
         else
-            RefreshHomeDashboard();
+            _home.Refresh();
+        SyncThemeCombo();
         ApplyChromeTheme();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
         if (win.Imported)
             ReloadFromConfig();
         if (System.Windows.Application.Current is App app)
             app.RebuildTrayMenu();
+    }
+
+    /// <summary>Single entry point: relabels the shell and every page for the current locale.</summary>
+    public void ApplyLocalization()
+    {
+        _appliedLocale = Loc.Locale;
+        UpdateTitleDirtyState();
+        ApplyShellLocalization();
+        foreach (var page in _pages)
+            page.ApplyLocalization();
+        UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
+    }
+
+    /// <summary>Nav rail, top bar, caption buttons, footer.</summary>
+    private void ApplyShellLocalization()
+    {
+        LblNavMain.Text = Loc.T("nav.section.main");
+        LblBeta.Text = Loc.T("shell.beta");
+        foreach (var s in SectionOrder)
+            NavFor(s).Label = Loc.T(TabFor(s).Content is ShellPageBase p ? p.TitleKey : "nav.home");
+        BtnRailCollapse.ToolTip = Loc.T(_railCompact ? "nav.expand" : "nav.collapse");
+        System.Windows.Automation.AutomationProperties.SetName(BtnRailCollapse, (string)BtnRailCollapse.ToolTip);
+        ItmThemeDark.Content = Loc.T("setup.theme.dark");
+        ItmThemeLight.Content = Loc.T("setup.theme.light");
+        ItmThemeCustom.Content = Loc.T("setup.theme.custom");
+        System.Windows.Automation.AutomationProperties.SetName(CmbRailTheme, Loc.T("shell.themes"));
+        CmbRailTheme.ToolTip = Loc.T("shell.themes");
+        SyncThemeCombo();
+        LblHelpTitle.Text = Loc.T("shell.help.title");
+        LblHelpBody.Text = Loc.T("shell.help.body");
+        BtnHelpLink.Content = Loc.T("shell.help.link");
+        BtnHelpLink.ToolTip = HelpUrl;
+
+        TogTooltipMode.Content = Loc.T("shell.tooltipMode");
+        TogTooltipMode.ToolTip = Loc.T("shell.tooltipMode.tip");
+        BtnTopSettings.ToolTip = Loc.T("shell.preferences");
+        System.Windows.Automation.AutomationProperties.SetName(BtnTopSettings, Loc.T("shell.preferences"));
+        SyncNavFromTabs();
+
+        BtnMinimize.ToolTip = Loc.T("caption.minimize");
+        BtnCloseCaption.ToolTip = Loc.T("caption.close");
+        System.Windows.Automation.AutomationProperties.SetName(BtnMinimize, Loc.T("caption.minimize"));
+        System.Windows.Automation.AutomationProperties.SetName(BtnCloseCaption, Loc.T("caption.close"));
+        UpdateMaximizeCaption();
+        TxtShortcuts.Text = Loc.T("shortcuts.footer");
+        TxtCredit.Text = "Nakidev · @nakidev";
+        TxtCredit.ToolTip = Loc.T("about.contacts");
     }
 
     /// <summary>Reflects _dirty in the window title (" •" suffix).</summary>
@@ -1116,7 +1193,7 @@ public partial class MainWindow : Window
         if (profile == null)
         {
             ActiveHeaderText.Text = Loc.T("active.none");
-            ActiveDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "MutedBrush");
+            ActiveDot.Status = StatusKind.Unknown;
         }
         else
         {
@@ -1124,22 +1201,11 @@ public partial class MainWindow : Window
             if (profile.ApplyResolution && !string.IsNullOrWhiteSpace(profile.Resolution))
                 bits.Add(ColorUiHelper.FormatResolution(profile.Resolution));
             ActiveHeaderText.Text = Loc.T("active.prefix") + " " + string.Join(" · ", bits);
-            ActiveDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "SuccessBrush");
+            ActiveDot.Status = StatusKind.Ok;
         }
-
-        // A game just started → jump the Play tab to it (once per change, user can still pick another).
-        string? activeId = profile?.Id;
-        if (activeId != _lastActiveProfileId)
-        {
-            _lastActiveProfileId = activeId;
-            if (activeId != null)
-            {
-                var match = _profiles.FirstOrDefault(p => p.Id == activeId);
-                if (match != null && !ReferenceEquals(match, _selected))
-                    SelectProfile(match);
-            }
-        }
-        RefreshGamesTab();
+        ActiveDot.Label = ActiveHeaderText.Text;
+        // A game just started → jump the Games editor to it (once per change, user can still pick another).
+        _games.OnActiveProfileChanged(profile);
     }
 
     /// <summary>Ambient status in the title bar (fades after a few seconds). Not used for action feedback.</summary>
@@ -1196,17 +1262,15 @@ public partial class MainWindow : Window
         catch (Exception ex) { AppLog.Warn(ex, "Toast action"); }
     }
 
-    /// <summary>Shows a snackbar with Undo for a destructive action.</summary>
-    private void ShowUndoToast(string message, Action undo) => ShowToast(message, Loc.T("btn.undo"), undo);
+    public void ShowUndoToast(string message, Action undo) => ShowToast(message, Loc.T("btn.undo"), undo);
 
     // -- Public API used by App / overlay / gallery ----------------------------------------------------
 
     /// <summary>Game whose preset hotkeys stay registered when no match is running.</summary>
-    public GameProfile? HotkeyPresetFallback => _presetGame ?? _selected;
+    public GameProfile? HotkeyPresetFallback => _games.HotkeyPresetFallback;
 
     /// <summary>Selected game for the overlay when no game is running (the live config instance, not the editor copy).</summary>
-    public GameProfile? SelectedProfileForOverlay =>
-        _selected == null ? null : App.Services.Config.Current.Profiles.FirstOrDefault(p => p.Id == _selected.Id);
+    public GameProfile? SelectedProfileForOverlay => _games.SelectedProfileForOverlay;
 
     /// <summary>Overlay is about to edit config objects directly — write our pending edits first.</summary>
     public void FlushPendingEdits() => FlushAutosave();
@@ -1218,7 +1282,15 @@ public partial class MainWindow : Window
             ReloadFromConfig();
     }
 
-    private void RefreshHotkeyBindings()
+    /// <summary>A game started: make sure the Games page (and its Presets section) show it.</summary>
+    public void FocusPresetsForActiveOrSelectedGame(GameProfile? prefer = null) =>
+        _games.FocusPresetsForActiveOrSelectedGame(prefer);
+
+    /// <summary>Pack gallery → presets of the selected game.</summary>
+    public void ApplyPackPresets(IEnumerable<QuickPreset> presets, string packName) =>
+        _games.ApplyPackPresets(presets, packName);
+
+    public void RefreshHotkeyBindings()
     {
         App.Services.Hotkeys.RegisterFromConfig(
             App.Services.Config.Current,
@@ -1231,71 +1303,37 @@ public partial class MainWindow : Window
         // Never silently drop pending edits: write them first, then reload what's on disk.
         if (_dirty)
             FlushAutosave();
-        string? keepProfileId = _selected?.Id;
-        string? keepPresetGameId = _presetGame?.Id;
-        string? keepPresetId = _selectedPreset?.Id;
+        var (keepProfileId, keepPresetId) = _games.CaptureSelection();
         var cfg = App.Services.Config.Current;
 
         using (SuppressEditor())
         {
             // Drop editor pointers before clearing collections — avoids syncing into orphaned profiles.
-            _selectedPreset = null;
-            _presetGame = null;
-            _selected = null;
-            _playProfile = null;
-            _playPreset = null;
-
+            _games.DetachEditors();
             _profiles.Clear();
             foreach (var p in cfg.Profiles)
                 _profiles.Add(p.Clone());
             GameVisuals.ApplyAll(_profiles);
-            _presets.Clear();
 
-            CmbDefaultRes.Items.Clear();
-            CmbPresetRes.Items.Clear();
-            foreach (var r in DisplayEngine.GetAvailableResolutions())
-            {
-                CmbDefaultRes.Items.Add(r);
-                CmbPresetRes.Items.Add(r);
-            }
-            var defRes = cfg.Defaults.Resolution ?? DisplayEngine.GetCurrentResolution();
-            if (!string.IsNullOrWhiteSpace(defRes) && !CmbDefaultRes.Items.Contains(defRes))
-                CmbDefaultRes.Items.Add(defRes);
-            CmbDefaultRes.SelectedItem = defRes;
-            SelectPowerPlan(CmbDefaultPower, cfg.Defaults.PowerPlan, "");
+            var resolutions = DisplayEngine.GetAvailableResolutions().ToList();
+            _games.ReloadResolutionLists(resolutions);
+            _settings.LoadFromConfig(cfg, resolutions);
 
             cfg.Defaults.Color = ColorSettings.Neutral;
-            UpdateDriverUiAvailability();
-
-            cfg.GlobalHotkeys ??= new GlobalHotkeys();
-            HkToggleOverlay.Text = cfg.GlobalHotkeys.ToggleOverlay ?? "";
-            HkEmergency.Text = cfg.GlobalHotkeys.EmergencyRestore ?? "";
-            HkNextPreset.Text = cfg.GlobalHotkeys.NextPreset ?? "";
-            HkPrevPreset.Text = cfg.GlobalHotkeys.PreviousPreset ?? "";
-            HkCompareAb.Text = cfg.GlobalHotkeys.CompareAb ?? "";
-            HkToggleZoom.Text = cfg.GlobalHotkeys.ToggleZoom ?? "";
-            SelectComboByTag(CmbZoomFactor, (cfg.Ui?.ZoomFactor ?? 4).ToString());
-
-            FillAudioDevices();
+            _games.UpdateDriverUiAvailability();
+            _games.FillAudioDevices();
         }
 
-        var keep = _profiles.FirstOrDefault(p => p.Id == keepProfileId) ?? _profiles.FirstOrDefault();
-        SelectProfile(keep);
-
-        var keepGame = _profiles.FirstOrDefault(p => p.Id == keepPresetGameId) ?? keep;
-        SelectPresetGame(keepGame, keepPresetId);
+        _games.RestoreSelection(keepProfileId, keepPresetId);
 
         _dirty = false;
         UpdateTitleDirtyState();
-        UpdateLibraryEmpty();
-        RefreshGamesTab();
-        if (RbMoreLog.IsChecked == true)
-            RefreshLog();
+        _settings.RefreshLogIfVisible();
     }
 
     // -- Autosave ---------------------------------------------------------------------------------------
 
-    private void MarkDirty()
+    public void MarkDirty()
     {
         _dirty = true;
         UpdateTitleDirtyState();
@@ -1303,13 +1341,11 @@ public partial class MainWindow : Window
         _autoSaveTimer.Start();
     }
 
-    private void FlushAutosave()
+    public void FlushAutosave()
     {
         _autoSaveTimer.Stop();
         if (!_dirty) return;
-        if (_selected != null) PushEditorToSelected();
-        PushPresetEditorIfDirty();
-        SyncPresetsBackToGame();
+        _games.PushPendingEdits();
         PersistConfigToDisk();
     }
 
@@ -1320,26 +1356,14 @@ public partial class MainWindow : Window
         foreach (var p in cfg.Profiles)
             p.ApplyColor = false;
         cfg.Presets = null;
-        cfg.Defaults.Resolution = CmbDefaultRes.SelectedItem?.ToString() ?? cfg.Defaults.Resolution;
-        var defPower = (CmbDefaultPower.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-        cfg.Defaults.PowerPlan = string.IsNullOrWhiteSpace(defPower) ? null : defPower;
+        _settings.WriteTo(cfg);
         cfg.Defaults.Color = ColorSettings.Neutral;
 
         if (cfg.FactoryDefaults == null || string.IsNullOrWhiteSpace(cfg.FactoryDefaults.Resolution))
             cfg.FactoryDefaults = ConfigService.CaptureFactoryDefaults();
         cfg.FactoryDefaults.Color = ColorSettings.Neutral;
 
-        cfg.GlobalHotkeys ??= new GlobalHotkeys();
-        cfg.GlobalHotkeys.ToggleOverlay = NormHotkey(HkToggleOverlay.Text);
-        cfg.GlobalHotkeys.EmergencyRestore = NormHotkey(HkEmergency.Text);
-        cfg.GlobalHotkeys.NextPreset = NormHotkey(HkNextPreset.Text);
-        cfg.GlobalHotkeys.PreviousPreset = NormHotkey(HkPrevPreset.Text);
-        cfg.GlobalHotkeys.CompareAb = NormHotkey(HkCompareAb.Text);
-        cfg.GlobalHotkeys.ToggleZoom = NormHotkey(HkToggleZoom.Text);
-        cfg.Ui ??= new UiPreferences();
-        cfg.Ui.ZoomFactor = ReadZoomFactor();
         App.Services.Zoom.ApplyFromConfig(cfg.Ui);
-
         cfg.ConfigVersion = ConfigService.CurrentVersion;
 
         App.Services.Config.Save(cfg, raiseChanged: false);
@@ -1348,58 +1372,5 @@ public partial class MainWindow : Window
         _dirty = false;
         UpdateTitleDirtyState();
         SetStatus(Loc.T("status.saved"));
-    }
-
-    // -- Helpers ----------------------------------------------------------------------------------------------
-
-    private static void SelectComboByTag(System.Windows.Controls.ComboBox cmb, string tag)
-    {
-        foreach (var item in cmb.Items)
-        {
-            if (item is ComboBoxItem ci && string.Equals(ci.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
-            {
-                cmb.SelectedItem = item;
-                return;
-            }
-        }
-        if (cmb.Items.Count > 0) cmb.SelectedIndex = 0;
-    }
-
-    /// <summary>
-    /// Selects a power plan by tag. null/empty → <paramref name="fallbackTag"/>. Unknown values (custom plan GUIDs
-    /// captured from Windows) get a "Current plan (custom)" item so they survive a save instead of being replaced.
-    /// </summary>
-    private static void SelectPowerPlan(System.Windows.Controls.ComboBox cmb, string? plan, string fallbackTag)
-    {
-        foreach (var stale in cmb.Items.OfType<ComboBoxItem>().Where(i => i.Uid == "customPlan").ToList())
-            cmb.Items.Remove(stale);
-
-        if (string.IsNullOrWhiteSpace(plan))
-        {
-            SelectComboByTag(cmb, fallbackTag);
-            return;
-        }
-        bool known = cmb.Items.OfType<ComboBoxItem>()
-            .Any(i => string.Equals(i.Tag?.ToString(), plan, StringComparison.OrdinalIgnoreCase));
-        if (!known)
-            cmb.Items.Add(new ComboBoxItem { Content = Loc.T("power.custom"), Tag = plan, Uid = "customPlan", ToolTip = plan });
-        SelectComboByTag(cmb, plan);
-    }
-
-    private static string PowerPlanLabel(string? plan) => plan?.ToLowerInvariant() switch
-    {
-        null or "" => Loc.T("power.keep"),
-        "highperformance" => Loc.T("power.high"),
-        "balanced" => Loc.T("power.balanced"),
-        _ => Loc.T("power.custom")
-    };
-
-    private int ReadZoomFactor()
-    {
-        if (CmbZoomFactor.SelectedItem is ComboBoxItem item
-            && int.TryParse(item.Tag?.ToString(), out int f)
-            && f >= 2 && f <= 12)
-            return f;
-        return App.Services.Config.Current.Ui?.ZoomFactor ?? 4;
     }
 }

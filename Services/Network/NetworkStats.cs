@@ -58,6 +58,27 @@ public static class NetworkStats
         return sum / (successiveRtts.Count - 1);
     }
 
+    /// <summary>
+    /// Nearest-rank percentile (p in 0..100) over an ascending list; null when empty.
+    /// p95 of 20 samples = the 19th value — no interpolation, so a single outlier maps to p100 only.
+    /// </summary>
+    public static double? PercentileSorted(IReadOnlyList<double> sorted, double p)
+    {
+        if (sorted == null || sorted.Count == 0) return null;
+        p = Math.Clamp(p, 0, 100);
+        int rank = (int)Math.Ceiling(p / 100.0 * sorted.Count);
+        int idx = Math.Clamp(rank - 1, 0, sorted.Count - 1);
+        return sorted[idx];
+    }
+
+    /// <summary>Convenience: sorts a copy and applies <see cref="PercentileSorted"/>.</summary>
+    public static double? Percentile(IEnumerable<double> values, double p)
+    {
+        var list = values?.ToList() ?? new List<double>();
+        list.Sort();
+        return PercentileSorted(list, p);
+    }
+
     private static double MedianSorted(IReadOnlyList<double> sorted)
     {
         int n = sorted.Count;

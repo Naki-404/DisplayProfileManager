@@ -45,6 +45,20 @@ public class ShellFitTests
         Assert.Equal(420, ShellFit.MinHeightFor(430));
     }
 
+    [Theory]
+    [InlineData(1093, 566)]  // 1366×768 @125%
+    [InlineData(1280, 672)]  // 1080p @150%
+    public void Nav_rail_leaves_room_for_the_home_dashboard(double w, double h)
+    {
+        // Shell chrome: rail + 16 DIP gutters either side of the main column.
+        var (dw, _) = ShellFit.DefaultSize(w, h);
+        double content = dw - ShellFit.NavRailWidth - 32;
+        // Welcome card (300) + gap + two stat cards of ≥ 220 each.
+        Assert.True(content >= 300 + 12 + 2 * 220, $"content width {content} at {w}×{h}");
+        Assert.True(ShellFit.NavRailCompactWidth < ShellFit.NavRailWidth);
+        Assert.True(ShellFit.NavRailCompactWidth >= 48); // icon + padding still hit-testable
+    }
+
     [Fact]
     public void DefaultSize_never_exceeds_preferred_caps()
     {

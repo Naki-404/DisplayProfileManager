@@ -1,0 +1,274 @@
+<local:ShellPageBase x:Class="Visor.HomePage"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Visor"
+        xmlns:controls="clr-namespace:Visor.Controls">
+    <local:ShellPageBase.Resources>
+        <Style x:Key="HomeCard" TargetType="Border" BasedOn="{StaticResource CardSurface}">
+            <Setter Property="Padding" Value="14"/>
+        </Style>
+        <Style x:Key="HealthLabel" TargetType="TextBlock" BasedOn="{StaticResource CardCaption}">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextWrapping" Value="NoWrap"/>
+            <Setter Property="Margin" Value="8,0,10,0"/>
+        </Style>
+        <Style x:Key="HealthValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+        </Style>
+    </local:ShellPageBase.Resources>
+    <!-- Dashboard. Fits 1366×768 @125 % / 1080p @150 % without scrolling; the ScrollViewer is a safety net.
+         Below ~720 DIP the stat grid drops under the welcome card (HomeRoot_SizeChanged). -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  CanContentScroll="False" PanningMode="VerticalOnly">
+        <Grid x:Name="HomeRoot" Margin="0,4,0,8" SizeChanged="HomeRoot_SizeChanged">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid x:Name="TopRegion" Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="ColWelcome" Width="300"/>
+                    <ColumnDefinition x:Name="ColGap" Width="12"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Welcome / health -->
+                <Border x:Name="WelcomeCard" Grid.Column="0" Style="{StaticResource HomeCard}" Margin="0,0,0,12">
+                    <DockPanel>
+                        <Button x:Name="BtnHomeMyPc" DockPanel.Dock="Bottom" Style="{StaticResource CardLink}"
+                                HorizontalAlignment="Left" Margin="0,10,0,0" Click="OpenMyPc_Click"/>
+                        <StackPanel>
+                            <TextBlock x:Name="LblWelcome" Style="{StaticResource CardCaption}"/>
+                            <TextBlock x:Name="TxtUserName" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,10"
+                                       Foreground="{DynamicResource TextBrush}" TextTrimming="CharacterEllipsis"
+                                       AutomationProperties.HeadingLevel="Level2"/>
+                            <Grid x:Name="HealthGrid">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition Height="24"/>
+                                    <RowDefinition x:Name="RowCrash" Height="0"/>
+                                </Grid.RowDefinitions>
+                                <controls:StatusDot x:Name="DotDisplay" Grid.Row="0"/>
+                                <TextBlock x:Name="LblHealthDisplay" Grid.Row="0" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthDisplay" Grid.Row="0" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotMonitoring" Grid.Row="1"/>
+                                <TextBlock x:Name="LblHealthMonitoring" Grid.Row="1" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthMonitoring" Grid.Row="1" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotProfiles" Grid.Row="2"/>
+                                <TextBlock x:Name="LblHealthProfiles" Grid.Row="2" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthProfiles" Grid.Row="2" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotActivity" Grid.Row="3"/>
+                                <TextBlock x:Name="LblHealthActivity" Grid.Row="3" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthActivity" Grid.Row="3" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotConflicts" Grid.Row="4"/>
+                                <TextBlock x:Name="LblHealthConflicts" Grid.Row="4" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthConflicts" Grid.Row="4" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <!-- Hardware rows: HealthReport / SensorSnapshot / CrashSummary (never estimated) -->
+                                <controls:StatusDot x:Name="DotTemps" Grid.Row="5"/>
+                                <TextBlock x:Name="LblHealthTemps" Grid.Row="5" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthTemps" Grid.Row="5" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotScan" Grid.Row="6"/>
+                                <TextBlock x:Name="LblHealthScan" Grid.Row="6" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthScan" Grid.Row="6" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotStability" Grid.Row="7"/>
+                                <TextBlock x:Name="LblHealthStability" Grid.Row="7" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthStability" Grid.Row="7" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotDrivers" Grid.Row="8"/>
+                                <TextBlock x:Name="LblHealthDrivers" Grid.Row="8" Grid.Column="1" Style="{StaticResource HealthLabel}"/>
+                                <TextBlock x:Name="TxtHealthDrivers" Grid.Row="8" Grid.Column="2" Style="{StaticResource HealthValue}"/>
+                                <controls:StatusDot x:Name="DotCrash" Grid.Row="9" Status="Warn"/>
+                                <TextBlock x:Name="TxtHealthCrash" Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Style="{StaticResource HealthLabel}" Foreground="{DynamicResource TextBrush}"/>
+                            </Grid>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
+                <!-- 2×2 stat cards -->
+                <UniformGrid x:Name="StatGrid" Grid.Column="2" Columns="2">
+                    <Border Style="{StaticResource HomeCard}" Margin="0,0,6,12">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top">
+                                <controls:StatusDot x:Name="DotSession" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblHomeSession" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <UniformGrid DockPanel.Dock="Bottom" Columns="2" Margin="0,8,0,0">
+                                <Button x:Name="BtnHomePause" Style="{StaticResource CompactGhostButton}" Margin="0,0,4,0" Click="Pause_Click"/>
+                                <Button x:Name="BtnHomeEmergency" Style="{StaticResource DangerGhostButton}" Margin="4,0,0,0" Click="Emergency_Click"/>
+                            </UniformGrid>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtHomeSessionStatus" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,0"/>
+                                <TextBlock x:Name="TxtHomeSessionDetail" Style="{StaticResource CardCaption}" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource HomeCard}" Margin="6,0,0,12">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top">
+                                <Button x:Name="BtnHomeNetwork" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="OpenNetwork_Click"/>
+                                <controls:StatusDot x:Name="DotNetwork" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblHomeNetwork" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtHomeNetAdapter" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                <TextBlock x:Name="TxtHomeNetDetail" Style="{StaticResource CardCaption}" Margin="0,2,0,0"/>
+                                <TextBlock x:Name="TxtHomeNetRate" Style="{StaticResource CardCaption}" Foreground="{DynamicResource TextBrush}" Margin="0,2,0,0" Visibility="Collapsed"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource HomeCard}" Margin="0,0,6,0">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top">
+                                <Button x:Name="BtnHomeGamesStat" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="OpenGames_Click"/>
+                                <TextBlock x:Name="LblHomeGames" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtHomeGamesCount" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,0"/>
+                                <TextBlock x:Name="TxtHomeGamesDetail" Style="{StaticResource CardCaption}" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource HomeCard}" Margin="6,0,0,0">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top">
+                                <Button x:Name="BtnHomeSuggestions" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="OpenOptimize_Click"/>
+                                <controls:StatusDot x:Name="DotSuggestions" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblHomeSuggestions" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtHomeSuggestionsCount" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,0"/>
+                                <TextBlock x:Name="TxtHomeSuggestionsTop" Style="{StaticResource CardCaption}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                </UniformGrid>
+            </Grid>
+
+            <!-- Bottom row: Optimize · Games · Settings -->
+            <UniformGrid x:Name="BottomRow" Grid.Row="1" Columns="3">
+                <Border Style="{StaticResource HomeCard}" Margin="0,0,6,0">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <Button x:Name="BtnHomeOptimize" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="OpenOptimize_Click"/>
+                            <TextBlock x:Name="LblHomeOptimize" Style="{StaticResource CardTitle}"/>
+                        </DockPanel>
+                        <StackPanel>
+                            <DockPanel Margin="0,4,0,0">
+                                <controls:StatusDot x:Name="DotGameMode" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="TxtHomeGameMode" Style="{StaticResource CardCaption}" Foreground="{DynamicResource TextBrush}" FontSize="12" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            </DockPanel>
+                            <DockPanel Margin="0,6,0,0">
+                                <controls:StatusDot x:Name="DotPower" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="TxtHomePower" Style="{StaticResource CardCaption}" Foreground="{DynamicResource TextBrush}" FontSize="12" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+                <Border Style="{StaticResource HomeCard}" Margin="6,0,6,0">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <Button x:Name="BtnHomeOpenGames" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="OpenGames_Click"/>
+                            <TextBlock x:Name="LblHomeQuick" Style="{StaticResource CardTitle}"/>
+                        </DockPanel>
+                        <UniformGrid DockPanel.Dock="Top" Columns="2" Margin="0,2,0,6">
+                            <Button x:Name="BtnHomeScan" Style="{StaticResource CompactAccentButton}" Margin="0,0,4,0" Click="Scan_Click"/>
+                            <Button x:Name="BtnHomeAdd" Style="{StaticResource CompactGhostButton}" Margin="4,0,0,0" Click="Add_Click"/>
+                        </UniformGrid>
+                        <StackPanel>
+                            <WrapPanel x:Name="HomeQuickList"/>
+                            <TextBlock x:Name="TxtHomeQuickEmpty" Style="{StaticResource CardCaption}" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+                <Border Style="{StaticResource HomeCard}" Margin="6,0,0,0">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                            <Button x:Name="BtnHomeSettings" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="OpenSettings_Click"/>
+                            <TextBlock x:Name="LblHomeSettings" Style="{StaticResource CardTitle}"/>
+                        </DockPanel>
+                        <StackPanel>
+                            <ToggleButton x:Name="TogAutostart" Style="{StaticResource SwitchToggle}" Margin="0,2,0,0" Checked="SettingToggle_Changed" Unchecked="SettingToggle_Changed"/>
+                            <ToggleButton x:Name="TogTray" Style="{StaticResource SwitchToggle}" Margin="0,4,0,0" Checked="SettingToggle_Changed" Unchecked="SettingToggle_Changed"/>
+                            <ToggleButton x:Name="TogSounds" Style="{StaticResource SwitchToggle}" Margin="0,4,0,0" Checked="SettingToggle_Changed" Unchecked="SettingToggle_Changed"/>
+                            <ToggleButton x:Name="TogTooltips" Style="{StaticResource SwitchToggle}" Margin="0,4,0,0" Checked="SettingToggle_Changed" Unchecked="SettingToggle_Changed"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+            </UniformGrid>
+
+            <!-- Live hardware strip (SensorService, 1 Hz, only while Home is live). "—" + reason tooltip when a
+                 value cannot be read; no placeholder numbers. -->
+            <StackPanel x:Name="HardwareCardsHost" Grid.Row="2" Margin="0,12,0,0">
+                <UniformGrid x:Name="HwStrip" Columns="4">
+                    <Border Style="{StaticResource HomeCard}" Margin="0,0,6,0">
+                        <StackPanel>
+                            <DockPanel>
+                                <controls:StatusDot x:Name="DotHwCpu" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblHwCpu" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <TextBlock x:Name="TxtHwCpuValue" Style="{StaticResource CardValue}" FontSize="18" Margin="0,4,0,0"/>
+                            <TextBlock x:Name="TxtHwCpuCaption" Style="{StaticResource CardCaption}" Margin="0,2,0,6" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            <controls:ThinBar x:Name="BarHwCpu"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource HomeCard}" Margin="6,0,6,0">
+                        <StackPanel>
+                            <DockPanel>
+                                <controls:StatusDot x:Name="DotHwGpu" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblHwGpu" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <TextBlock x:Name="TxtHwGpuValue" Style="{StaticResource CardValue}" FontSize="18" Margin="0,4,0,0"/>
+                            <TextBlock x:Name="TxtHwGpuCaption" Style="{StaticResource CardCaption}" Margin="0,2,0,6" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            <controls:ThinBar x:Name="BarHwGpu"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource HomeCard}" Margin="6,0,6,0">
+                        <StackPanel>
+                            <DockPanel>
+                                <controls:StatusDot x:Name="DotHwRam" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblHwRam" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <TextBlock x:Name="TxtHwRamValue" Style="{StaticResource CardValue}" FontSize="18" Margin="0,4,0,0"/>
+                            <TextBlock x:Name="TxtHwRamCaption" Style="{StaticResource CardCaption}" Margin="0,2,0,6" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            <controls:ThinBar x:Name="BarHwRam"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource HomeCard}" Margin="6,0,0,0">
+                        <StackPanel>
+                            <DockPanel>
+                                <controls:StatusDot x:Name="DotHwStorage" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblHwStorage" Style="{StaticResource CardTitle}"/>
+                            </DockPanel>
+                            <TextBlock x:Name="TxtHwStorageValue" Style="{StaticResource CardValue}" FontSize="18" Margin="0,4,0,0"/>
+                            <TextBlock x:Name="TxtHwStorageCaption" Style="{StaticResource CardCaption}" Margin="0,2,0,6" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            <controls:ThinBar x:Name="BarHwStorage"/>
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</local:ShellPageBase>

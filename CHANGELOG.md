@@ -2,6 +2,14 @@
 
 ## Unreleased (2.1.0-dev)
 
+### Gaming Optimization Center (stages 1–5)
+- New shell: nav rail Home · My PC · Games · Optimize · Network · Monitor · Settings (Ctrl+1..7), collapsible rail, Tooltip mode, Themes picker; pages are separate `UserControl`s (`Views\Pages`), `MainWindow.xaml` down to ~230 lines.
+- My PC: hardware inventory (CPU, RAM modules, GPU driver, disks with SMART via `MSFT_PhysicalDisk`, board/BIOS, monitors) and 1 Hz sensors — CPU %, RAM, GPU temperature/utilization/clocks/throttle flags (NvAPI), disk and network throughput; health summary with honest thresholds; crash/WHEA/TDR events from the System log. CPU temperature is shown as unavailable (needs a kernel driver — none shipped).
+- Optimize: reversible, journaled actions only — Game Mode, Xbox Game Bar background, mouse acceleration, fullscreen optimizations per game; "needs admin"/"managed by profile"/"manual" items are info-only; suggestions derived from measured facts (GPU throttling, low disk, old driver, crash events, RAM pressure) with why/risk/undo text and evidence.
+- Network: live throughput, Wi-Fi (WlanAPI, SSID never logged), continuous ping series with p50/p95/jitter/loss, traceroute with per-hop stats, Diagnose (findings as hypotheses with evidence and manual suggestions), report export (identifiers off by default).
+- Monitor: FPS / frame time / 1 % and 0.1 % lows / p99 / stutters / GPU-vs-CPU-bound estimate via Intel PresentMon run elevated on explicit request (UAC per capture); PresentMon is not bundled — the page explains where to get it; signature/pinned-hash verified before launch; optional FPS OSD on the game's monitor.
+- Tests: 1036 (849 app + 187 installer).
+
 Stage 0 of the 2.1 plan (`docs/ANALYSIS-2026-10-13-v2.md` §4): stabilise before the shell redesign. No new user-facing features; the Home / Games / Presets / System / Network / Tools layout is unchanged until Stage 1.
 
 ### Fixes (analysis §2.1–2.2)

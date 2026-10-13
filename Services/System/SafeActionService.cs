@@ -9,22 +9,31 @@ public sealed class SafeActionService
 {
     private readonly Dictionary<string, ISafeActionTarget> _targets = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<bool> _isGameSessionActive;
+    private readonly Func<string, ISafeActionTarget?>? _resolver;
     private readonly object _gate = new();
 
     public SafeActionJournal Journal { get; }
 
     /// <param name="isGameSessionActive">Seam for the session owner (MainWindow passes <c>() => Monitor.SnapshotActive</c>).</param>
+    /// <param name="resolver">
+    /// Creates per-game targets on demand from an action id (e.g. <c>fso.disable|C:\game.exe</c>) so a journaled
+    /// per-game entry can still be undone after a restart. Resolved targets are cached.
+    /// </param>
     public SafeActionService(SafeActionJournal journal, IEnumerable<ISafeActionTarget> targets,
-        Func<bool>? isGameSessionActive = null)
+        Func<bool>? isGameSessionActive = null, Func<string, ISafeActionTarget?>? resolver = null)
     {
         Journal = journal ?? throw new ArgumentNullException(nameof(journal));
         ArgumentNullException.ThrowIfNull(targets);
         foreach (var t in targets)
             _targets[t.ActionId] = t;
         _isGameSessionActive = isGameSessionActive ?? (() => false);
+        _resolver = resolver;
     }
 
-    /// <summary>Real targets: Game Mode (HKCU) and the High performance power plan.</summary>
+    /// <summary>
+    /// Real targets: Game Mode (HKCU), the High performance power plan, Xbox Game Bar background off,
+    /// mouse acceleration off, plus per-game "disable fullscreen optimizations" resolved from the action id.
+    /// </summary>
     public static SafeActionService CreateDefault(string? configDirectory, Func<string, bool> setPlan,
         Func<bool>? isGameSessionActive)
     {
@@ -35,15 +44,56 @@ public sealed class SafeActionService
             {
                 new GameModeSafeActionTarget(enable: true),
                 new GameModeSafeActionTarget(enable: false),
-                new PowerPlanSafeActionTarget(setPlan)
+                new PowerPlanSafeActionTarget(setPlan),
+                new Optimize.GameBarSafeActionTarget(),
+                new Optimize.MouseAccelerationSafeActionTarget()
             },
-            isGameSessionActive);
+            isGameSessionActive,
+            id => ResolvePerGame(id, registry: null));
     }
 
-    public IReadOnlyCollection<string> ActionIds => _targets.Keys.ToList();
+    /// <summary>Default per-game resolver: understands <see cref="Optimize.FullscreenOptimizationSafeActionTarget"/> ids.</summary>
+    public static ISafeActionTarget? ResolvePerGame(string actionId, Optimize.IOptimizeRegistry? registry)
+    {
+        var exe = Optimize.FullscreenOptimizationSafeActionTarget.ExePathFromActionId(actionId);
+        return exe == null ? null : new Optimize.FullscreenOptimizationSafeActionTarget(exe, registry);
+    }
 
-    public ISafeActionTarget? FindTarget(string actionId) =>
-        actionId != null && _targets.TryGetValue(actionId, out var t) ? t : null;
+    /// <summary>Registered (static + already resolved) action ids.</summary>
+    public IReadOnlyCollection<string> ActionIds
+    {
+        get { lock (_gate) return _targets.Keys.ToList(); }
+    }
+
+    /// <summary>Adds or replaces a target (used for per-game targets built from a profile).</summary>
+    public void Register(ISafeActionTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        lock (_gate) _targets[target.ActionId] = target;
+    }
+
+    public ISafeActionTarget? FindTarget(string actionId)
+    {
+        if (string.IsNullOrEmpty(actionId)) return null;
+        lock (_gate)
+        {
+            if (_targets.TryGetValue(actionId, out var t)) return t;
+            if (_resolver == null) return null;
+            ISafeActionTarget? resolved;
+            try { resolved = _resolver(actionId); }
+            catch (Exception ex)
+            {
+                AppLog.Warn(ex, "SafeAction resolve " + actionId);
+                return null;
+            }
+            if (resolved != null) _targets[resolved.ActionId] = resolved;
+            return resolved;
+        }
+    }
+
+    /// <summary>Journal entries whose target is per-game (for an "undo per game" list in the UI).</summary>
+    public IReadOnlyList<SafeActionJournalEntry> PerGameEntries() =>
+        Journal.Entries.Where(e => FindTarget(e.ActionId)?.Scope.IsPerGame == true).ToList();
 
     /// <summary>Current raw state of the target behind <paramref name="actionId"/> (null when unreadable / unknown).</summary>
     public string? ReadState(string actionId) => FindTarget(actionId)?.ReadState();

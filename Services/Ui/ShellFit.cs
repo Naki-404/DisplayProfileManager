@@ -13,6 +13,9 @@ public static class ShellFit
     public const double AbsoluteMinHeight = 420;
     public const double PreferredWidth = 1180;
     public const double PreferredHeight = 720;
+    /// <summary>Nav rail width (DIP) expanded / icons-only.</summary>
+    public const double NavRailWidth = 200;
+    public const double NavRailCompactWidth = 56;
 
     public static double MinWidthFor(double workAreaWidthDip) =>
         workAreaWidthDip - 16 >= PreferredMinWidth

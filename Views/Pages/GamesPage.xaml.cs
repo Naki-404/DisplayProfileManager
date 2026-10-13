@@ -1,28 +1,389 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
-using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
-using System.Windows.Interop;
 using System.Windows.Threading;
 using Visor.Models;
 using Visor.Services;
 
 namespace Visor;
 
-/// <summary>Games page: profile list, editor, companions, scan / import / export, live color (former Play tab).</summary>
-public partial class MainWindow : Window
+/// <summary>
+/// Games section: profile list, editor (Display · Color · Session · Companions · Presets), scan / import /
+/// export. The former top-level Presets page is the Presets section of this page (see GamesPage.Presets.cs).
+/// </summary>
+public partial class GamesPage : ShellPageBase
 {
-    private void GamesListMore_Click(object sender, RoutedEventArgs e) =>
-        OpenButtonContextMenu(sender);
+    private readonly ObservableCollection<QuickPreset> _presets = new();
+    /// <summary>Live, filterable view used by the list only.</summary>
+    private readonly ListCollectionView _libraryView;
+    private readonly DispatcherTimer _tileRefreshTimer;
+    private readonly DispatcherTimer _presetListRefreshTimer;
 
-    private void GamesEditorMore_Click(object sender, RoutedEventArgs e) =>
-        OpenButtonContextMenu(sender);
+    private GameProfile? _selected;
+    private string? _lastActiveProfileId;
+    private bool _gamesHeaderNarrow;
+    /// <summary>True while a scan runs — guards the palette / buttons against a second concurrent scan.</summary>
+    private bool _scanRunning;
+
+    private ObservableCollection<GameProfile> _profiles => Host.Profiles;
+    private bool SuppressingEditor => Host.SuppressingEditor;
+    private IDisposable SuppressEditor() => Host.SuppressEditor();
+    private void MarkDirty() => Host.MarkDirty();
+    private void FlushAutosave() => Host.FlushAutosave();
+    private void ShowToast(string message) => Host.ShowToast(message);
+
+    public GamesPage(IShellHost host) : base(host)
+    {
+        InitializeComponent();
+        _libraryView = new ListCollectionView(_profiles) { Filter = LibraryFilter };
+        ProfileList.ItemsSource = _libraryView;
+        PresetList.ItemsSource = _presets;
+
+        _tileRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _tileRefreshTimer.Tick += (_, _) =>
+        {
+            _tileRefreshTimer.Stop();
+            RefreshGameTiles();
+        };
+        _presetListRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _presetListRefreshTimer.Tick += (_, _) =>
+        {
+            _presetListRefreshTimer.Stop();
+            RefreshPresetListSafe();
+        };
+
+        LoadResolutions();
+        FillDisplays();
+        FillAudioDevices();
+        // Nested MaxHeight list inside the page ScrollViewer — don't let it trap the wheel.
+        NestedScroll.ForwardWheelAtEdge(CompanionList);
+    }
+
+    public override ShellSection Section => ShellSection.Games;
+    public override string TitleKey => "nav.games";
+
+    /// <summary>True while a scan runs (command palette enablement).</summary>
+    public bool ScanRunning => _scanRunning;
+
+    /// <summary>Selected game (editor copy), if any.</summary>
+    public GameProfile? SelectedProfile => _selected;
+
+    /// <summary>Game whose preset hotkeys stay registered when no match is running.</summary>
+    public GameProfile? HotkeyPresetFallback => _presetGame ?? _selected;
+
+    /// <summary>Selected game for the overlay when no game is running (the live config instance, not the editor copy).</summary>
+    public GameProfile? SelectedProfileForOverlay =>
+        _selected == null ? null : App.Services.Config.Current.Profiles.FirstOrDefault(p => p.Id == _selected.Id);
+
+    public void StopTimers()
+    {
+        _tileRefreshTimer.Stop();
+        _presetListRefreshTimer.Stop();
+    }
+
+    // -- Shell lifecycle ----------------------------------------------------------------------------------
+
+    public override void OnActivated()
+    {
+        if (RbGamesColor?.IsChecked == true)
+            RefreshGamesTab();
+        if (RbGamesPresets?.IsChecked == true)
+            LoadPresetEditor(_selectedPreset); // Color-section sliders may have edited the same preset object
+    }
+
+    public override void OnDeactivated() => StopDesktopPreview();
+
+    /// <summary>Shell: the running game changed — jump the editor to it once per change (user can still pick another).</summary>
+    public void OnActiveProfileChanged(GameProfile? profile)
+    {
+        string? activeId = profile?.Id;
+        if (activeId != _lastActiveProfileId)
+        {
+            _lastActiveProfileId = activeId;
+            if (activeId != null)
+            {
+                var match = _profiles.FirstOrDefault(p => p.Id == activeId);
+                if (match != null && !ReferenceEquals(match, _selected))
+                    SelectProfile(match);
+            }
+        }
+        RefreshGamesTab();
+    }
+
+    /// <summary>Ctrl+F.</summary>
+    public void FocusSearch()
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            TxtSearch.Focus();
+            TxtSearch.SelectAll();
+        }, DispatcherPriority.Input);
+    }
+
+    /// <summary>Esc inside the search box clears it. Returns true when handled.</summary>
+    public bool TryClearSearchOnEscape()
+    {
+        if (!ReferenceEquals(Keyboard.FocusedElement, TxtSearch) || TxtSearch.Text.Length == 0) return false;
+        TxtSearch.Text = "";
+        return true;
+    }
+
+    /// <summary>Del removes the selected item of the focused list (with confirmation). Returns true when handled.</summary>
+    public bool HandleDeleteKey()
+    {
+        if (ProfileList.IsKeyboardFocusWithin && _selected != null)
+        {
+            DeleteProfile_Click(this, new RoutedEventArgs());
+            return true;
+        }
+        if (PresetList.IsKeyboardFocusWithin && _selectedPreset != null)
+        {
+            DeletePreset_Click(this, new RoutedEventArgs());
+            return true;
+        }
+        if (CompanionList.IsKeyboardFocusWithin && CompanionList.SelectedItem != null)
+        {
+            RemoveCompanion_Click(this, new RoutedEventArgs());
+            return true;
+        }
+        return false;
+    }
+
+    public bool IsHotkeyBox(System.Windows.Controls.TextBox tb) => ReferenceEquals(tb, TxtPresetHotkey);
+
+    /// <summary>Shell "Reset display" ran: the desktop preview no longer owns the ramp.</summary>
+    public void OnEmergencyRestored()
+    {
+        _previewOnDesktop = false;
+        RefreshGamesTab();
+    }
+
+    // -- Reload / persist seams (called by the shell) --------------------------------------------------
+
+    /// <summary>Editor pointers to restore after the profile collection is rebuilt.</summary>
+    public (string? ProfileId, string? PresetId) CaptureSelection() => (_selected?.Id, _selectedPreset?.Id);
+
+    /// <summary>Drop editor pointers before the shell clears the collections — avoids syncing into orphaned profiles.</summary>
+    public void DetachEditors()
+    {
+        _selectedPreset = null;
+        _presetGame = null;
+        _selected = null;
+        _playProfile = null;
+        _playPreset = null;
+        _presets.Clear();
+    }
+
+    public void ReloadResolutionLists(IReadOnlyList<string> resolutions)
+    {
+        CmbPresetRes.Items.Clear();
+        foreach (var r in resolutions)
+            CmbPresetRes.Items.Add(r);
+    }
+
+    /// <summary>After the shell refilled <see cref="IShellHost.Profiles"/>: re-select and reload the editors.</summary>
+    public void RestoreSelection(string? keepProfileId, string? keepPresetId)
+    {
+        var keep = _profiles.FirstOrDefault(p => p.Id == keepProfileId) ?? _profiles.FirstOrDefault();
+        SelectProfile(keep, keepPresetId);
+        UpdateLibraryEmpty();
+        RefreshGamesTab();
+    }
+
+    /// <summary>Autosave: write every pending editor value into the profile objects.</summary>
+    public void PushPendingEdits()
+    {
+        if (_selected != null) PushEditorToSelected();
+        PushPresetEditorIfDirty();
+        SyncPresetsBackToGame();
+    }
+
+    /// <summary>Game started-up scan, once (window Loaded).</summary>
+    public void MaybeFirstScan()
+    {
+        // Key off FirstScanDone only — the default config already contains a few core profiles.
+        var cfg = App.Services.Config.Current;
+        if (cfg.FirstScanDone) return;
+        cfg.FirstScanDone = true;
+        App.Services.Config.Save(cfg, raiseChanged: false);
+        _ = RunGameScanAsync(confirmIfAny: true);
+    }
+
+    // -- Localization -----------------------------------------------------------------------------------
+
+    public override void ApplyLocalization()
+    {
+        BtnGamesListMore.Content = "⋯";
+        BtnGamesEditorMore.Content = "⋯";
+        BtnGamesListMore.ToolTip = Loc.T("games.more");
+        BtnGamesEditorMore.ToolTip = Loc.T("games.more");
+        // "⋯" has no readable text of its own.
+        System.Windows.Automation.AutomationProperties.SetName(BtnGamesListMore, Loc.T("games.more"));
+        System.Windows.Automation.AutomationProperties.SetName(BtnGamesEditorMore, Loc.T("games.more"));
+        RbGamesDisplay.Content = Loc.T("games.tab.display");
+        RbGamesColor.Content = Loc.T("games.tab.color");
+        RbGamesSession.Content = Loc.T("games.tab.session");
+        RbGamesCompanions.Content = Loc.T("games.tab.companions");
+        RbGamesPresets.Content = Loc.T("tab.presets");
+        MiDup.Header = Loc.T("btn.dup");
+        MiExportProfile.Header = Loc.T("profile.export");
+        MiImportProfile.Header = Loc.T("profile.import");
+        MiRestore.Header = Loc.T("btn.restore");
+        MiOverlay.Header = Loc.T("btn.overlay");
+        MiOpenPresets.Header = Loc.T("btn.openPresets");
+        // The ⋯ menus replaced toolbar buttons; their explanations live on as menu tooltips.
+        MiDup.ToolTip = Loc.T("btn.dup.tip");
+        MiExportProfile.ToolTip = Loc.T("profile.export.tip");
+        MiImportProfile.ToolTip = Loc.T("profile.import.tip");
+        MiRestore.ToolTip = Loc.T("btn.restore.tip");
+        MiOverlay.ToolTip = Loc.T("btn.overlay.tip");
+
+        // Color section (live)
+        LblPlayColor.Text = Loc.T("play.color");
+        LblPlayPresets.Text = Loc.T("play.presets");
+        ChkPlayPreview.Content = Loc.T("play.preview");
+        ChkPlayPreview.ToolTip = Loc.T("play.preview.tip");
+        ExpPlayHotkeys.Header = Loc.T("play.hotkeys");
+        ColorUiHelper.ApplyLabelNames(LblPlayB, LblPlayC, LblPlayG, LblPlayV, LblPlayH, LblPlayS);
+        LblPlayH.ToolTip = Loc.T("color.hue.tip");
+        LblPlayS.ToolTip = Loc.T("color.shadow.tip");
+        LblPlayV.ToolTip = Loc.T("color.vibrance.tip");
+
+        // List + Display
+        TxtSearch.Tag = Loc.T("search.placeholder");
+        TxtSearch.ToolTip = Loc.T("search.tip");
+        System.Windows.Automation.AutomationProperties.SetName(TxtSearch, Loc.T("search.placeholder"));
+        BtnScan.Content = Loc.T("btn.scan");
+        BtnScan.ToolTip = Loc.T("btn.scan.tip");
+        BtnAddManual.Content = Loc.T("btn.addManual");
+        BtnAddManual.ToolTip = Loc.T("btn.addManual.tip");
+        BtnDelete.Content = Loc.T("btn.delete");
+        BtnDelete.ToolTip = Loc.T("btn.delete.tip");
+        LblProfileTitle.Text = Loc.T("profile.title");
+        ChkEnabled.Content = Loc.T("profile.enabled");
+        ChkEnabled.ToolTip = Loc.T("profile.enabled.tip");
+        LblName.Text = Loc.T("profile.name");
+        LblProcess.Text = Loc.T("profile.process");
+        BtnBrowseExe.Content = Loc.T("btn.browse");
+        BtnBrowseExe.ToolTip = Loc.T("btn.browse.tip");
+        BtnPickRunning.Content = Loc.T("btn.running");
+        BtnPickRunning.ToolTip = Loc.T("btn.running.tip");
+        BtnLaunchGame.Content = Loc.T("btn.launchGame");
+        BtnLaunchGame.ToolTip = Loc.T("btn.launchGame.tip");
+        BtnApplyProfileNow.Content = Loc.T("btn.applyNow");
+        BtnApplyProfileNow.ToolTip = Loc.T("profile.applyNow.tip");
+        LblDisplaySection.Text = Loc.T("display");
+        ChkApplyRes.Content = Loc.T("display.changeRes");
+        LblResolution.Text = Loc.T("display.resolution");
+        LblRefreshRate.Text = Loc.T("display.refresh");
+        LblDisplay.Text = Loc.T("display.monitor");
+        ChkApplyPower.Content = Loc.T("display.changePower");
+        ItmPowerHigh.Content = Loc.T("power.high");
+        ItmPowerBalanced.Content = Loc.T("power.balanced");
+        LblPresetsSection.Text = Loc.T("tab.presets");
+        LblStartupPreset.Text = Loc.T("profile.startup");
+        ExpAdvanced.Header = Loc.T("profile.advanced");
+        LblAliases.Text = Loc.T("profile.aliases");
+        TxtAliases.ToolTip = Loc.T("profile.aliases.tip");
+        ChkApplyOnFocus.Content = Loc.T("profile.focus");
+        ChkSoftAltTab.Content = Loc.T("profile.softAltTab");
+        LblFpsLimit.Text = Loc.T("profile.fpsLimit");
+        ItmFpsOff.Content = Loc.T("fps.off");
+        LblRestoreMode.Text = Loc.T("restore.mode.lbl");
+        ItmRestoreSnapshot.Content = Loc.T("restore.mode.snapshot");
+        ItmRestoreDefaults.Content = Loc.T("restore.mode.defaults");
+        ItmRestoreNothing.Content = Loc.T("restore.mode.nothing");
+        ExpSession.Header = Loc.T("session.title");
+        LblSessionSub.Text = Loc.T("session.sub");
+        LblSessionTemplates.Text = Loc.T("session.templates");
+        BtnTplCompetitive.Content = Loc.T("session.tpl.competitive");
+        BtnTplImmersive.Content = Loc.T("session.tpl.immersive");
+        BtnTplMinimal.Content = Loc.T("session.tpl.minimal");
+        BtnTplCompetitive.ToolTip = Loc.T("session.tpl.competitive.tip");
+        BtnTplImmersive.ToolTip = Loc.T("session.tpl.immersive.tip");
+        BtnTplMinimal.ToolTip = Loc.T("session.tpl.minimal.tip");
+        LblMonitorLayout.Text = Loc.T("session.layout");
+        ItmLayoutKeep.Content = Loc.T("session.layout.keepAll");
+        ItmLayoutIsolate.Content = Loc.T("session.layout.isolate");
+        ItmLayoutPrimary.Content = Loc.T("session.layout.primaryOnly");
+        ChkQuietToast.Content = Loc.T("session.quiet");
+        ChkNoAutoHdr.Content = Loc.T("session.hdr");
+        ChkMonBright.Content = Loc.T("session.bright");
+        ChkSwitchAudio.Content = Loc.T("session.audio");
+        LblScaling.Text = Loc.T("session.scaling");
+        ItmScaleDefault.Content = Loc.T("session.scaling.default");
+        ItmScaleStretch.Content = Loc.T("session.scaling.stretch");
+        ItmScaleCenter.Content = Loc.T("session.scaling.center");
+        LblCompanions.Text = Loc.T("companions.title");
+        LblCompanionsEmpty.Text = Loc.T("companions.empty");
+        BtnCompanionAdd.Content = Loc.T("btn.add");
+        BtnCompanionEdit.Content = Loc.T("btn.edit");
+        BtnCompanionRemove.Content = Loc.T("btn.remove");
+        LblEditorEmpty.Text = Loc.T("library.pick");
+
+        ApplyPresetsLocalization();
+        ApplyInfoTips();
+
+        // Derived labels (combos, summaries) that embed localized text.
+        UpdateSessionLabels();
+        UpdateFpsLimitAvailability();
+        UpdateDriverUiAvailability();
+        FillDisplays(keepSelection: true);
+        FillAudioDevices();
+        RefreshRefreshRateCombo();
+        if (_selected != null)
+        {
+            using (SuppressEditor())
+            {
+                FillStartupPresetCombo(_selected, _selected.StartupPresetId);
+                SelectOrSetFpsLimit(CmbFpsLimit, _selected.FpsLimit);
+            }
+        }
+        UpdateColorSummary(_selected);
+        UpdatePresetEmptyCta();
+        UpdateLibraryEmpty();
+        RefreshPresetListSafe();
+        CompanionList.Items.Refresh();
+        UpdatePresetLabels();
+        UpdateBackendActiveLabel(ColorUiHelper.ReadBackendToggle(TogPresetBackend) == ColorBackend.LowLevel);
+        RefreshGamesTab();
+    }
+
+    private void ApplyInfoTips()
+    {
+        SetTip(InfoRestoreMode, "restore.mode.tip");
+        SetTip(InfoSoftAltTab, "profile.softAltTab.tip");
+        SetTip(InfoFpsLimit, "profile.fpsLimit.tip");
+        SetTip(InfoDeferred, "session.deferred.tip");
+        SetTip(InfoQuiet, "session.quiet.tip");
+        SetTip(InfoHdr, "session.hdr.tip");
+        SetTip(InfoMonBright, "session.bright.tip");
+        SetTip(InfoAudio, "session.audio.tip");
+        SetTip(InfoScaling, "session.scaling.tip");
+        SetTip(InfoCompanions, "companions.tip");
+        SetTip(InfoPresetBackend, "color.backend.tip");
+        SetTip(InfoPresetLock, "color.lock.tip");
+        ChkApplyRes.ToolTip = Loc.T("display.res.tip");
+        ChkApplyPower.ToolTip = Loc.T("display.power.tip");
+        BtnPresetExport.ToolTip = Loc.T("presets.export.tip");
+        BtnPresetImport.ToolTip = Loc.T("presets.import.tip");
+    }
+
+    private static void SetTip(InfoHint? hint, string key)
+    {
+        if (hint != null)
+            hint.Tip = Loc.T(key);
+    }
+
+    // -- Header / sections ---------------------------------------------------------------------------------
+
+    private void GamesListMore_Click(object sender, RoutedEventArgs e) => OpenButtonContextMenu(sender);
+
+    private void GamesEditorMore_Click(object sender, RoutedEventArgs e) => OpenButtonContextMenu(sender);
 
     private static void OpenButtonContextMenu(object sender)
     {
@@ -30,8 +391,6 @@ public partial class MainWindow : Window
         btn.ContextMenu.PlacementTarget = btn;
         btn.ContextMenu.IsOpen = true;
     }
-
-    private bool _gamesHeaderNarrow;
 
     /// <summary>
     /// 1366×768 @125 % in Russian leaves ~560 DIP for the editor: the action group (Enabled · Apply · Launch · ⋯)
@@ -52,13 +411,14 @@ public partial class MainWindow : Window
 
     private void GamesEditorSection_Checked(object sender, RoutedEventArgs e)
     {
-        if (PanelGamesDisplay == null) return;
+        if (PanelGamesDisplay == null || PanelGamesPresets == null) return;
         if (_selected == null)
         {
             PanelGamesDisplay.Visibility = Visibility.Collapsed;
             PanelGamesColor.Visibility = Visibility.Collapsed;
             PanelGamesSession.Visibility = Visibility.Collapsed;
             PanelGamesCompanions.Visibility = Visibility.Collapsed;
+            PanelGamesPresets.Visibility = Visibility.Collapsed;
             StopDesktopPreview();
             return;
         }
@@ -66,26 +426,31 @@ public partial class MainWindow : Window
         bool color = RbGamesColor?.IsChecked == true;
         bool session = RbGamesSession?.IsChecked == true;
         bool companions = RbGamesCompanions?.IsChecked == true;
+        bool presets = RbGamesPresets?.IsChecked == true;
 
-        PanelGamesDisplay.Visibility = (!color && !session && !companions) ? Visibility.Visible : Visibility.Collapsed;
+        PanelGamesDisplay.Visibility = (!color && !session && !companions && !presets) ? Visibility.Visible : Visibility.Collapsed;
         PanelGamesColor.Visibility = color ? Visibility.Visible : Visibility.Collapsed;
         PanelGamesSession.Visibility = session ? Visibility.Visible : Visibility.Collapsed;
         PanelGamesCompanions.Visibility = companions ? Visibility.Visible : Visibility.Collapsed;
+        PanelGamesPresets.Visibility = presets ? Visibility.Visible : Visibility.Collapsed;
 
         if (!color)
             StopDesktopPreview();
         else
             RefreshGamesTab();
+        if (presets)
+            LoadPresetEditor(_selectedPreset); // Color-section sliders may have edited the same preset object
     }
 
-    private void MaybeFirstScan()
+    /// <summary>Opens the Presets section for the selected game (⋯ → Edit presets, "+ preset" chip, Color → Edit).</summary>
+    public void ShowPresetsSection(GameProfile? game = null, string? preferPresetId = null)
     {
-        // Key off FirstScanDone only — the default config already contains a few core profiles.
-        var cfg = App.Services.Config.Current;
-        if (cfg.FirstScanDone) return;
-        cfg.FirstScanDone = true;
-        App.Services.Config.Save(cfg, raiseChanged: false);
-        _ = RunGameScanAsync(confirmIfAny: true);
+        Host.Navigate(ShellSection.Games);
+        if (game != null && !ReferenceEquals(game, _selected))
+            SelectProfile(game, preferPresetId);
+        else if (preferPresetId != null)
+            SelectPreset(_presets.FirstOrDefault(p => p.Id == preferPresetId) ?? _selectedPreset);
+        RbGamesPresets.IsChecked = true;
     }
 
     // -- Library ------------------------------------------------------------------------------------------
@@ -109,7 +474,7 @@ public partial class MainWindow : Window
         UpdateLibraryEmpty();
     }
 
-    private void UpdateLibraryEmpty()
+    public void UpdateLibraryEmpty()
     {
         if (LibraryEmpty == null) return;
         bool none = _profiles.Count == 0;
@@ -128,12 +493,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Selects a game in the Games list and editor. If the search filter hides it, the
-    /// filter is cleared first so the editor never edits an invisible game.
+    /// Selects a game in the list and editor (and makes it the Presets-section game). If the search filter
+    /// hides it, the filter is cleared first so the editor never edits an invisible game.
     /// </summary>
-    private void SelectProfile(GameProfile? p)
+    public void SelectProfile(GameProfile? p, string? preferPresetId = null)
     {
-        if (_selected != null && !ReferenceEquals(_selected, p) && _dirty)
+        if (_selected != null && !ReferenceEquals(_selected, p) && Host.IsDirty)
             PushEditorToSelected();
 
         using (SuppressEditor())
@@ -147,6 +512,7 @@ public partial class MainWindow : Window
         }
         _selected = p;
         LoadEditor(p);
+        SelectPresetGame(p, preferPresetId);
         if (p != null)
             ProfileList.ScrollIntoView(p);
         UpdateLibraryEmpty();
@@ -158,9 +524,10 @@ public partial class MainWindow : Window
         if (SuppressingEditor) return;
         var next = ProfileList.SelectedItem as GameProfile;
         if (ReferenceEquals(next, _selected)) return;
-        if (_dirty && _selected != null) PushEditorToSelected();
+        if (Host.IsDirty && _selected != null) PushEditorToSelected();
         _selected = next;
         LoadEditor(_selected);
+        SelectPresetGame(_selected);
         RefreshGamesTab();
     }
 
@@ -169,12 +536,8 @@ public partial class MainWindow : Window
         using (SuppressEditor())
         {
             ProfileList.Items.Refresh();
-            PresetGameList.Items.Refresh();
-            CmbPresetGame.Items.Refresh();
             if (_selected != null)
                 ProfileList.SelectedItem = _selected;
-            if (_presetGame != null)
-                PresetGameList.SelectedItem = _presetGame;
         }
     }
 
@@ -184,6 +547,7 @@ public partial class MainWindow : Window
         PlayEditor.IsEnabled = has;
         PanelGamesSession.IsEnabled = has;
         PanelGamesCompanions.IsEnabled = has;
+        PanelGamesPresets.IsEnabled = has;
         BtnDelete.IsEnabled = has;
         BtnLaunchGame.IsEnabled = has;
         BtnApplyProfileNow.IsEnabled = has;
@@ -195,12 +559,14 @@ public partial class MainWindow : Window
         RbGamesColor.IsEnabled = has;
         RbGamesSession.IsEnabled = has;
         RbGamesCompanions.IsEnabled = has;
+        RbGamesPresets.IsEnabled = has;
         if (!has)
         {
             PanelGamesDisplay.Visibility = Visibility.Collapsed;
             PanelGamesColor.Visibility = Visibility.Collapsed;
             PanelGamesSession.Visibility = Visibility.Collapsed;
             PanelGamesCompanions.Visibility = Visibility.Collapsed;
+            PanelGamesPresets.Visibility = Visibility.Collapsed;
             LblEditorEmpty.Visibility = Visibility.Visible;
             StopDesktopPreview();
         }
@@ -232,7 +598,7 @@ public partial class MainWindow : Window
             ChkApplyPower.IsChecked = p.ApplyPowerPlan;
             p.ApplyColor = false;
 
-            SelectComboByTag(CmbDisplay, p.DisplayDevice ?? "");
+            ComboUi.SelectByTag(CmbDisplay, p.DisplayDevice ?? "");
             if (string.IsNullOrWhiteSpace(p.Resolution))
             {
                 CmbResolution.SelectedIndex = -1;
@@ -252,8 +618,8 @@ public partial class MainWindow : Window
             ChkSoftAltTab.IsChecked = p.SoftRestoreOnAltTab;
             SelectOrSetFpsLimit(CmbFpsLimit, p.FpsLimit);
 
-            SelectPowerPlan(CmbPower, p.PowerPlan, "highPerformance");
-            SelectComboByTag(CmbRestoreMode, p.RestoreMode.ToString());
+            ComboUi.SelectPowerPlan(CmbPower, p.PowerPlan, "highPerformance");
+            ComboUi.SelectByTag(CmbRestoreMode, p.RestoreMode.ToString());
             var sx = p.Session ?? new SessionExtras();
             SldDeferred.Value = sx.DeferredApplySeconds;
             ChkQuietToast.IsChecked = sx.QuietNotifications;
@@ -261,18 +627,18 @@ public partial class MainWindow : Window
             var layout = sx.MonitorLayout;
             if (string.IsNullOrWhiteSpace(layout))
                 layout = sx.IsolatePrimaryMonitor ? "isolatePrimary" : "keepAll";
-            SelectComboByTag(CmbMonitorLayout, layout);
+            ComboUi.SelectByTag(CmbMonitorLayout, layout);
             ChkMonBright.IsChecked = sx.ApplyMonitorBrightness;
             SldMonBright.Value = sx.MonitorBrightness;
             ChkSwitchAudio.IsChecked = sx.SwitchAudioDevice;
             SelectAudioDevice(sx.AudioDeviceId);
-            SelectComboByTag(CmbScaling, string.IsNullOrWhiteSpace(sx.ScalingMode) ? "default" : sx.ScalingMode!);
+            ComboUi.SelectByTag(CmbScaling, string.IsNullOrWhiteSpace(sx.ScalingMode) ? "default" : sx.ScalingMode!);
             RefreshCompanionList(p);
             UpdateSessionLabels();
             UpdateColorSummary(p);
             UpdateDependentEnables();
         }
-        // Keep _dirty — profile switch must not pretend changes were saved to disk
+        // Keep dirty — profile switch must not pretend changes were saved to disk
     }
 
     /// <summary>Resets every editor field so no stale value from the previous game can leak into a save.</summary>
@@ -288,24 +654,24 @@ public partial class MainWindow : Window
             CmbResolution.SelectedIndex = -1;
             CmbResolution.Text = "";
             RefreshRefreshRateCombo(0);
-            SelectComboByTag(CmbDisplay, "");
+            ComboUi.SelectByTag(CmbDisplay, "");
             ChkApplyPower.IsChecked = false;
-            SelectPowerPlan(CmbPower, null, "highPerformance");
+            ComboUi.SelectPowerPlan(CmbPower, null, "highPerformance");
             FillStartupPresetCombo(null, "");
             SldApplyDelay.Value = 0;
             ChkApplyOnFocus.IsChecked = false;
             ChkSoftAltTab.IsChecked = false;
             SelectOrSetFpsLimit(CmbFpsLimit, 0);
-            SelectComboByTag(CmbRestoreMode, nameof(RestoreMode.PreviousSnapshot));
+            ComboUi.SelectByTag(CmbRestoreMode, nameof(RestoreMode.PreviousSnapshot));
             SldDeferred.Value = 0;
             ChkQuietToast.IsChecked = false;
             ChkNoAutoHdr.IsChecked = false;
-            SelectComboByTag(CmbMonitorLayout, "keepAll");
+            ComboUi.SelectByTag(CmbMonitorLayout, "keepAll");
             ChkMonBright.IsChecked = false;
             SldMonBright.Value = 80;
             ChkSwitchAudio.IsChecked = false;
             SelectAudioDevice(null);
-            SelectComboByTag(CmbScaling, "default");
+            ComboUi.SelectByTag(CmbScaling, "default");
             RefreshCompanionList(null);
             UpdateColorSummary(null);
             UpdateSessionLabels();
@@ -383,7 +749,7 @@ public partial class MainWindow : Window
                 var label = d.Primary ? $"{d.Friendly} ★" : d.Friendly;
                 CmbDisplay.Items.Add(new ComboBoxItem { Content = label, Tag = d.DeviceName, ToolTip = d.DeviceName });
             }
-            SelectComboByTag(CmbDisplay, keep ?? "");
+            ComboUi.SelectByTag(CmbDisplay, keep ?? "");
         }
     }
 
@@ -445,7 +811,7 @@ public partial class MainWindow : Window
                 foreach (var rate in DisplayEngine.GetAvailableRefreshRates(res, device))
                     CmbRefreshRate.Items.Add(new ComboBoxItem { Content = $"{rate} Hz", Tag = rate.ToString() });
             }
-            SelectComboByTag(CmbRefreshRate, keep.ToString());
+            ComboUi.SelectByTag(CmbRefreshRate, keep.ToString());
         }
     }
 
@@ -459,10 +825,10 @@ public partial class MainWindow : Window
             foreach (var pr in p.Presets)
                 CmbStartupPreset.Items.Add(new ComboBoxItem { Content = pr.Name, Tag = pr.Id });
         }
-        SelectComboByTag(CmbStartupPreset, keep ?? "");
+        ComboUi.SelectByTag(CmbStartupPreset, keep ?? "");
     }
 
-    /// <summary>Library "Presets" section: what this game has and what applies on start.</summary>
+    /// <summary>Display section "Presets" summary: what this game has and what applies on start.</summary>
     private void UpdateColorSummary(GameProfile? p)
     {
         if (p == null)
@@ -611,7 +977,7 @@ public partial class MainWindow : Window
         LblApplyDelay.Text = Loc.Tf("profile.delay", (int)SldApplyDelay.Value);
     }
 
-    /// <summary>Keeps the Play tab's quick fields in sync without rebuilding chips (preserves a "Live" chip).</summary>
+    /// <summary>Keeps the header quick fields in sync without rebuilding chips (preserves a "Live" chip).</summary>
     private void RefreshGamesQuickFields()
     {
         if (_playProfile == null || _selected == null || _selected.Id != _playProfile.Id) return;
@@ -619,7 +985,8 @@ public partial class MainWindow : Window
         TxtPlayProcess.Text = _playProfile.ProcessName;
     }
 
-    private void AddProfile_Click(object sender, RoutedEventArgs e)
+    /// <summary>New blank game, name box focused (also the shell's "Add game").</summary>
+    public void AddProfile_Click(object sender, RoutedEventArgs e)
     {
         var p = new GameProfile
         {
@@ -634,7 +1001,7 @@ public partial class MainWindow : Window
         GameVisuals.Apply(p);
         SelectProfile(p);
         MarkDirty();
-        MainTabs.SelectedItem = TabGames;
+        Host.Navigate(ShellSection.Games);
         RbGamesDisplay.IsChecked = true;
         Dispatcher.BeginInvoke(() =>
         {
@@ -672,25 +1039,17 @@ public partial class MainWindow : Window
         ShowToast(Loc.Tf("toast.duplicated", copy.Name));
     }
 
-    private bool ConfirmDestructive(string message, string title, string actionText)
-    {
-        if (App.Services.Config.Current.Ui?.ConfirmDelete == false)
-            return true;
-        return ThemedDialog.Confirm(this, message, title, actionText, danger: true);
-    }
-
     private void DeleteProfile_Click(object sender, RoutedEventArgs e)
     {
         if (_selected == null) return;
         var victim = _selected;
         string name = string.IsNullOrWhiteSpace(victim.Name) ? victim.ProcessName : victim.Name;
-        if (!ConfirmDestructive(Loc.Tf("confirm.deleteProfile", name), Loc.T("confirm.deleteProfile.title"), Loc.T("btn.delete")))
+        if (!Host.ConfirmDestructive(Loc.Tf("confirm.deleteProfile", name), Loc.T("confirm.deleteProfile.title"), Loc.T("btn.delete")))
             return;
 
         PushEditorToSelected();
         int index = _profiles.IndexOf(victim);
-        bool wasPresetGame = ReferenceEquals(_presetGame, victim);
-        if (wasPresetGame)
+        if (ReferenceEquals(_presetGame, victim))
         {
             // Detach first so SyncPresetsBackToGame can't write into the removed profile.
             PushPresetEditorIfDirty();
@@ -703,11 +1062,10 @@ public partial class MainWindow : Window
         var next = _profiles.Count == 0 ? null : _profiles[Math.Clamp(index, 0, _profiles.Count - 1)];
         _selected = null;
         SelectProfile(next);
-        if (wasPresetGame) SelectPresetGame(next);
         MarkDirty();
         FlushAutosave();
 
-        ShowUndoToast(Loc.Tf("toast.deleted", name), () =>
+        Host.ShowUndoToast(Loc.Tf("toast.deleted", name), () =>
         {
             using (SuppressEditor())
                 _profiles.Insert(Math.Clamp(index, 0, _profiles.Count), victim);
@@ -726,7 +1084,7 @@ public partial class MainWindow : Window
             Filter = Loc.T("filter.exe"),
             Title = Loc.T("profile.browse.title")
         };
-        if (dlg.ShowDialog(this) != true) return;
+        if (dlg.ShowDialog(Host.Window) != true) return;
 
         using (SuppressEditor())
         {
@@ -747,7 +1105,7 @@ public partial class MainWindow : Window
     {
         if (_selected == null) return;
         var procs = ProcessWatcher.GetRunningExeNames().ToList();
-        var pick = new ProcessPickerWindow(procs) { Owner = this };
+        var pick = new ProcessPickerWindow(procs) { Owner = Host.Window };
         if (pick.ShowDialog() != true || string.IsNullOrWhiteSpace(pick.SelectedProcess)) return;
 
         using (SuppressEditor())
@@ -794,7 +1152,7 @@ public partial class MainWindow : Window
     {
         if (_selected == null) return;
         var c = new CompanionApp();
-        var dlg = new CompanionEditWindow(c) { Owner = this };
+        var dlg = new CompanionEditWindow(c) { Owner = Host.Window };
         if (dlg.ShowDialog() != true) return;
         _selected.Companions ??= new List<CompanionApp>();
         _selected.Companions.Add(c);
@@ -805,7 +1163,7 @@ public partial class MainWindow : Window
     private void EditCompanion_Click(object sender, RoutedEventArgs e)
     {
         if (_selected == null || CompanionList.SelectedItem is not CompanionApp c) return;
-        var dlg = new CompanionEditWindow(c) { Owner = this };
+        var dlg = new CompanionEditWindow(c) { Owner = Host.Window };
         if (dlg.ShowDialog() != true) return;
         RefreshCompanionList(_selected, c);
         MarkDirty();
@@ -816,14 +1174,14 @@ public partial class MainWindow : Window
         if (_selected == null || CompanionList.SelectedItem is not CompanionApp c) return;
         var owner = _selected;
         string label = CompanionEditWindow.Describe(c);
-        if (!ConfirmDestructive(Loc.Tf("confirm.removeCompanion", label), Loc.T("confirm.removeCompanion.title"), Loc.T("btn.remove")))
+        if (!Host.ConfirmDestructive(Loc.Tf("confirm.removeCompanion", label), Loc.T("confirm.removeCompanion.title"), Loc.T("btn.remove")))
             return;
         int index = owner.Companions.IndexOf(c);
         owner.Companions.Remove(c);
         RefreshCompanionList(owner);
         MarkDirty();
         FlushAutosave();
-        ShowUndoToast(Loc.T("toast.companion.removed"), () =>
+        Host.ShowUndoToast(Loc.T("toast.companion.removed"), () =>
         {
             owner.Companions.Insert(Math.Clamp(index, 0, owner.Companions.Count), c);
             if (ReferenceEquals(_selected, owner))
@@ -835,7 +1193,8 @@ public partial class MainWindow : Window
 
     // -- Library: scan / import / export / restore -------------------------------------------------------
 
-    private async void ScanGames_Click(object sender, RoutedEventArgs e)
+    /// <summary>Scan button (also the shell's "Scan games").</summary>
+    public async void ScanGames_Click(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -844,13 +1203,10 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AppLog.Error(ex, "Scan games");
-            ScanBusy.HideAnimated();
-            ThemedDialog.Show(this, Loc.T("scan.failed") + "\n" + ex.Message, Loc.T("scan.title"));
+            Host.ScanBusy.HideAnimated();
+            ThemedDialog.Show(Host.Window, Loc.T("scan.failed") + "\n" + ex.Message, Loc.T("scan.title"));
         }
     }
-
-    /// <summary>True while a scan runs — guards the palette / buttons against a second concurrent scan.</summary>
-    private bool _scanRunning;
 
     private async Task RunGameScanAsync(bool confirmIfAny)
     {
@@ -868,7 +1224,8 @@ public partial class MainWindow : Window
 
     private async Task RunGameScanCoreAsync(bool confirmIfAny)
     {
-        ScanBusy.ShowAnimated();
+        var busy = Host.ScanBusy;
+        busy.ShowAnimated();
         UiSound.BeginWork();
 
         var minDelay = Task.Delay(1200);
@@ -876,20 +1233,20 @@ public partial class MainWindow : Window
         try
         {
             found = await Task.Run(() =>
-                GameScanner.ScanAll(msg => Dispatcher.BeginInvoke(() => ScanBusy.SetStatus(msg))));
+                GameScanner.ScanAll(msg => Dispatcher.BeginInvoke(() => busy.SetStatus(msg))));
         }
         catch (Exception ex)
         {
             UiSound.EndWork(UiWorkResult.Cancel);
             UiSound.Error();
-            ScanBusy.HideAnimated();
+            busy.HideAnimated();
             AppLog.Error(ex, "Game scan");
-            ThemedDialog.Show(this, Loc.T("scan.failed") + "\n" + ex.Message, Loc.T("scan.title"));
+            ThemedDialog.Show(Host.Window, Loc.T("scan.failed") + "\n" + ex.Message, Loc.T("scan.title"));
             return;
         }
 
         await minDelay;
-        ScanBusy.HideAnimated();
+        busy.HideAnimated();
 
         if (found.Count == 0)
         {
@@ -905,7 +1262,7 @@ public partial class MainWindow : Window
         if (confirmIfAny && fresh.Count > 0)
         {
             var names = string.Join(", ", fresh.Select(f => f.Name).Distinct());
-            if (!ThemedDialog.Confirm(this, Loc.Tf("scan.found", names), Loc.T("scan.title"), Loc.T("scan.addAll")))
+            if (!ThemedDialog.Confirm(Host.Window, Loc.Tf("scan.found", names), Loc.T("scan.title"), Loc.T("scan.addAll")))
                 return;
         }
 
@@ -938,7 +1295,7 @@ public partial class MainWindow : Window
             last = profile;
             added++;
         }
-        if (added > 0 || _dirty)
+        if (added > 0 || Host.IsDirty)
         {
             MarkDirty();
             RefreshGameTiles();
@@ -1014,7 +1371,7 @@ public partial class MainWindow : Window
         string? path = profile.ExePath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
-            ThemedDialog.Show(this, Loc.T("launch.noPath"), Loc.T("btn.launchGame"));
+            ThemedDialog.Show(Host.Window, Loc.T("launch.noPath"), Loc.T("btn.launchGame"));
             return;
         }
 
@@ -1032,11 +1389,11 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             UiSound.Error();
-            ThemedDialog.Show(this, Loc.T("launch.failed") + "\n" + ex.Message, Loc.T("btn.launchGame"));
+            ThemedDialog.Show(Host.Window, Loc.T("launch.failed") + "\n" + ex.Message, Loc.T("btn.launchGame"));
         }
     }
 
-    /// <summary>Library: push this game's display/power settings to the desktop right now (test without launching).</summary>
+    /// <summary>Push this game's display/power settings to the desktop right now (test without launching).</summary>
     private void ApplyProfileNow_Click(object sender, RoutedEventArgs e)
     {
         if (_selected == null) return;
@@ -1052,347 +1409,19 @@ public partial class MainWindow : Window
         UiMotion.FlashSuccess(BtnApplyProfileNow);
     }
 
-    private void Overlay_Click(object sender, RoutedEventArgs e)
+    /// <summary>Live overlay (⋯ menu; also the command palette).</summary>
+    public void Overlay_Click(object sender, RoutedEventArgs e)
     {
         FlushAutosave();
         if (System.Windows.Application.Current is App app)
             app.ToggleGameOverlay();
     }
 
-    private void EmergencyRestore_Click(object sender, RoutedEventArgs e)
-    {
-        _previewOnDesktop = false;
-        App.Services.Zoom.Off();
-        App.Services.Monitor.EmergencyRestore();
-        RefreshGamesTab();
-        ShowToast(Loc.T("toast.emergency"));
-    }
-
-    private void OpenPresets_Click(object sender, RoutedEventArgs e)
-    {
-        MainTabs.SelectedItem = TabPresets;
-        if (_selected != null)
-            SelectPresetGame(_selected);
-    }
-
-    // -- Play tab ----------------------------------------------------------------------------------------
-
-    // Color slider rows (ColorSliderRow control) — the old Sld*/Lbl*/Val* names stay reachable.
-    private Slider SldPlayB => RowPlayB.Slider;
-    private TextBlock LblPlayB => RowPlayB.LabelBlock;
-    private TextBlock ValPlayB => RowPlayB.ValueBlock;
-    private Slider SldPlayC => RowPlayC.Slider;
-    private TextBlock LblPlayC => RowPlayC.LabelBlock;
-    private TextBlock ValPlayC => RowPlayC.ValueBlock;
-    private Slider SldPlayG => RowPlayG.Slider;
-    private TextBlock LblPlayG => RowPlayG.LabelBlock;
-    private TextBlock ValPlayG => RowPlayG.ValueBlock;
-    private Slider SldPlayV => RowPlayV.Slider;
-    private TextBlock LblPlayV => RowPlayV.LabelBlock;
-    private TextBlock ValPlayV => RowPlayV.ValueBlock;
-    private Slider SldPlayH => RowPlayH.Slider;
-    private TextBlock LblPlayH => RowPlayH.LabelBlock;
-    private TextBlock ValPlayH => RowPlayH.ValueBlock;
-    private Slider SldPlayS => RowPlayS.Slider;
-    private TextBlock LblPlayS => RowPlayS.LabelBlock;
-    private TextBlock ValPlayS => RowPlayS.ValueBlock;
-
-    private bool PlayIsRunning =>
-        _playProfile != null && App.Services.Monitor.CurrentProfile?.Id == _playProfile.Id;
-
-    /// <summary>Sliders touch the real display only for the running game, or when the user opted into a desktop preview.</summary>
-    private bool PlayCanApplyLive => PlayIsRunning || _previewOnDesktop;
-
-    public void RefreshGamesTab()
-    {
-        if (TxtPlayName == null || SuppressingPlay) return;
-        var profile = _selected;
-        if (!ReferenceEquals(profile, _playProfile))
-        {
-            StopDesktopPreview();
-            _playPreset = null;
-            _playLive = false;
-        }
-        _playProfile = profile;
-
-        using (SuppressPlay())
-        {
-            bool anyRunning = App.Services.Monitor.CurrentProfile != null;
-            BtnLaunchGame.IsEnabled = profile != null;
-            BtnApplyProfileNow.IsEnabled = profile != null;
-
-            if (profile == null)
-            {
-                TxtPlayName.Text = Loc.T("play.noGame");
-                TxtPlayProcess.Text = "";
-                PlayStatusPill.Visibility = Visibility.Collapsed;
-                PlayPresetChips.Children.Clear();
-                TxtPlayHotkeys.Text = "";
-                ChkPlayPreview.Visibility = Visibility.Collapsed;
-                PlaySliders.IsEnabled = false;
-                BtnPlayEditPreset.Visibility = Visibility.Collapsed;
-                SetPlayHint(Loc.T("play.hint.pick"), active: false);
-                _playPreset = null;
-                return;
-            }
-
-            bool running = PlayIsRunning;
-            TxtPlayName.Text = profile.Name;
-            TxtPlayProcess.Text = profile.ProcessName;
-            PlayStatusPill.Visibility = Visibility.Visible;
-            TxtPlayStatus.Text = running ? Loc.T("play.status.active") : Loc.T("play.status.idle");
-            PlayStatusDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, running ? "SuccessBrush" : "MutedBrush");
-
-            ChkPlayPreview.Visibility = running ? Visibility.Collapsed : Visibility.Visible;
-            ChkPlayPreview.IsEnabled = !anyRunning;
-            ChkPlayPreview.IsChecked = _previewOnDesktop;
-
-            if (_playLive && !PlayCanApplyLive) _playLive = false;
-            string? activePresetId = running && !_playLive ? App.Services.Monitor.ActivePresetId : null;
-            QuickPreset? preset = _playLive ? null : activePresetId != null
-                ? profile.Presets?.FirstOrDefault(p => p.Id == activePresetId)
-                : (_playPreset != null ? profile.Presets?.FirstOrDefault(p => p.Id == _playPreset.Id) : null);
-            if (!_playLive)
-            {
-                if (preset == null && !string.IsNullOrWhiteSpace(profile.StartupPresetId))
-                    preset = profile.Presets?.FirstOrDefault(p => p.Id == profile.StartupPresetId);
-                preset ??= profile.Presets?.FirstOrDefault();
-            }
-            _playPreset = preset;
-
-            RebuildPlayPresetChips(profile, preset);
-            LoadPlaySlidersFrom(preset);
-            PlaySliders.IsEnabled = preset != null || PlayCanApplyLive;
-            BtnPlayEditPreset.Visibility = preset != null ? Visibility.Visible : Visibility.Collapsed;
-            BtnPlayEditPreset.Content = preset != null ? Loc.Tf("play.editPreset", preset.Name) : "";
-            UpdatePlayHint();
-            RefreshPlayHotkeyCheatSheet(profile);
-        }
-    }
-
-    private void UpdatePlayHint()
-    {
-        if (_playProfile == null) return;
-        string presetName = _playPreset?.Name ?? "";
-        if (PlayIsRunning)
-            SetPlayHint(_playPreset != null
-                ? Loc.Tf("play.hint.running", _playProfile.Name, presetName)
-                : Loc.Tf("play.hint.runningLive", _playProfile.Name), active: true);
-        else if (_previewOnDesktop)
-            SetPlayHint(Loc.T("play.hint.preview"), active: true);
-        else if (App.Services.Monitor.CurrentProfile != null)
-            SetPlayHint(Loc.Tf("play.hint.otherRunning", App.Services.Monitor.CurrentProfile.Name), active: false);
-        else if (_playPreset == null)
-            SetPlayHint(Loc.T("play.hint.noPresets"), active: false);
-        else
-            SetPlayHint(Loc.Tf("play.hint.idle", _playProfile.Name, presetName), active: false);
-    }
-
-    private void SetPlayHint(string text, bool active)
-    {
-        LblPlayColorHint.Text = text;
-        PlayHintDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, active ? "SuccessBrush" : "MutedBrush");
-    }
-
-    private void RebuildPlayPresetChips(GameProfile profile, QuickPreset? selected)
-    {
-        PlayPresetChips.Children.Clear();
-
-        if (PlayCanApplyLive)
-        {
-            var liveChip = MakePlayChip(Loc.T("play.liveChip"), selected == null, Loc.T("play.liveChip.tip"));
-            liveChip.Click += (_, _) => PlayPresetChip_Click(null);
-            PlayPresetChips.Children.Add(liveChip);
-        }
-
-        foreach (var p in profile.Presets ?? new List<QuickPreset>())
-        {
-            string tip = ColorUiHelper.Describe(p) + (string.IsNullOrWhiteSpace(p.Hotkey) ? "" : "  ·  " + p.Hotkey);
-            var chip = MakePlayChip(p.Name, selected != null && selected.Id == p.Id, tip);
-            chip.Click += (_, _) => PlayPresetChip_Click(p);
-            PlayPresetChips.Children.Add(chip);
-        }
-
-        if ((profile.Presets?.Count ?? 0) == 0)
-        {
-            var add = MakePlayChip("+ " + Loc.T("play.addPreset"), false, Loc.T("presets.add.tip"));
-            add.Click += (_, _) =>
-            {
-                MainTabs.SelectedItem = TabPresets;
-                SelectPresetGame(profile);
-                AddPreset_Click(add, new RoutedEventArgs());
-            };
-            PlayPresetChips.Children.Add(add);
-        }
-    }
-
-    private System.Windows.Controls.Button MakePlayChip(string text, bool selected, string? tip) => new()
-    {
-        Content = new TextBlock { Text = text, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 180 },
-        ToolTip = tip,
-        Style = (Style)FindResource(selected ? "ChipButtonSelected" : "ChipButton"),
-        Margin = new Thickness(0, 0, 8, 8)
-    };
-
-    private void PlayPresetChip_Click(QuickPreset? preset)
-    {
-        if (_playProfile == null) return;
-        _playPreset = preset;
-        _playLive = preset == null;
-        using (SuppressPlay())
-        {
-            RebuildPlayPresetChips(_playProfile, preset);
-            LoadPlaySlidersFrom(preset);
-            PlaySliders.IsEnabled = preset != null || PlayCanApplyLive;
-            BtnPlayEditPreset.Visibility = preset != null ? Visibility.Visible : Visibility.Collapsed;
-            BtnPlayEditPreset.Content = preset != null ? Loc.Tf("play.editPreset", preset.Name) : "";
-        }
-        UpdatePlayHint();
-
-        if (preset == null) return;
-        if (PlayIsRunning)
-            App.Services.Monitor.ApplyPreset(preset);
-        else if (_previewOnDesktop)
-        {
-            var c = (preset.Color ?? ColorSettings.Neutral).Clone();
-            c.Clamp();
-            App.Services.Display.ApplyColor(c);
-        }
-        // Not running and no preview: the chip only selects which preset the sliders edit.
-    }
-
-    private void LoadPlaySlidersFrom(QuickPreset? preset)
-    {
-        ColorSettings source;
-        if (preset != null)
-        {
-            preset.EnsureDualColorSlots();
-            source = preset.Color.Clone();
-        }
-        else
-        {
-            source = App.Services.Display.LiveColor.Clone();
-        }
-        _playBackend = source.Backend;
-
-        using (SuppressPlay())
-        {
-            ColorUiHelper.ApplyColorSliders(source, SldPlayB, SldPlayC, SldPlayG, SldPlayV, SldPlayS, SldPlayH);
-            bool low = ColorUiHelper.IsLowLevel(_playBackend);
-            SldPlayS.IsEnabled = low;
-            SldPlayH.IsEnabled = !low;
-            RefreshPlayValues();
-        }
-    }
-
-    private void RefreshPlayValues()
-    {
-        ColorUiHelper.UpdateValues(ValPlayB, ValPlayC, ValPlayG, ValPlayV, SldPlayB, SldPlayC, SldPlayG, SldPlayV,
-            _playBackend, ValPlayH, SldPlayH, ValPlayS, SldPlayS);
-    }
-
-    private void PlaySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (SuppressingPlay || !IsInitialized || _playProfile == null) return;
-        RefreshPlayValues();
-
-        var c = ColorUiHelper.ReadColorFromSliders(_playBackend, SldPlayB, SldPlayC, SldPlayG, SldPlayV, SldPlayS,
-            lockColor: _playPreset?.Color?.LockColor ?? true, hue: SldPlayH);
-        if (PlayCanApplyLive)
-            App.Services.Display.ApplyColor(c);
-
-        if (_playPreset != null)
-        {
-            _playPreset.ApplyColor = true;
-            _playPreset.Color = c;
-            _playPreset.SaveActiveToDualSlots();
-            MarkDirty();
-
-            if (PlayIsRunning && App.Services.Monitor.ActivePresetId == _playPreset.Id)
-                App.Services.Monitor.SetColorLockPaused(false);
-
-            if (ReferenceEquals(_playPreset, _selectedPreset))
-            {
-                PushPresetEditorIfDirty(); // keep pending name edits, then reload colors from the preset
-                _playPreset.Color = c;
-                _playPreset.SaveActiveToDualSlots();
-                LoadPresetEditor(_selectedPreset); // runs inside SuppressEditor()
-            }
-        }
-    }
-
-    private void PlayPreview_Changed(object sender, RoutedEventArgs e)
-    {
-        if (SuppressingPlay || _playProfile == null) return;
-        bool on = ChkPlayPreview.IsChecked == true;
-        if (on)
-        {
-            _previewOnDesktop = true;
-            var c = ColorUiHelper.ReadColorFromSliders(_playBackend, SldPlayB, SldPlayC, SldPlayG, SldPlayV, SldPlayS,
-                lockColor: false, hue: SldPlayH);
-            App.Services.Display.ApplyColor(c);
-        }
-        else
-        {
-            StopDesktopPreview();
-        }
-        RefreshGamesTab();
-    }
-
-    /// <summary>Ends a desktop preview and puts the factory ramp back (only when no game owns the display).</summary>
-    private void StopDesktopPreview()
-    {
-        if (!_previewOnDesktop) return;
-        _previewOnDesktop = false;
-        if (App.Services.Monitor.CurrentProfile == null)
-        {
-            try { App.Services.Display.ApplyNeutralOrFactoryRamp(); }
-            catch (Exception ex) { AppLog.Warn(ex, "Stop desktop preview"); }
-        }
-        if (ChkPlayPreview != null)
-        {
-            using (SuppressPlay())
-                ChkPlayPreview.IsChecked = false;
-        }
-    }
-
-    private void PlayEditPreset_Click(object sender, RoutedEventArgs e)
-    {
-        if (_playProfile == null) return;
-        var presetId = _playPreset?.Id;
-        MainTabs.SelectedItem = TabPresets;
-        SelectPresetGame(_playProfile, presetId);
-    }
-
-    private void RefreshPlayHotkeyCheatSheet(GameProfile profile)
-    {
-        var gh = App.Services.Config.Current.GlobalHotkeys;
-        var lines = new List<string>();
-
-        void AddGlobal(string? gesture, string labelKey)
-        {
-            if (!string.IsNullOrWhiteSpace(gesture))
-                lines.Add($"{gesture}  —  {Loc.T(labelKey)}");
-        }
-        AddGlobal(gh?.ToggleOverlay, "hotkey.overlay");
-        AddGlobal(gh?.EmergencyRestore, "hotkey.emergency");
-        AddGlobal(gh?.NextPreset, "hotkey.next");
-        AddGlobal(gh?.PreviousPreset, "hotkey.prev");
-        AddGlobal(gh?.CompareAb, "hotkey.compareAb");
-        AddGlobal(gh?.ToggleZoom, "hotkey.zoom");
-
-        if (profile.Presets != null)
-        {
-            foreach (var p in profile.Presets.Where(p => !string.IsNullOrWhiteSpace(p.Hotkey)))
-                lines.Add($"{p.Hotkey}  —  {p.Name}");
-        }
-
-        TxtPlayHotkeys.Text = lines.Count > 0 ? string.Join("\n", lines) : Loc.T("play.hotkeys.none");
-    }
+    private void OpenPresets_Click(object sender, RoutedEventArgs e) => ShowPresetsSection(_selected);
 
     // -- Audio / session ------------------------------------------------------------------------------------
 
-    private void FillAudioDevices()
+    public void FillAudioDevices()
     {
         var prev = (CmbAudio.SelectedItem as ComboBoxItem)?.Tag?.ToString();
         using (SuppressEditor())
@@ -1447,8 +1476,8 @@ public partial class MainWindow : Window
         {
             ChkQuietToast.IsChecked = quiet;
             ChkNoAutoHdr.IsChecked = hdr;
-            SelectComboByTag(CmbMonitorLayout, layout);
-            SelectComboByTag(CmbScaling, scaling);
+            ComboUi.SelectByTag(CmbMonitorLayout, layout);
+            ComboUi.SelectByTag(CmbScaling, scaling);
             ChkMonBright.IsChecked = bright;
             if (bright) SldMonBright.Value = brightPct;
             SldDeferred.Value = 0;

@@ -18,7 +18,13 @@ public enum RecommendationAction
     /// <summary>Navigate to Network page.</summary>
     OpenNetwork,
     /// <summary>Navigate to Games / library.</summary>
-    OpenGames
+    OpenGames,
+    /// <summary>Xbox Game Bar background off via <see cref="Optimize.GameBarSafeActionTarget"/> (SafeActionId = gameBar.off).</summary>
+    SafeActionGameBarOff,
+    /// <summary>Mouse acceleration off via <see cref="Optimize.MouseAccelerationSafeActionTarget"/> (SafeActionId = mouseAccel.off).</summary>
+    SafeActionMouseAccelOff,
+    /// <summary>Per-game "disable fullscreen optimizations" — <see cref="Recommendation.SafeActionId"/> embeds the exe path.</summary>
+    SafeActionFsoForGame
 }
 
 public enum RecommendationSeverity
@@ -41,6 +47,25 @@ public sealed class Recommendation
     public RecommendationAction Action { get; init; }
     /// <summary>Loc key for the primary button when <see cref="Action"/> is not None.</summary>
     public string? ActionKey { get; init; }
+
+    /// <summary>
+    /// Exact <see cref="SafeActionService"/> action id for SafeAction kinds (e.g. "gameBar.off",
+    /// "fso.disable|C:\game.exe"); null for navigation / informational recommendations.
+    /// </summary>
+    public string? SafeActionId { get; init; }
+
+    /// <summary>Global, or the game exe a per-game SafeAction applies to.</summary>
+    public SafeActionScope Scope { get; init; } = SafeActionScope.Global;
+
+    /// <summary>Measured facts behind the rule ("temp: 87 °C", "free: 7.2 %") — raw, not localized, never invented.</summary>
+    public string[] Evidence { get; init; } = Array.Empty<string>();
+
+    /// <summary>Loc key: what the suggestion gives (never an FPS promise).</summary>
+    public string? WhyKey { get; init; }
+    /// <summary>Loc key: side effects / what could go wrong.</summary>
+    public string? RiskKey { get; init; }
+    /// <summary>Loc key: how it is undone (SafeActions) or why there is nothing to undo.</summary>
+    public string? UndoKey { get; init; }
 
     /// <summary>Stable hash of the occurrence (title + args) so a dismissal only hides this exact situation.</summary>
     public string ContextHash => RecommendationDismissals.ContextHash(TitleKey, BodyArgs);
@@ -179,6 +204,25 @@ public sealed class RecommendationContext
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     /// <summary>Clock seam for expiry.</summary>
     public DateTime NowUtc { get; init; } = DateTime.UtcNow;
+
+    // ---- Real diagnostics (Services\Hardware) — all optional; a null means "not measured", never "fine". ----
+
+    /// <summary>Static inventory (<c>HardwareInventoryService.Cached</c>): GPU driver date / version.</summary>
+    public HardwareInventory? Inventory { get; init; }
+    /// <summary>Latest 1 Hz snapshot (<c>SensorService.Latest</c>): GPU throttle / temp, RAM, drive free space.</summary>
+    public SensorSnapshot? Sensors { get; init; }
+    /// <summary>Evaluated health report — used as a fallback when <see cref="Sensors"/> is null.</summary>
+    public HealthReport? Health { get; init; }
+    /// <summary>Crash-related System-log counts over the last 30 days (<c>CrashEventReader.Read()</c>).</summary>
+    public CrashEventSummary? Crashes { get; init; }
+    /// <summary>True while a game profile session is active (RAM pressure only matters then).</summary>
+    public bool GameRunning { get; init; }
+    /// <summary>Xbox Game Bar background features on (<see cref="Optimize.GameBarSafeActionTarget.ReadBackgroundOn"/>); null = unreadable.</summary>
+    public bool? GameBarBackgroundOn { get; init; }
+    /// <summary>Mouse acceleration on (<see cref="Optimize.MouseAccelerationSafeActionTarget.ReadAccelerationOn"/>); null = unreadable.</summary>
+    public bool? MouseAccelerationOn { get; init; }
+    /// <summary>Per enabled profile with an exe path: is FSO already disabled (<see cref="Optimize.OptimizeStatus.FsoStatuses"/>).</summary>
+    public IReadOnlyList<Optimize.GameFsoStatus> FsoStatuses { get; init; } = Array.Empty<Optimize.GameFsoStatus>();
 }
 
 /// <summary>
@@ -264,9 +308,259 @@ public static class RecommendationEngine
             });
         }
 
+        EvaluateDiagnostics(ctx, Emit);
+
         return list
             .OrderByDescending(r => r.Severity)
             .ToList();
+    }
+
+    public const string IdGpuThrottle = "rec.gpu.throttle";
+    public const string IdDiskLow = "rec.disk.low";
+    public const string IdDriverOld = "rec.driver.old";
+    public const string IdCrashEvents = "rec.crash.events";
+    public const string IdRamHigh = "rec.ram.high";
+    public const string IdGameBarOff = "rec.gamebar.off";
+    public const string IdMouseAccel = "rec.mouse.accel";
+    public const string IdFsoGame = "rec.fso.game";
+
+    private const GpuThrottleFlags ThrottleWorthWarning =
+        GpuThrottleFlags.Thermal | GpuThrottleFlags.Power | GpuThrottleFlags.InsufficientPower;
+
+    private static string Num(double v, string fmt = "0.#") => v.ToString(fmt, CultureInfo.InvariantCulture);
+
+    /// <summary>Rules over measured diagnostics. Every emitted item carries raw evidence; nothing is inferred from missing data.</summary>
+    private static void EvaluateDiagnostics(RecommendationContext ctx, Action<Recommendation> emit)
+    {
+        // GPU thermal / power throttling observed (live snapshot first, health report as fallback).
+        if (ctx.Sensors != null)
+        {
+            foreach (var g in ctx.Sensors.Gpus)
+            {
+                if (!g.Throttle.HasValue) continue;
+                var flags = g.Throttle.Value!.Value & ThrottleWorthWarning;
+                if (flags == GpuThrottleFlags.None) continue;
+                var evidence = new List<string> { "gpu: " + g.Name, "throttle: " + flags };
+                if (g.TemperatureC.HasValue) evidence.Add("temp: " + g.TemperatureC.Value!.Value + " °C");
+                if (g.PowerPercent.HasValue) evidence.Add("power: " + Num(g.PowerPercent.Value!.Value, "0") + " %");
+                if (g.CoreClockMhz.HasValue) evidence.Add("core: " + g.CoreClockMhz.Value!.Value + " MHz");
+                emit(new Recommendation
+                {
+                    Id = IdGpuThrottle,
+                    Severity = RecommendationSeverity.Warning,
+                    TitleKey = "rec.gpu.throttle.title",
+                    BodyKey = "rec.gpu.throttle.body",
+                    BodyArgs = new[] { g.Name, flags.ToString() },
+                    Action = RecommendationAction.OpenSystem,
+                    ActionKey = "rec.gpu.throttle.action",
+                    Evidence = evidence.ToArray(),
+                    WhyKey = "rec.gpu.throttle.why",
+                    RiskKey = "rec.gpu.throttle.risk",
+                    UndoKey = "rec.none.undo"
+                });
+            }
+        }
+        else if (ctx.Health != null)
+        {
+            foreach (var f in ctx.Health.Findings.Where(f => f.Component == "gpu.throttle" && f.Status >= HealthStatus.Warn))
+            {
+                emit(new Recommendation
+                {
+                    Id = IdGpuThrottle,
+                    Severity = RecommendationSeverity.Warning,
+                    TitleKey = "rec.gpu.throttle.title",
+                    BodyKey = "rec.gpu.throttle.body",
+                    BodyArgs = new[] { f.Subject ?? "", f.Detail ?? "" },
+                    Action = RecommendationAction.OpenSystem,
+                    ActionKey = "rec.gpu.throttle.action",
+                    Evidence = new[] { "gpu: " + (f.Subject ?? "?"), "throttle: " + (f.Detail ?? "?") },
+                    WhyKey = "rec.gpu.throttle.why",
+                    RiskKey = "rec.gpu.throttle.risk",
+                    UndoKey = "rec.none.undo"
+                });
+            }
+        }
+
+        // Disk < 10 % free (per volume).
+        if (ctx.Sensors != null)
+        {
+            foreach (var d in ctx.Sensors.Drives)
+            {
+                if (d.TotalBytes <= 0) continue;
+                double free = d.FreePercent;
+                if (free >= HealthEvaluator.DiskFreeWarnPercent) continue;
+                emit(new Recommendation
+                {
+                    Id = IdDiskLow,
+                    Severity = RecommendationSeverity.Warning,
+                    TitleKey = "rec.disk.low.title",
+                    BodyKey = "rec.disk.low.body",
+                    BodyArgs = new[] { d.Name, Num(Math.Floor(free), "0") },
+                    Action = RecommendationAction.OpenSystem,
+                    ActionKey = "rec.disk.low.action",
+                    Evidence = new[]
+                    {
+                        "drive: " + d.Name,
+                        "free: " + Num(free) + " %",
+                        "free: " + Num(d.FreeBytes / (1024.0 * 1024 * 1024)) + " GB",
+                        "total: " + Num(d.TotalBytes / (1024.0 * 1024 * 1024)) + " GB"
+                    },
+                    WhyKey = "rec.disk.low.why",
+                    RiskKey = "rec.disk.low.risk",
+                    UndoKey = "rec.none.undo"
+                });
+            }
+        }
+
+        // GPU driver older than 12 months — info only, never a download.
+        if (ctx.Inventory != null)
+        {
+            foreach (var g in ctx.Inventory.Gpus)
+            {
+                if (g.DriverDate is not { } date || !HealthEvaluator.IsDriverOld(date, ctx.NowUtc)) continue;
+                int months = Math.Max(0, (ctx.NowUtc.Year - date.Year) * 12 + ctx.NowUtc.Month - date.Month);
+                emit(new Recommendation
+                {
+                    Id = IdDriverOld,
+                    Severity = RecommendationSeverity.Info,
+                    TitleKey = "rec.driver.old.title",
+                    BodyKey = "rec.driver.old.body",
+                    BodyArgs = new[] { g.Name, g.DriverVersion ?? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), months.ToString(CultureInfo.InvariantCulture) },
+                    Action = RecommendationAction.None,
+                    Evidence = new[]
+                    {
+                        "gpu: " + g.Name,
+                        "driver: " + (g.DriverVersion ?? "?"),
+                        "date: " + date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        "age: " + months + " mo"
+                    },
+                    WhyKey = "rec.driver.old.why",
+                    RiskKey = "rec.driver.old.risk",
+                    UndoKey = "rec.none.undo"
+                });
+            }
+        }
+
+        // WHEA / Kernel-Power events in the window.
+        if (ctx.Crashes != null && ctx.Crashes.Reason == UnavailableReason.None)
+        {
+            int shutdowns = ctx.Crashes.Count(CrashEventKind.UnexpectedShutdown);
+            int wheaFatal = ctx.Crashes.Count(CrashEventKind.WheaFatal);
+            int wheaCorrected = ctx.Crashes.Count(CrashEventKind.WheaCorrected);
+            int serious = shutdowns + wheaFatal + (wheaCorrected >= HealthEvaluator.WheaCorrectedWarnCount ? wheaCorrected : 0);
+            if (serious > 0)
+            {
+                int days = Math.Max(1, (int)Math.Round((ctx.Crashes.ToUtc - ctx.Crashes.FromUtc).TotalDays));
+                var evidence = new List<string> { "window: " + days + " d" };
+                if (shutdowns > 0) evidence.Add("kernelPower41: " + shutdowns);
+                if (wheaFatal > 0) evidence.Add("wheaFatal: " + wheaFatal);
+                if (wheaCorrected > 0) evidence.Add("wheaCorrected: " + wheaCorrected);
+                var last = new[] { ctx.Crashes.Last(CrashEventKind.UnexpectedShutdown), ctx.Crashes.Last(CrashEventKind.WheaFatal) }
+                    .Where(d => d != null).Max();
+                if (last != null) evidence.Add("last: " + last.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                emit(new Recommendation
+                {
+                    Id = IdCrashEvents,
+                    Severity = RecommendationSeverity.Warning,
+                    TitleKey = "rec.crash.events.title",
+                    BodyKey = "rec.crash.events.body",
+                    BodyArgs = new[] { serious.ToString(CultureInfo.InvariantCulture), days.ToString(CultureInfo.InvariantCulture) },
+                    Action = RecommendationAction.OpenSystem,
+                    ActionKey = "rec.crash.events.action",
+                    Evidence = evidence.ToArray(),
+                    WhyKey = "rec.crash.events.why",
+                    RiskKey = "rec.crash.events.risk",
+                    UndoKey = "rec.none.undo"
+                });
+            }
+        }
+
+        // RAM ≥ 90 % while a game runs.
+        if (ctx.GameRunning && ctx.Sensors?.RamUsedPercent.HasValue == true)
+        {
+            double p = ctx.Sensors.RamUsedPercent.Value!.Value;
+            if (p >= HealthEvaluator.RamUsedWarnPercent)
+            {
+                emit(new Recommendation
+                {
+                    Id = IdRamHigh,
+                    Severity = RecommendationSeverity.Warning,
+                    TitleKey = "rec.ram.high.title",
+                    BodyKey = "rec.ram.high.body",
+                    Action = RecommendationAction.OpenSystem,
+                    ActionKey = "rec.ram.high.action",
+                    Evidence = new[]
+                    {
+                        "used: " + Num(p, "0") + " %",
+                        "used: " + Num(ctx.Sensors.RamUsedBytes / (1024.0 * 1024 * 1024)) + " GB",
+                        "total: " + Num(ctx.Sensors.RamTotalBytes / (1024.0 * 1024 * 1024)) + " GB"
+                    },
+                    WhyKey = "rec.ram.high.why",
+                    RiskKey = "rec.ram.high.risk",
+                    UndoKey = "rec.none.undo"
+                });
+            }
+        }
+
+        // Xbox Game Bar background on while game profiles exist → SafeAction.
+        if (ctx.GameBarBackgroundOn == true && ctx.ProfileCount > 0)
+        {
+            emit(new Recommendation
+            {
+                Id = IdGameBarOff,
+                Severity = RecommendationSeverity.Tip,
+                TitleKey = "rec.gamebar.off.title",
+                BodyKey = "rec.gamebar.off.body",
+                Action = RecommendationAction.SafeActionGameBarOff,
+                ActionKey = "rec.gamebar.off.action",
+                SafeActionId = Optimize.GameBarSafeActionTarget.Id,
+                Evidence = new[] { "profiles: " + ctx.ProfileCount, "gameBarBackground: on" },
+                WhyKey = "optimize.gameBar.off.why",
+                RiskKey = "optimize.gameBar.off.risk",
+                UndoKey = "optimize.gameBar.off.undo"
+            });
+        }
+
+        // Mouse acceleration on → SafeAction.
+        if (ctx.MouseAccelerationOn == true)
+        {
+            emit(new Recommendation
+            {
+                Id = IdMouseAccel,
+                Severity = RecommendationSeverity.Tip,
+                TitleKey = "rec.mouse.accel.title",
+                BodyKey = "rec.mouse.accel.body",
+                Action = RecommendationAction.SafeActionMouseAccelOff,
+                ActionKey = "rec.mouse.accel.action",
+                SafeActionId = Optimize.MouseAccelerationSafeActionTarget.Id,
+                Evidence = new[] { "mouseAcceleration: on" },
+                WhyKey = "optimize.mouseAccel.off.why",
+                RiskKey = "optimize.mouseAccel.off.risk",
+                UndoKey = "optimize.mouseAccel.off.undo"
+            });
+        }
+
+        // Fullscreen optimizations still on for an enabled game profile with an exe → per-game SafeAction.
+        foreach (var s in ctx.FsoStatuses)
+        {
+            if (s == null || s.FsoDisabled != false || string.IsNullOrWhiteSpace(s.ExePath)) continue;
+            emit(new Recommendation
+            {
+                Id = IdFsoGame,
+                Severity = RecommendationSeverity.Tip,
+                TitleKey = "rec.fso.game.title",
+                BodyKey = "rec.fso.game.body",
+                BodyArgs = new[] { string.IsNullOrWhiteSpace(s.ProfileName) ? s.ExePath : s.ProfileName },
+                Action = RecommendationAction.SafeActionFsoForGame,
+                ActionKey = "rec.fso.game.action",
+                SafeActionId = Optimize.FullscreenOptimizationSafeActionTarget.ActionIdFor(s.ExePath),
+                Scope = SafeActionScope.PerGame(s.ExePath),
+                Evidence = new[] { "exe: " + s.ExePath, "fso: enabled" },
+                WhyKey = "optimize.fso.why",
+                RiskKey = "optimize.fso.risk",
+                UndoKey = "optimize.fso.undo"
+            });
+        }
     }
 
     /// <summary>Clears every dismissal so all suggestions show again.</summary>

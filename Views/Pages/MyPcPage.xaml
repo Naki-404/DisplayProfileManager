@@ -1,0 +1,244 @@
+<local:ShellPageBase x:Class="Visor.MyPcPage"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Visor"
+        xmlns:controls="clr-namespace:Visor.Controls">
+    <local:ShellPageBase.Resources>
+        <Style x:Key="HwCard" TargetType="Border" BasedOn="{StaticResource CardSurface}">
+            <Setter Property="Padding" Value="14"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+        <Style x:Key="HwName" TargetType="TextBlock" BasedOn="{StaticResource CardValue}">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="TextWrapping" Value="NoWrap"/>
+        </Style>
+        <Style x:Key="HwLine" TargetType="TextBlock" BasedOn="{StaticResource CardCaption}">
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+        <Style x:Key="HwMuted" TargetType="TextBlock" BasedOn="{StaticResource CardCaption}">
+            <Setter Property="Margin" Value="0,2,0,0"/>
+        </Style>
+    </local:ShellPageBase.Resources>
+    <!-- My PC: read-only inventory (CPU / memory / GPU / Windows / storage), live hardware cards, busiest processes. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  CanContentScroll="False" PanningMode="VerticalOnly">
+        <StackPanel Margin="0,4,0,8">
+            <DockPanel Margin="0,0,0,10">
+                <Button x:Name="BtnSystemRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                        Click="SystemRefresh_Click"/>
+                <TextBlock x:Name="LblSystemOverview" Text="Overview" Style="{StaticResource SubHeader}"
+                           VerticalAlignment="Center" Margin="0"/>
+            </DockPanel>
+
+            <UniformGrid Columns="2" Margin="0,0,0,12">
+                <Border Style="{StaticResource CardSurface}" Margin="0,0,6,12" Padding="14">
+                    <StackPanel>
+                        <TextBlock x:Name="LblSystemCpu" Text="CPU" Style="{StaticResource CardCaption}"/>
+                        <TextBlock x:Name="TxtSystemCpu" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardSurface}" Margin="6,0,0,12" Padding="14">
+                    <StackPanel>
+                        <TextBlock x:Name="LblSystemRam" Text="Memory" Style="{StaticResource CardCaption}"/>
+                        <TextBlock x:Name="TxtSystemRam" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,6"/>
+                        <controls:ThinBar x:Name="BarSystemRam" Visibility="Collapsed"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardSurface}" Margin="0,0,6,0" Padding="14">
+                    <StackPanel>
+                        <TextBlock x:Name="LblSystemGpu" Text="GPU" Style="{StaticResource CardCaption}"/>
+                        <TextBlock x:Name="TxtSystemGpu" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource CardSurface}" Margin="6,0,0,0" Padding="14">
+                    <StackPanel>
+                        <TextBlock x:Name="LblSystemOs" Text="Windows" Style="{StaticResource CardCaption}"/>
+                        <TextBlock x:Name="TxtSystemOs" Style="{StaticResource CardValue}" FontSize="14" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <!-- Live hardware cards: inventory (HardwareInventoryService) + 1 Hz sensors (SensorService, only while
+                 this page is live) + health (HealthEvaluator) + crash events (CrashEventReader). Missing values show
+                 "—" with the reason as a tooltip; nothing is estimated. -->
+            <StackPanel x:Name="HardwareCardsHost" Margin="0,0,0,0" SizeChanged="HardwareHost_SizeChanged">
+                <!-- Health summary -->
+                <Border x:Name="CardHealth" Style="{StaticResource HwCard}">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top">
+                            <Button x:Name="BtnHwRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}" Click="HwRefresh_Click"/>
+                            <TextBlock x:Name="TxtHealthChecked" DockPanel.Dock="Right" Style="{StaticResource CardCaption}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <controls:StatusDot x:Name="DotHealthOverall" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                            <TextBlock x:Name="LblHealthTitle" Style="{StaticResource CardTitle}" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <TextBlock x:Name="TxtHwLiveHint" DockPanel.Dock="Bottom" Style="{StaticResource Hint}" Margin="0,8,0,0"/>
+                        <TextBlock x:Name="TxtHealthSkipped" DockPanel.Dock="Bottom" Style="{StaticResource HwMuted}" Margin="0,6,0,0"/>
+                        <StackPanel x:Name="HealthFindings" Margin="0,6,0,0"/>
+                    </DockPanel>
+                </Border>
+
+                <Grid x:Name="HwGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition x:Name="HwGap" Width="12"/>
+                        <ColumnDefinition x:Name="HwColRight" Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Processor -->
+                    <Border x:Name="CardCpu" Style="{StaticResource HwCard}">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Margin="12,0,0,0" VerticalAlignment="Top">
+                                <controls:RingGauge x:Name="GaugeCpu" Width="84" Height="84"/>
+                                <TextBlock x:Name="TxtCpuTemp" Style="{StaticResource CardCaption}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,4,0,0" MaxWidth="110"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="LblCpuTitle" Style="{StaticResource CardTitle}"/>
+                                <TextBlock x:Name="TxtCpuName" Style="{StaticResource HwName}"/>
+                                <TextBlock x:Name="TxtCpuDetail" Style="{StaticResource HwMuted}"/>
+                                <TextBlock x:Name="TxtCpuUtil" Style="{StaticResource HwLine}" Margin="0,10,0,4"/>
+                                <controls:ThinBar x:Name="BarCpu"/>
+                                <controls:Sparkline x:Name="SparkCpu" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Video card -->
+                    <Border x:Name="CardGpu" Style="{StaticResource HwCard}">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Margin="12,0,0,0" VerticalAlignment="Top">
+                                <controls:RingGauge x:Name="GaugeGpu" Width="84" Height="84" Maximum="100"/>
+                                <TextBlock x:Name="TxtGpuPower" Style="{StaticResource CardCaption}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,4,0,0" MaxWidth="110"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="LblGpuTitle" Style="{StaticResource CardTitle}"/>
+                                <TextBlock x:Name="TxtGpuName" Style="{StaticResource HwName}"/>
+                                <TextBlock x:Name="TxtGpuDetail" Style="{StaticResource HwMuted}"/>
+                                <TextBlock x:Name="TxtGpuUtil" Style="{StaticResource HwLine}" Margin="0,10,0,4"/>
+                                <controls:ThinBar x:Name="BarGpu"/>
+                                <controls:Sparkline x:Name="SparkGpu" Margin="0,8,0,0"/>
+                                <TextBlock x:Name="TxtGpuClocks" Style="{StaticResource HwLine}" Margin="0,8,0,0"/>
+                                <TextBlock x:Name="TxtGpuVram" Style="{StaticResource HwMuted}"/>
+                                <DockPanel Margin="0,8,0,0">
+                                    <controls:StatusDot x:Name="DotGpuThrottle" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                    <TextBlock x:Name="TxtGpuThrottle" Style="{StaticResource HwLine}" Margin="0" TextWrapping="Wrap"/>
+                                </DockPanel>
+                                <TextBlock x:Name="TxtGpuOthers" Style="{StaticResource HwMuted}" Visibility="Collapsed"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- RAM -->
+                    <Border x:Name="CardRam" Style="{StaticResource HwCard}">
+                        <DockPanel>
+                            <controls:RingGauge x:Name="GaugeRam" DockPanel.Dock="Right" Width="84" Height="84" Margin="12,0,0,0" VerticalAlignment="Top"/>
+                            <StackPanel>
+                                <TextBlock x:Name="LblRamTitle" Style="{StaticResource CardTitle}"/>
+                                <TextBlock x:Name="TxtRamTotal" Style="{StaticResource HwName}"/>
+                                <TextBlock x:Name="TxtRamDetail" Style="{StaticResource HwMuted}"/>
+                                <TextBlock x:Name="TxtRamUsed" Style="{StaticResource HwLine}" Margin="0,10,0,4"/>
+                                <controls:ThinBar x:Name="BarRam"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Storage -->
+                    <Border x:Name="CardStorage" Style="{StaticResource HwCard}">
+                        <StackPanel>
+                            <TextBlock x:Name="LblStorageTitle" Style="{StaticResource CardTitle}"/>
+                            <TextBlock x:Name="LblStorageDisks" Style="{StaticResource HwMuted}" Margin="0,6,0,0"/>
+                            <StackPanel x:Name="StorageDisks" Margin="0,2,0,0"/>
+                            <TextBlock x:Name="TxtStorageDisksEmpty" Style="{StaticResource HwMuted}" Visibility="Collapsed"/>
+                            <TextBlock x:Name="LblStorageVolumes" Style="{StaticResource HwMuted}" Margin="0,10,0,0"/>
+                            <StackPanel x:Name="StorageVolumes" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Motherboard / BIOS -->
+                    <Border x:Name="CardBoard" Style="{StaticResource HwCard}">
+                        <StackPanel>
+                            <TextBlock x:Name="LblBoardTitle" Style="{StaticResource CardTitle}"/>
+                            <TextBlock x:Name="TxtBoardName" Style="{StaticResource HwName}"/>
+                            <TextBlock x:Name="TxtBiosDetail" Style="{StaticResource HwMuted}"/>
+                            <TextBlock x:Name="TxtMonitors" Style="{StaticResource HwMuted}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Windows -->
+                    <Border x:Name="CardOs" Style="{StaticResource HwCard}">
+                        <StackPanel>
+                            <TextBlock x:Name="LblOsTitle" Style="{StaticResource CardTitle}"/>
+                            <TextBlock x:Name="TxtOsLabel" Style="{StaticResource HwName}"/>
+                            <TextBlock x:Name="TxtOsUptime" Style="{StaticResource HwMuted}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Stability (crash events) -->
+                    <Border x:Name="CardStability" Style="{StaticResource HwCard}">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top">
+                                <Button x:Name="BtnEventViewer" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="EventViewer_Click"/>
+                                <controls:StatusDot x:Name="DotStability" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="LblStabilityTitle" Style="{StaticResource CardTitle}" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtStabilitySummary" Style="{StaticResource HwName}"/>
+                                <TextBlock x:Name="TxtStabilityWindow" Style="{StaticResource HwMuted}"/>
+                                <StackPanel x:Name="StabilityRows" Margin="0,6,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+
+            <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="LblSystemDisks" Text="Storage" Style="{StaticResource SubHeader}" Margin="0,0,0,6"/>
+                    <StackPanel x:Name="SystemDiskList"/>
+                    <TextBlock x:Name="TxtSystemDisksEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardSurface}" Padding="14">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Button x:Name="BtnProcessRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                Click="ProcessRefresh_Click"/>
+                        <TextBlock x:Name="LblSystemProcesses" Text="Background processes" Style="{StaticResource SubHeader}"
+                                   VerticalAlignment="Center" Margin="0"/>
+                    </DockPanel>
+                    <TextBlock x:Name="TxtProcessHint" DockPanel.Dock="Top" Style="{StaticResource Hint}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="TxtProcessEmpty" DockPanel.Dock="Top" Style="{StaticResource Hint}" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                    <ListBox x:Name="ProcessList" MaxHeight="280">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Title}"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CpuText}" Foreground="{DynamicResource MutedBrush}" Margin="12,0,0,0"/>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding RamText}" Foreground="{DynamicResource MutedBrush}" Margin="12,0,0,0"/>
+                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextBrush}"/>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</local:ShellPageBase>

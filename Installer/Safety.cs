@@ -23,6 +23,9 @@ internal static class Product
     /// <summary>Key name used by early Visor builds; removed only when it points at our folder.</summary>
     public const string OldArpKeyName = "Visor";
     public const string ShortcutName = "Visor.lnk";
+    /// <summary>Optional Intel PresentMon payload (FPS monitor); bundled only by build-release.ps1 -FetchPresentMon.</summary>
+    public const string PresentMonExe = @"tools\presentmon\PresentMon.exe";
+    public const string PresentMonReadme = @"tools\presentmon\README.md";
     public const string Url = "https://github.com/Naki-404/DisplayProfileManager";
     /// <summary>Named event the app may listen on to exit cleanly (restoring the display first).</summary>
     public const string ExitEventName = @"Local\Visor.ExitRequest";
@@ -189,7 +192,9 @@ internal static class PathGuard
             || r.Equals(Product.ManifestName, StringComparison.OrdinalIgnoreCase)
             || r.Equals(Product.ManifestName + ".tmp", StringComparison.OrdinalIgnoreCase)
             || (r.StartsWith(@"Assets\Sounds\", StringComparison.OrdinalIgnoreCase) && r.IndexOf('\\', 14) < 0)
-            || (r.StartsWith(@"Assets\Packs\", StringComparison.OrdinalIgnoreCase) && r.IndexOf('\\', 13) < 0);
+            || (r.StartsWith(@"Assets\Packs\", StringComparison.OrdinalIgnoreCase) && r.IndexOf('\\', 13) < 0)
+            || r.Equals(Product.PresentMonExe, StringComparison.OrdinalIgnoreCase)
+            || r.Equals(Product.PresentMonReadme, StringComparison.OrdinalIgnoreCase);
     }
 }
 

@@ -95,6 +95,13 @@ public static class ThemeService
         var gradient = new LinearGradientBrush(accent, accentAlt, new System.Windows.Point(0, 0), new System.Windows.Point(1, 1));
         gradient.Freeze();
         WpfApp.Current.Resources["BrandGradientBrush"] = gradient;
+        // Dashboard cards (Stage 1 shell): border + hover border, horizontal cyan → violet accent.
+        var (cardBorder, cardHover) = CardColors(p);
+        Set("CardBorderBrush", cardBorder);
+        Set("CardHoverBrush", cardHover);
+        var accentGradient = new LinearGradientBrush(accent, accentAlt, new System.Windows.Point(0, 0), new System.Windows.Point(1, 0));
+        accentGradient.Freeze();
+        WpfApp.Current.Resources["AccentGradientBrush"] = accentGradient;
 
         SetSystem(System.Windows.SystemColors.WindowBrushKey, Hex(p.Bg));
         SetSystem(System.Windows.SystemColors.ControlBrushKey, Hex(p.Panel));
@@ -212,6 +219,17 @@ public static class ThemeService
         };
     }
 
+    /// <summary>
+    /// Card border at rest and on hover, derived from the palette: the rest border is the palette border, the
+    /// hover border leans toward the accent so a card "lifts" without changing its fill (pure, unit-tested).
+    /// </summary>
+    public static (Color Border, Color Hover) CardColors(ThemePalette p)
+    {
+        var border = Hex(p.Border);
+        var accent = Hex(p.Accent);
+        return (border, Blend(border, accent, 0.35));
+    }
+
     private static void Set(string key, Color c) =>
         WpfApp.Current.Resources[key] = new SolidColorBrush(c);
 
@@ -255,7 +273,8 @@ public static class ThemeService
         return 0.2126 * Lin(c.R) + 0.7152 * Lin(c.G) + 0.0722 * Lin(c.B);
     }
 
-    private static double ContrastRatio(Color a, Color b)
+    /// <summary>WCAG 2.x contrast ratio (1..21).</summary>
+    public static double ContrastRatio(Color a, Color b)
     {
         double l1 = RelativeLuminance(a);
         double l2 = RelativeLuminance(b);

@@ -62,6 +62,28 @@ public readonly record struct SafeActionOutcome(SafeActionResult Result, string?
 
 public readonly record struct SafeActionUndoOutcome(SafeActionUndoResult Result, string? Code = null);
 
+public enum SafeActionScopeKind
+{
+    /// <summary>Affects the whole user profile (HKCU) or the machine state (power plan).</summary>
+    Global,
+    /// <summary>Affects one game exe only (e.g. a compatibility flag keyed by the full exe path).</summary>
+    PerGame
+}
+
+/// <summary>Where a SafeAction applies: globally, or to one game identified by its full exe path.</summary>
+public readonly record struct SafeActionScope(SafeActionScopeKind Kind, string? ExePath)
+{
+    public static readonly SafeActionScope Global = new(SafeActionScopeKind.Global, null);
+
+    public static SafeActionScope PerGame(string exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath)) throw new ArgumentException("exe path required", nameof(exePath));
+        return new SafeActionScope(SafeActionScopeKind.PerGame, exePath);
+    }
+
+    public bool IsPerGame => Kind == SafeActionScopeKind.PerGame;
+}
+
 /// <summary>
 /// A reversible setting the <see cref="SafeActionService"/> can apply and restore. State is an opaque
 /// string the target can serialize and parse itself (exact raw previous state, incl. "value absent").
@@ -76,6 +98,27 @@ public interface ISafeActionTarget
 
     /// <summary>True when applying must be refused while a game session snapshot owns the setting.</summary>
     bool BlockedDuringGameSession { get; }
+
+    /// <summary>Global or per-game (full exe path). Default: global.</summary>
+    SafeActionScope Scope => SafeActionScope.Global;
+
+    /// <summary>
+    /// Loc key prefix for the UI texts: <c>{Prefix}.title</c>, <c>{Prefix}.why</c>, <c>{Prefix}.risk</c>,
+    /// <c>{Prefix}.undo</c>. Per-game targets share one prefix (the exe is a format arg, not a key).
+    /// </summary>
+    string LocPrefix => "optimize." + JournalKey;
+
+    /// <summary>Loc key: what the action does / what it gives (never an FPS promise).</summary>
+    string WhyKey => LocPrefix + ".why";
+
+    /// <summary>Loc key: what could go wrong / side effects.</summary>
+    string RiskKey => LocPrefix + ".risk";
+
+    /// <summary>Loc key: how undo restores the previous state.</summary>
+    string UndoKey => LocPrefix + ".undo";
+
+    /// <summary>Loc key: short title for the action card.</summary>
+    string TitleKey => LocPrefix + ".title";
 
     /// <summary>Exact current raw state, or null when unreadable.</summary>
     string? ReadState();

@@ -1,0 +1,144 @@
+<local:ShellPageBase x:Class="Visor.NetworkPage"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Visor"
+        xmlns:controls="clr-namespace:Visor.Controls">
+    <!-- Network: adapter overview, live throughput, Wi-Fi, ping series, traceroute, diagnosis, 10-echo probe, DNS.
+         Every probe is click-initiated; only the throughput counter read ticks while the page is live. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  CanContentScroll="False" PanningMode="VerticalOnly">
+        <StackPanel Margin="0,4,0,8">
+            <DockPanel Margin="0,0,0,10">
+                <Button x:Name="BtnNetRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                        Click="NetRefresh_Click"/>
+                <TextBlock x:Name="LblNetOverview" Text="Adapter" Style="{StaticResource SubHeader}"
+                           VerticalAlignment="Center" Margin="0"/>
+            </DockPanel>
+
+            <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                <DockPanel>
+                    <controls:StatusDot x:Name="DotNetAdapter" DockPanel.Dock="Left" Margin="0,6,10,0" VerticalAlignment="Top"/>
+                    <StackPanel>
+                        <TextBlock x:Name="TxtNetAdapter" Style="{StaticResource CardValue}" FontSize="14"/>
+                        <TextBlock x:Name="TxtNetDetails" Style="{StaticResource Hint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="TxtNetDns" Style="{StaticResource Hint}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="TxtNetEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- Diagnostics (Stage 4): throughput, Wi-Fi, host picker, ping series, traceroute, diagnose + export. -->
+            <StackPanel x:Name="DiagnosticsHost">
+
+                <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                    <StackPanel>
+                        <DockPanel>
+                            <TextBlock x:Name="TxtNetThroughputRates" DockPanel.Dock="Right" Style="{StaticResource CardValue}"
+                                       FontSize="13" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            <TextBlock x:Name="LblNetThroughput" Style="{StaticResource SubHeader}" Margin="0" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <controls:NetSparkline x:Name="NetThroughputChart" Height="56" Margin="0,8,0,6" Capacity="120" Unit="Mbps"/>
+                        <TextBlock x:Name="TxtNetThroughputHint" Style="{StaticResource Hint}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock x:Name="LblNetWlan" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TxtNetWlanHint" Style="{StaticResource Hint}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="TxtNetWlanSsid" Style="{StaticResource CardValue}" FontSize="14"/>
+                        <DockPanel x:Name="WlanSignalRow" Margin="0,6,0,0">
+                            <TextBlock x:Name="TxtNetWlanSignal" DockPanel.Dock="Right" Style="{StaticResource Hint}"
+                                       Margin="10,0,0,0" VerticalAlignment="Center"/>
+                            <controls:ThinBar x:Name="BarNetWlan" VerticalAlignment="Center" Maximum="100"/>
+                        </DockPanel>
+                        <TextBlock x:Name="TxtNetWlanLink" Style="{StaticResource Hint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="TxtNetWlanUnavailable" Style="{StaticResource Hint}" Visibility="Collapsed" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                    <DockPanel>
+                        <TextBlock x:Name="LblNetHost" DockPanel.Dock="Left" VerticalAlignment="Center"
+                                   Margin="0,0,8,0" Foreground="{DynamicResource MutedBrush}"/>
+                        <TextBlock x:Name="TxtNetHostHint" DockPanel.Dock="Right" Style="{StaticResource Hint}"
+                                   VerticalAlignment="Center" Margin="10,0,0,0" TextWrapping="Wrap"/>
+                        <ComboBox x:Name="CmbNetHost" MinWidth="160" HorizontalAlignment="Left"
+                                  AutomationProperties.LabeledBy="{Binding ElementName=LblNetHost}"/>
+                    </DockPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock x:Name="LblNetSeries" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TxtNetSeriesHint" Style="{StaticResource Hint}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="BtnNetSeriesStart" Style="{StaticResource CompactAccentButton}" Margin="0,0,8,0" Click="NetSeriesStart_Click"/>
+                            <Button x:Name="BtnNetSeriesStop" Style="{StaticResource CompactGhostButton}" Click="NetSeriesStop_Click" IsEnabled="False"/>
+                        </StackPanel>
+                        <controls:NetSparkline x:Name="NetPingChart" Height="64" Margin="0,0,0,6" Capacity="120" Unit="ms"/>
+                        <TextBlock x:Name="TxtNetSeriesStatus" Style="{StaticResource CardValue}" FontSize="13"/>
+                        <TextBlock x:Name="TxtNetSeriesStats" Style="{StaticResource Hint}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock x:Name="LblNetTrace" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TxtNetTraceHint" Style="{StaticResource Hint}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="BtnNetTraceStart" Style="{StaticResource CompactAccentButton}" Margin="0,0,8,0" Click="NetTraceStart_Click"/>
+                            <Button x:Name="BtnNetTraceStop" Style="{StaticResource CompactGhostButton}" Click="NetTraceStop_Click" IsEnabled="False"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TxtNetTraceStatus" Style="{StaticResource Hint}" Margin="0,0,0,6" TextWrapping="Wrap"/>
+                        <StackPanel x:Name="NetTraceRows"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock x:Name="LblNetDiag" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TxtNetDiagHint" Style="{StaticResource Hint}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                        <WrapPanel Margin="0,0,0,8">
+                            <Button x:Name="BtnNetDiagnose" Style="{StaticResource CompactAccentButton}" Margin="0,0,8,4" Click="NetDiagnose_Click"/>
+                            <Button x:Name="BtnNetDiagnoseCancel" Style="{StaticResource CompactGhostButton}" Margin="0,0,16,4" Click="NetDiagnoseCancel_Click" IsEnabled="False"/>
+                            <Button x:Name="BtnNetExport" Style="{StaticResource CompactGhostButton}" Margin="0,0,8,4" Click="NetExport_Click"/>
+                            <CheckBox x:Name="ChkNetExportIds" VerticalAlignment="Center" Margin="0,0,0,4" IsChecked="False"/>
+                        </WrapPanel>
+                        <TextBlock x:Name="TxtNetDiagStatus" Style="{StaticResource Hint}" Margin="0,0,0,6" TextWrapping="Wrap"/>
+                        <StackPanel x:Name="NetFindings"/>
+                        <TextBlock x:Name="TxtNetDiagEmpty" Style="{StaticResource Hint}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="LblNetLatency" Text="Latency probe" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtNetLatencyHint" Style="{StaticResource Hint}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button x:Name="BtnNetPingStart" Style="{StaticResource CompactAccentButton}" Margin="0,0,8,0" Click="NetPingStart_Click"/>
+                        <Button x:Name="BtnNetPingStop" Style="{StaticResource CompactGhostButton}" Click="NetPingStop_Click" IsEnabled="False"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtNetPingSummary" Style="{StaticResource CardValue}" FontSize="14"/>
+                    <TextBlock x:Name="TxtNetPingDetail" Style="{StaticResource Hint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="TxtNetJitterNote" Style="{StaticResource Hint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardSurface}" Padding="14">
+                <StackPanel>
+                    <TextBlock x:Name="LblNetDns" Text="DNS resolve" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtNetDnsHint" Style="{StaticResource Hint}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button x:Name="BtnNetDns" Style="{StaticResource CompactAccentButton}" Margin="0,0,8,0" Click="NetDns_Click"/>
+                        <Button x:Name="BtnNetDnsStop" Style="{StaticResource CompactGhostButton}" Click="NetDnsStop_Click" IsEnabled="False"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtNetDnsStatus" Style="{StaticResource Hint}" Margin="0,0,0,6" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="NetDnsResults"/>
+                    <TextBlock x:Name="TxtNetDnsEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</local:ShellPageBase>

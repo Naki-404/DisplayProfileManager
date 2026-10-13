@@ -63,6 +63,16 @@ public sealed class UiPreferences
     /// <summary>Center-screen Magnification zoom factor (2–12). Used with GlobalHotkeys.ToggleZoom.</summary>
     public int ZoomFactor { get; set; } = 4;
 
+    /// <summary>Top-bar "Tooltip mode": every control next to an ⓘ hint shows the explanation on hover.</summary>
+    public bool TooltipMode { get; set; }
+    /// <summary>Nav rail collapsed to icons only (56 DIP).</summary>
+    public bool SidebarCollapsed { get; set; }
+
+    /// <summary>User-configured PresentMon.exe (file or folder) for the FPS monitor; null = default folders only.</summary>
+    public string? PresentMonPath { get; set; }
+    /// <summary>Small FPS / 1 % low / frametime overlay on the game's monitor while a capture runs.</summary>
+    public bool MonitorOsdEnabled { get; set; } = true;
+
     public UiPreferences Clone() => new()
     {
         Locale = Locale,
@@ -87,7 +97,11 @@ public sealed class UiPreferences
         UiSoundsEnabled = UiSoundsEnabled,
         UiSoundVolume = UiSoundVolume,
         MuteSoundsInGame = MuteSoundsInGame,
-        ZoomFactor = ZoomFactor
+        ZoomFactor = ZoomFactor,
+        TooltipMode = TooltipMode,
+        SidebarCollapsed = SidebarCollapsed,
+        PresentMonPath = PresentMonPath,
+        MonitorOsdEnabled = MonitorOsdEnabled
     };
 }
 
