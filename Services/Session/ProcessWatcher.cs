@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Management;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
 /// Watches only configured game exe names (name presence). Does not open game
 /// process handles or inject — anti-cheat friendly process presence check.
+/// Events carry the normalized key (<see cref="ProcessNames.Key"/>). "Stopped" is raised only
+/// when no instance of that exe is left.
 /// </summary>
 public sealed class ProcessWatcher : IDisposable
 {
@@ -15,7 +17,11 @@ public sealed class ProcessWatcher : IDisposable
     private readonly HashSet<string> _watch = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _seen = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
-    private bool _paused;
+    private volatile bool _paused;
+    private volatile bool _disposed;
+    private int _polling;
+    private int _pollRequested;
+    private const int PollIntervalMs = 2000;
 
     public event Action<string>? ProcessStarted;
     public event Action<string>? ProcessStopped;
@@ -30,31 +36,25 @@ public sealed class ProcessWatcher : IDisposable
     {
         lock (_gate)
         {
-            var previous = new HashSet<string>(_watch, StringComparer.OrdinalIgnoreCase);
             _watch.Clear();
             foreach (var raw in processNames)
             {
-                var n = Normalize(raw);
-                if (!string.IsNullOrWhiteSpace(n))
-                    _watch.Add(n);
+                var key = ProcessNames.Key(raw);
+                if (key.Length > 0)
+                    _watch.Add(key);
             }
 
-            // Reseed _seen only for names that were already watched.
-            // Newly added names that are already running stay out of _seen so Poll
-            // fires ProcessStarted (autosave watch-list refresh).
-            _seen.Clear();
-            foreach (var name in _watch)
-            {
-                if (!IsBareRunning(Bare(name))) continue;
-                if (previous.Contains(name))
-                    _seen.Add(name);
-            }
+            // Keep what Poll already knows for names still watched (no live re-query here — that
+            // could swallow a start/stop inside the poll window). Newly added names that are
+            // already running are not in _seen, so the next Poll raises ProcessStarted for them.
+            _seen.IntersectWith(_watch);
         }
     }
 
     public void Start()
     {
         Stop();
+        _disposed = false;
         try
         {
             _startWatcher = new ManagementEventWatcher(new WqlEventQuery("SELECT * FROM Win32_ProcessStartTrace"));
@@ -74,17 +74,18 @@ public sealed class ProcessWatcher : IDisposable
 
         // Always poll watch-list only (cheap GetProcessesByName) as reconcile / fallback.
         SeedSeen();
-        _pollTimer = new System.Threading.Timer(_ => Poll(), null, 1500, 2000);
+        _pollTimer = new System.Threading.Timer(_ => Poll(), null, 1500, PollIntervalMs);
     }
 
     public void Stop()
     {
-        try { _startWatcher?.Stop(); _startWatcher?.Dispose(); } catch { }
-        try { _stopWatcher?.Stop(); _stopWatcher?.Dispose(); } catch { }
-        try { _pollTimer?.Dispose(); } catch { }
+        try { _pollTimer?.Change(Timeout.Infinite, Timeout.Infinite); } catch (ObjectDisposedException) { }
+        try { _pollTimer?.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "Poll timer dispose"); }
+        _pollTimer = null;
+        try { _startWatcher?.Stop(); _startWatcher?.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "WMI start watcher stop"); }
+        try { _stopWatcher?.Stop(); _stopWatcher?.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "WMI stop watcher stop"); }
         _startWatcher = null;
         _stopWatcher = null;
-        _pollTimer = null;
     }
 
     private void SeedSeen()
@@ -92,17 +93,39 @@ public sealed class ProcessWatcher : IDisposable
         lock (_gate)
         {
             _seen.Clear();
-            foreach (var name in _watch)
+            foreach (var key in _watch)
             {
-                if (IsBareRunning(Bare(name)))
-                    _seen.Add(name);
+                if (IsKeyRunning(key))
+                    _seen.Add(key);
             }
         }
     }
 
+    /// <summary>
+    /// The only writer of <c>_seen</c>: compares running watched exes with the last poll and raises
+    /// Started / Stopped. Non-reentrant; a request that arrives while polling runs one more pass.
+    /// </summary>
     private void Poll()
     {
-        if (_paused) return;
+        if (_paused || _disposed) return;
+        Interlocked.Exchange(ref _pollRequested, 1);
+        if (Interlocked.Exchange(ref _polling, 1) == 1) return; // the running pass picks it up
+        try
+        {
+            while (Interlocked.Exchange(ref _pollRequested, 0) == 1 && !_disposed)
+                PollOnce();
+        }
+        finally
+        {
+            Volatile.Write(ref _polling, 0);
+        }
+        // A request that raced with the exit above.
+        if (Volatile.Read(ref _pollRequested) == 1 && !_disposed)
+            ThreadPool.QueueUserWorkItem(_ => Poll());
+    }
+
+    private void PollOnce()
+    {
         try
         {
             List<string> watchCopy;
@@ -110,20 +133,20 @@ public sealed class ProcessWatcher : IDisposable
             if (watchCopy.Count == 0) return;
 
             var current = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var name in watchCopy)
+            foreach (var key in watchCopy)
             {
-                if (IsBareRunning(Bare(name)))
-                    current.Add(name);
+                if (IsKeyRunning(key))
+                    current.Add(key);
             }
 
             List<string> started;
             List<string> stopped;
             lock (_gate)
             {
-                started = current.Except(_seen, StringComparer.OrdinalIgnoreCase).ToList();
-                stopped = _seen.Except(current, StringComparer.OrdinalIgnoreCase).ToList();
-                _seen.Clear();
-                foreach (var c in current) _seen.Add(c);
+                started = current.Where(k => _watch.Contains(k) && !_seen.Contains(k)).ToList();
+                stopped = _seen.Where(k => !current.Contains(k)).ToList();
+                foreach (var k in started) _seen.Add(k);
+                foreach (var k in stopped) _seen.Remove(k);
             }
 
             foreach (var s in started) ProcessStarted?.Invoke(s);
@@ -135,39 +158,41 @@ public sealed class ProcessWatcher : IDisposable
         }
     }
 
+    /// <summary>WMI start event for a watched exe → poll now.</summary>
     private void OnStart(object sender, EventArrivedEventArgs e)
     {
-        if (_paused) return;
-        var name = e.NewEvent["ProcessName"]?.ToString();
-        if (string.IsNullOrWhiteSpace(name)) return;
-        var norm = Normalize(name);
-        lock (_gate)
-        {
-            if (!_watch.Contains(norm)) return;
-            if (!_seen.Add(norm)) return;
-        }
-        ProcessStarted?.Invoke(norm);
+        if (_paused || _disposed) return;
+        if (IsWatched(e)) TriggerPoll(0);
     }
 
+    /// <summary>
+    /// WMI stop event for a watched exe → poll shortly (the exiting process can still be listed for
+    /// a moment). Poll raises Stopped only when no instance of the exe is left.
+    /// </summary>
     private void OnStop(object sender, EventArrivedEventArgs e)
     {
-        if (_paused) return;
-        var name = e.NewEvent["ProcessName"]?.ToString();
-        if (string.IsNullOrWhiteSpace(name)) return;
-        var norm = Normalize(name);
-        lock (_gate)
-        {
-            if (!_watch.Contains(norm)) return;
-            if (!_seen.Remove(norm)) return;
-        }
-        ProcessStopped?.Invoke(norm);
+        if (_paused || _disposed) return;
+        if (IsWatched(e)) TriggerPoll(300);
+    }
+
+    private bool IsWatched(EventArrivedEventArgs e)
+    {
+        var key = ProcessNames.Key(e.NewEvent["ProcessName"]?.ToString());
+        if (key.Length == 0) return false;
+        lock (_gate) return _watch.Contains(key);
+    }
+
+    private void TriggerPoll(int dueMs)
+    {
+        try { _pollTimer?.Change(dueMs, PollIntervalMs); }
+        catch (ObjectDisposedException) { }
     }
 
     public static bool IsProcessRunning(string processName)
     {
         try
         {
-            return IsBareRunning(Bare(Normalize(processName)));
+            return IsKeyRunning(ProcessNames.Key(processName));
         }
         catch
         {
@@ -186,16 +211,17 @@ public sealed class ProcessWatcher : IDisposable
                 if (!string.IsNullOrWhiteSpace(p.ProcessName))
                     set.Add(p.ProcessName + ".exe");
             }
-            catch { }
+            catch (InvalidOperationException) { /* exited */ }
             finally { p.Dispose(); }
         }
         return set;
     }
 
-    private static bool IsBareRunning(string bare)
+    /// <summary>Key is lower-case without ".exe" — GetProcessesByName is case-insensitive.</summary>
+    private static bool IsKeyRunning(string key)
     {
-        if (string.IsNullOrWhiteSpace(bare)) return false;
-        var procs = Process.GetProcessesByName(bare);
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        var procs = Process.GetProcessesByName(key);
         try
         {
             return procs.Length > 0;
@@ -206,18 +232,9 @@ public sealed class ProcessWatcher : IDisposable
         }
     }
 
-    private static string Normalize(string name)
+    public void Dispose()
     {
-        name = name.Trim();
-        if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            name += ".exe";
-        return name.ToLowerInvariant();
+        _disposed = true;
+        Stop();
     }
-
-    private static string Bare(string normalizedExe) =>
-        normalizedExe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            ? normalizedExe[..^4]
-            : normalizedExe;
-
-    public void Dispose() => Stop();
 }

@@ -1,24 +1,27 @@
 using System.IO;
-using System.Windows.Media.Imaging;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>Loads embedded pack:// assets.</summary>
 public static class AssetLoader
 {
     private const string PackRoot = "pack://application:,,,/Assets/";
 
-    public static BitmapImage? Image(string fileName)
+    /// <summary>Best-fitting frame of Assets/app.ico (ICO frame order is not guaranteed).</summary>
+    public static System.Windows.Media.ImageSource? AppIcon(int desiredPx = 64)
     {
         try
         {
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.UriSource = new Uri(PackRoot + fileName, UriKind.Absolute);
-            bmp.EndInit();
-            bmp.Freeze();
-            return bmp;
+            var decoder = System.Windows.Media.Imaging.BitmapDecoder.Create(
+                new Uri(PackRoot + "app.ico", UriKind.Absolute),
+                System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+            var frame = decoder.Frames
+                .OrderBy(f => f.PixelWidth >= desiredPx ? 0 : 1)
+                .ThenBy(f => Math.Abs(f.PixelWidth - desiredPx))
+                .FirstOrDefault();
+            frame?.Freeze();
+            return frame;
         }
         catch
         {

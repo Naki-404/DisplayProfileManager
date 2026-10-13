@@ -1,10 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using DisplayProfileManager.Models;
-using DisplayProfileManager.Services;
+using Visor.Models;
+using Visor.Services;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
 public partial class CustomThemeWindow : Window
 {
@@ -47,7 +47,13 @@ public partial class CustomThemeWindow : Window
         Opacity = 0;
         Loaded += (_, _) => UiMotion.PopIn(this);
         _working = initial.Clone();
-        _originalSnapshot = ThemeService.Resolve(App.Services.Config.Current.Ui ?? new UiPreferences()).Clone();
+        // Revert to what was on screen before this dialog (may itself be an unsaved preview).
+        _originalSnapshot = initial.Clone();
+        Closing += (_, _) =>
+        {
+            if (ResultPalette == null)
+                ThemeService.ApplyPalette(_originalSnapshot);
+        };
         BuildFields();
         ApplyLabels();
         LiveApply();
@@ -55,11 +61,18 @@ public partial class CustomThemeWindow : Window
 
     private void ApplyLabels()
     {
-        TxtTitle.Text = Loc.Locale == "ru" ? "Своя палитра" : "Custom palette";
-        LblPreview.Text = Loc.Locale == "ru" ? "Превью" : "Preview";
-        BtnReset.Content = Loc.Locale == "ru" ? "Сброс" : "Reset defaults";
+        Title = Loc.T("palette.title");
+        TxtTitle.Text = Loc.T("palette.title");
+        LblPreview.Text = Loc.T("palette.preview");
+        BtnReset.Content = Loc.T("palette.reset");
         BtnCancel.Content = Loc.T("btn.cancel");
         BtnOk.Content = Loc.T("btn.ok");
+        BtnCaptionClose.ToolTip = Loc.T("btn.close");
+        SmpAccent.Content = Loc.T("palette.sample.accent");
+        SmpGhost.Content = Loc.T("palette.sample.ghost");
+        SmpCheck.Content = Loc.T("palette.sample.check");
+        SmpMuted.Text = Loc.T("palette.sample.muted");
+        SmpField.Text = Loc.T("palette.sample.field");
     }
 
     private void BuildFields()
@@ -140,7 +153,7 @@ public partial class CustomThemeWindow : Window
 
     private void Reset_Click(object sender, RoutedEventArgs e)
     {
-        _working = ThemeService.SeedCustom("#7EB8D4", "#0F1216");
+        _working = ThemeService.DefaultCustom();
         foreach (var f in Fields)
         {
             if (_boxes.TryGetValue(f.Key, out var box))
@@ -159,7 +172,6 @@ public partial class CustomThemeWindow : Window
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
-        ThemeService.ApplyPalette(_originalSnapshot);
         DialogResult = false;
         Close();
     }

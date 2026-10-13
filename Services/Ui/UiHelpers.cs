@@ -10,9 +10,9 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using DisplayProfileManager.Models;
+using Visor.Models;
 
-namespace DisplayProfileManager;
+namespace Visor;
 /// <summary>Short one-shot UI motion — Cubic/Back ease, no continuous timers after playback.</summary>
 internal static class UiMotion
 {
@@ -23,14 +23,6 @@ internal static class UiMotion
 
     private static DispatcherTimer? _toastHold;
     private static int _toastGen;
-
-    public static void FadeIn(UIElement element, double to = 1.0, int ms = 180)
-    {
-        if (element == null) return;
-        element.Opacity = 0;
-        element.BeginAnimation(UIElement.OpacityProperty,
-            new DoubleAnimation(0, to, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseOut });
-    }
 
     public static void FadeTo(UIElement element, double to, Action? onCompleted = null, int ms = 160)
     {
@@ -132,19 +124,26 @@ internal static class UiMotion
             new DoubleAnimation(scale.ScaleY, 0.96, TimeSpan.FromMilliseconds(ms)) { EasingFunction = EaseIn });
     }
 
-    /// <summary>Non-modal toast: rise + fade in, hold, fade out.</summary>
-    public static void ShowToast(FrameworkElement host, TextBlock? label = null, string? text = null, int holdMs = 1300)
+    /// <summary>Reading time for a toast: ~60 ms per character, clamped to 1.5–5 s.</summary>
+    public static int ToastHoldMs(string? text)
+    {
+        int len = string.IsNullOrEmpty(text) ? 0 : text.Length;
+        return Math.Clamp(len * 60, 1500, 5000);
+    }
+
+    /// <summary>Non-modal toast: rise + fade in, hold (scaled by text length unless given), fade out.</summary>
+    public static void ShowToast(FrameworkElement host, TextBlock? label = null, string? text = null, int? holdMs = null)
     {
         if (host == null) return;
         if (label != null && text != null)
             label.Text = text;
+        int hold = holdMs ?? ToastHoldMs(text ?? label?.Text);
 
         _toastHold?.Stop();
         int gen = ++_toastGen;
 
         EnsureTranslate(host, out var tt);
         host.Visibility = Visibility.Visible;
-        host.IsHitTestVisible = false;
         host.Opacity = 0;
         tt.Y = 14;
 
@@ -154,7 +153,7 @@ internal static class UiMotion
         fadeIn.Completed += (_, _) =>
         {
             if (gen != _toastGen) return;
-            _toastHold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(holdMs) };
+            _toastHold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(hold) };
             _toastHold.Tick += (_, _) =>
             {
                 _toastHold.Stop();
@@ -178,6 +177,21 @@ internal static class UiMotion
 
         host.BeginAnimation(UIElement.OpacityProperty, fadeIn);
         tt.BeginAnimation(TranslateTransform.YProperty, slideIn);
+    }
+
+    /// <summary>Dismisses the current toast immediately (e.g. after Undo was clicked).</summary>
+    public static void HideToast(FrameworkElement host)
+    {
+        if (host == null) return;
+        _toastHold?.Stop();
+        int gen = ++_toastGen;
+        var fadeOut = new DoubleAnimation(host.Opacity, 0, TimeSpan.FromMilliseconds(140)) { EasingFunction = EaseIn };
+        fadeOut.Completed += (_, _) =>
+        {
+            if (gen == _toastGen)
+                host.Visibility = Visibility.Collapsed;
+        };
+        host.BeginAnimation(UIElement.OpacityProperty, fadeOut);
     }
 
     private static void EnsureTranslate(FrameworkElement element, out TranslateTransform tt)
@@ -246,9 +260,10 @@ public static class GameVisuals
         }
         else
         {
-            var seed = Math.Abs((profile.Name + process).GetHashCode());
+            // Deterministic across runs (string.GetHashCode is randomized per process).
+            uint seed = StableHash(profile.Name + "|" + process);
             // Cool blue-gray band (slate accent family) instead of full rainbow hue.
-            var hue = 195 + seed % 50;
+            var hue = 195 + (int)(seed % 50);
             profile.Glyph = string.IsNullOrWhiteSpace(profile.Name)
                 ? "?"
                 : profile.Name.Trim()[..1].ToUpperInvariant();
@@ -260,6 +275,20 @@ public static class GameVisuals
             profile.Icon = TryGetExeIcon(path!);
         else
             profile.Icon = null;
+    }
+
+    /// <summary>FNV-1a over the lower-cased string — stable between launches, never negative.</summary>
+    public static uint StableHash(string? text)
+    {
+        const uint offset = 2166136261;
+        const uint prime = 16777619;
+        uint hash = offset;
+        foreach (char ch in (text ?? "").ToLowerInvariant())
+        {
+            hash ^= ch;
+            hash *= prime;
+        }
+        return hash;
     }
 
     public static void ApplyAll(IEnumerable<GameProfile> profiles)
@@ -352,30 +381,135 @@ public sealed class InvertNullToVisibilityConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-/// <summary>Slate tray menu — even rows, no crooked padding.</summary>
+/// <summary>
+/// Picks readable text (light or dark) for a game tile based on the tile brush luminance.
+/// The left part of the 45° gradient sits under the text, so the first stop is weighted more.
+/// </summary>
+public sealed class TileForegroundConverter : IValueConverter
+{
+    private static readonly SolidColorBrush Light = Frozen(System.Windows.Media.Color.FromRgb(0xF5, 0xF8, 0xFC));
+    private static readonly SolidColorBrush Dark = Frozen(System.Windows.Media.Color.FromRgb(0x0B, 0x0F, 0x14));
+    private static readonly SolidColorBrush LightMuted = Frozen(System.Windows.Media.Color.FromArgb(0xC8, 0xF5, 0xF8, 0xFC));
+    private static readonly SolidColorBrush DarkMuted = Frozen(System.Windows.Media.Color.FromArgb(0xC8, 0x0B, 0x0F, 0x14));
+
+    public bool Muted { get; set; }
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        bool darkText = value is System.Windows.Media.Brush b && PrefersDarkText(b);
+        if (Muted) return darkText ? DarkMuted : LightMuted;
+        return darkText ? Dark : Light;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+
+    public static bool PrefersDarkText(System.Windows.Media.Brush brush)
+    {
+        System.Windows.Media.Color c;
+        switch (brush)
+        {
+            case SolidColorBrush sc:
+                c = sc.Color;
+                break;
+            case GradientBrush gb when gb.GradientStops.Count > 0:
+                var a = gb.GradientStops[0].Color;
+                var z = gb.GradientStops[gb.GradientStops.Count - 1].Color;
+                c = System.Windows.Media.Color.FromRgb(
+                    (byte)(a.R * 0.65 + z.R * 0.35),
+                    (byte)(a.G * 0.65 + z.G * 0.35),
+                    (byte)(a.B * 0.65 + z.B * 0.35));
+                break;
+            default:
+                return false;
+        }
+        double l = RelativeLuminance(c);
+        double contrastWhite = 1.05 / (l + 0.05);
+        double contrastDark = (l + 0.05) / 0.055;
+        return contrastDark > contrastWhite;
+    }
+
+    public static double RelativeLuminance(System.Windows.Media.Color c)
+    {
+        static double Lin(byte v)
+        {
+            double s = v / 255.0;
+            return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+        }
+        return 0.2126 * Lin(c.R) + 0.7152 * Lin(c.G) + 0.0722 * Lin(c.B);
+    }
+
+    private static SolidColorBrush Frozen(System.Windows.Media.Color c)
+    {
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        return b;
+    }
+}
+
+/// <summary>QuickPreset → gamer-readable summary, e.g. "Brightness 55 · Gamma 1.10 · 1440p" (hotkey shown separately).</summary>
+public sealed class PresetSummaryConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is QuickPreset p ? Visor.Services.ColorUiHelper.Describe(p) : "";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>CompanionApp → friendly list label ("Overwolf.exe · close, then force-quit").</summary>
+public sealed class CompanionLabelConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is CompanionApp c ? CompanionEditWindow.Describe(c) : "";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>Tray menu renderer that follows the current app theme (dark / light / custom).</summary>
 internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
 {
-    private static readonly System.Drawing.Color Bg = System.Drawing.Color.FromArgb(0x16, 0x1B, 0x22);
-    private static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(0x2A, 0x33, 0x40);
-    private static readonly System.Drawing.Color Hover = System.Drawing.Color.FromArgb(0x1E, 0x27, 0x33);
-    private static readonly System.Drawing.Color Accent = System.Drawing.Color.FromArgb(0x7E, 0xB8, 0xD4);
-    private static readonly System.Drawing.Color Text = System.Drawing.Color.FromArgb(0xE8, 0xEE, 0xF4);
-    private static readonly System.Drawing.Color TextHot = System.Drawing.Color.FromArgb(0x93, 0xC7, 0xDF);
+    private readonly ThemeColors _t;
 
-    public SlateMenuRenderer() : base(new SlateMenuColorTable())
+    public SlateMenuRenderer() : this(ThemeColors.Read()) { }
+
+    private SlateMenuRenderer(ThemeColors t) : base(new SlateMenuColorTable(t))
     {
         RoundedEdges = false;
+        _t = t;
+    }
+
+    internal readonly record struct ThemeColors(
+        System.Drawing.Color Bg, System.Drawing.Color Border, System.Drawing.Color Hover,
+        System.Drawing.Color Accent, System.Drawing.Color Text, System.Drawing.Color Muted)
+    {
+        public static ThemeColors Read()
+        {
+            static System.Drawing.Color C(string key, string fallback)
+            {
+                var c = Visor.Services.ThemeService.CurrentColor(key, fallback);
+                return System.Drawing.Color.FromArgb(c.R, c.G, c.B);
+            }
+            return new ThemeColors(
+                C("PanelBrush", "#121821"),
+                C("BorderBrush", "#243041"),
+                C("ComboHighlightBrush", "#1A2330"),
+                C("AccentBrush", "#22D3EE"),
+                C("TextBrush", "#E6EDF5"),
+                C("MutedBrush", "#8A98AB"));
+        }
     }
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
     {
-        using var brush = new System.Drawing.SolidBrush(Bg);
+        using var brush = new System.Drawing.SolidBrush(_t.Bg);
         e.Graphics.FillRectangle(brush, e.AffectedBounds);
     }
 
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
     {
-        using var pen = new System.Drawing.Pen(Border);
+        using var pen = new System.Drawing.Pen(_t.Border);
         var r = e.AffectedBounds;
         e.Graphics.DrawRectangle(pen, r.X, r.Y, r.Width - 1, r.Height - 1);
     }
@@ -391,28 +525,35 @@ internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         var bounds = new System.Drawing.Rectangle(6, 1, e.Item.Width - 12, e.Item.Height - 2);
 
-        if (!e.Item.Selected && !e.Item.Pressed) return;
+        if (!e.Item.Enabled || (!e.Item.Selected && !e.Item.Pressed)) return;
 
         using var path = RoundedRect(bounds, 4);
-        using var brush = new System.Drawing.SolidBrush(Hover);
+        using var brush = new System.Drawing.SolidBrush(_t.Hover);
         g.FillPath(brush, path);
-        using var pen = new System.Drawing.Pen(Accent);
+        using var pen = new System.Drawing.Pen(_t.Accent);
         g.DrawPath(pen, path);
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
-        e.TextColor = e.Item.Selected ? TextHot : Text;
-        e.TextFormat = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix;
+        e.TextColor = !e.Item.Enabled ? _t.Muted : e.Item.Selected ? _t.Accent : _t.Text;
+        e.TextFormat = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix
+                       | TextFormatFlags.EndEllipsis;
         // Keep left padding consistent
-        e.TextRectangle = new System.Drawing.Rectangle(14, 0, e.Item.Width - 20, e.Item.Height);
+        e.TextRectangle = new System.Drawing.Rectangle(14, 0, e.Item.Width - 28, e.Item.Height);
         base.OnRenderItemText(e);
+    }
+
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+    {
+        e.ArrowColor = e.Item?.Selected == true ? _t.Accent : _t.Muted;
+        base.OnRenderArrow(e);
     }
 
     protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
     {
         var y = e.Item.ContentRectangle.Top + e.Item.ContentRectangle.Height / 2;
-        using var pen = new System.Drawing.Pen(Border);
+        using var pen = new System.Drawing.Pen(_t.Border);
         e.Graphics.DrawLine(pen, 12, y, e.Item.Width - 12, y);
     }
 
@@ -430,16 +571,19 @@ internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
 
     private sealed class SlateMenuColorTable : ProfessionalColorTable
     {
-        public override System.Drawing.Color MenuBorder => Border;
-        public override System.Drawing.Color MenuItemBorder => Accent;
-        public override System.Drawing.Color MenuItemSelected => Hover;
-        public override System.Drawing.Color MenuItemSelectedGradientBegin => Hover;
-        public override System.Drawing.Color MenuItemSelectedGradientEnd => Hover;
-        public override System.Drawing.Color ToolStripDropDownBackground => Bg;
-        public override System.Drawing.Color ImageMarginGradientBegin => Bg;
-        public override System.Drawing.Color ImageMarginGradientMiddle => Bg;
-        public override System.Drawing.Color ImageMarginGradientEnd => Bg;
-        public override System.Drawing.Color SeparatorDark => Border;
-        public override System.Drawing.Color SeparatorLight => Border;
+        private readonly ThemeColors _t;
+        public SlateMenuColorTable(ThemeColors t) => _t = t;
+
+        public override System.Drawing.Color MenuBorder => _t.Border;
+        public override System.Drawing.Color MenuItemBorder => _t.Accent;
+        public override System.Drawing.Color MenuItemSelected => _t.Hover;
+        public override System.Drawing.Color MenuItemSelectedGradientBegin => _t.Hover;
+        public override System.Drawing.Color MenuItemSelectedGradientEnd => _t.Hover;
+        public override System.Drawing.Color ToolStripDropDownBackground => _t.Bg;
+        public override System.Drawing.Color ImageMarginGradientBegin => _t.Bg;
+        public override System.Drawing.Color ImageMarginGradientMiddle => _t.Bg;
+        public override System.Drawing.Color ImageMarginGradientEnd => _t.Bg;
+        public override System.Drawing.Color SeparatorDark => _t.Border;
+        public override System.Drawing.Color SeparatorLight => _t.Border;
     }
 }

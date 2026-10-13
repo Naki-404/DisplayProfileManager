@@ -1,394 +1,504 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Windows;
-using Microsoft.Win32;
 
-namespace DisplayProfileManager.Setup;
+namespace Visor.Setup;
+
+internal enum TargetKind { Fresh, Upgrade, Foreign, Protected, Invalid }
+
+internal sealed class TargetState
+{
+    public TargetState(TargetKind kind, string? dir, List<string>? files = null, string? version = null)
+    {
+        Kind = kind;
+        Dir = dir;
+        ExistingFiles = files ?? new List<string>();
+        ExistingVersion = version;
+    }
+
+    public TargetKind Kind { get; }
+    public string? Dir { get; }
+    /// <summary>Relative paths owned by the existing install (from its manifest or a recognized layout).</summary>
+    public List<string> ExistingFiles { get; }
+    public string? ExistingVersion { get; }
+}
+
+internal sealed class InstallOptions
+{
+    public string TargetDir { get; set; } = Product.DefaultInstallDir;
+    public bool StartMenuShortcut { get; set; } = true;
+    public bool DesktopShortcut { get; set; }
+    public bool RemoveLegacy { get; set; } = true;
+}
+
+internal sealed class InstallResult
+{
+    public string Dir { get; set; } = "";
+    public bool Upgraded { get; set; }
+    public List<string> Warnings { get; } = new();
+    public string ExePath => Path.Combine(Dir, Product.ExeName);
+}
+
+internal sealed class UninstallResult
+{
+    public bool NotFound { get; set; }
+    public string? Dir { get; set; }
+    /// <summary>The running uninstaller lives in the install folder and must be removed after exit.</summary>
+    public string? SelfToDelete { get; set; }
+}
 
 internal static class InstallerCore
 {
-    private const string AppName = "Display Profile Manager";
-    private const string AppId = "DisplayProfileManager";
-    private const string Version = "1.8.0";
-    private const string Publisher = "Nakidev";
-    private const string ExeName = "DisplayProfileManager.exe";
-    private const string PayloadResourceHint = "payload.zip";
+    private const string PayloadResource = "payload.zip";
 
-    private const int MoveFileDelayUntilReboot = 0x4;
+    // ------------------------------------------------------------------ locate / inspect
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool MoveFileEx(string lpExistingFileName, string? lpNewFileName, int dwFlags);
-
-    internal static string DefaultInstallDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", AppId);
+    /// <summary>Selected folder → install folder. A "Visor" subfolder is appended unless already named so.</summary>
+    public static string? ResolveInstallDir(string? selected)
+    {
+        var path = PathGuard.Normalize(selected);
+        if (path == null) return null;
+        return string.Equals(Path.GetFileName(path), Product.Name, StringComparison.OrdinalIgnoreCase)
+            ? path
+            : Path.Combine(path, Product.Name);
+    }
 
     /// <summary>
-    /// Always install into a dedicated DisplayProfileManager folder.
-    /// If the user picks Desktop / a parent path, append the app folder name.
+    /// Current install folder — only folders with a valid Visor manifest qualify (no blind
+    /// "folder of the running exe" fallback). Order: the folder of a running Uninstall.exe that
+    /// has a manifest (so each copy removes its own install), Apps &amp; Features, the default folder.
     /// </summary>
-    internal static string ResolveInstallDir(string selectedPath)
+    public static string? FindInstallLocation()
     {
-        var path = (selectedPath ?? "").Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (string.IsNullOrWhiteSpace(path))
-            return DefaultInstallDir;
-
-        var name = Path.GetFileName(path);
-        if (name.Equals(AppId, StringComparison.OrdinalIgnoreCase) ||
-            name.Equals(AppName, StringComparison.OrdinalIgnoreCase))
-            return path;
-
-        return Path.Combine(path, AppId);
-    }
-
-    internal static bool HasDesktopRuntime()
-    {
-        var roots = new[]
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "shared", "Microsoft.WindowsDesktop.App"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "dotnet", "shared", "Microsoft.WindowsDesktop.App")
-        };
-        foreach (var root in roots)
-        {
-            if (!Directory.Exists(root)) continue;
-            foreach (var dir in Directory.GetDirectories(root))
-            {
-                var name = Path.GetFileName(dir);
-                if (name.StartsWith("6.", StringComparison.Ordinal) ||
-                    name.StartsWith("7.", StringComparison.Ordinal) ||
-                    name.StartsWith("8.", StringComparison.Ordinal) ||
-                    name.StartsWith("9.", StringComparison.Ordinal) ||
-                    name.StartsWith("10.", StringComparison.Ordinal))
-                    return true;
-            }
-        }
-        return false;
-    }
-
-    internal static void OpenRuntimeDownload()
-    {
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = "https://aka.ms/dotnet/6.0/windowsdesktop-runtime-win-x64.exe",
-            UseShellExecute = true
-        });
-    }
-
-    /// <summary>File IO only — safe on a background thread. No COM / Registry / UI.</summary>
-    internal static void ExtractAppFiles(string installDir, Action<string>? log = null)
-    {
-        Directory.CreateDirectory(installDir);
-        log?.Invoke("Preparing folder…");
-
-        foreach (var file in Directory.GetFiles(installDir))
-        {
-            var name = Path.GetFileName(file);
-            if (!name.Equals("Uninstall.exe", StringComparison.OrdinalIgnoreCase))
-            {
-                try
-                {
-                    File.SetAttributes(file, FileAttributes.Normal);
-                    File.Delete(file);
-                }
-                catch { /* ignore */ }
-            }
-        }
-        foreach (var sub in Directory.GetDirectories(installDir))
-        {
-            try { Directory.Delete(sub, true); } catch { /* ignore */ }
-        }
-
-        log?.Invoke("Extracting application…");
-        ExtractPayloadZip(installDir);
-        var exe = Path.Combine(installDir, ExeName);
-        if (!File.Exists(exe))
-            throw new InvalidOperationException("Installer payload is missing DisplayProfileManager.exe. Rebuild with build-release.ps1");
-
-        TryUnblockTree(installDir);
-        log?.Invoke("Files ready.");
-    }
-
-    /// <summary>Registry + shortcuts — must run on STA / UI thread.</summary>
-    internal static void RegisterInstallation(string installDir, bool startMenu, bool desktop, Action<string>? log = null)
-    {
-        var exe = Path.Combine(installDir, ExeName);
-        if (!File.Exists(exe))
-            throw new FileNotFoundException("Application exe not found after extract.", exe);
-
-        log?.Invoke("Writing Uninstall.exe…");
-        var self = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Cannot locate setup executable path.");
-        var uninst = Path.Combine(installDir, "Uninstall.exe");
-        File.Copy(self, uninst, true);
-        TryUnblock(uninst);
-
-        log?.Invoke("Registering in Apps & Features…");
-        WriteUninstallKey(installDir, exe, uninst);
-
-        if (startMenu)
-        {
-            log?.Invoke("Start Menu shortcut…");
-            CreateShortcut(
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", AppName + ".lnk"),
-                exe, installDir);
-        }
-
-        if (desktop)
-        {
-            log?.Invoke("Desktop shortcut…");
-            CreateShortcut(
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), AppName + ".lnk"),
-                exe, installDir);
-        }
-
-        log?.Invoke("Installation complete.");
-    }
-
-    internal static string? FindInstallLocation()
-    {
+        string? selfDir = null;
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey($@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{AppId}");
-            var dir = key?.GetValue("InstallLocation") as string;
-            if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+            if (Path.GetFileName(Product.SelfPath).Equals(Product.UninstallerName, StringComparison.OrdinalIgnoreCase))
+                selfDir = Path.GetDirectoryName(Product.SelfPath);
+        }
+        catch { }
+
+        foreach (var candidate in new[]
+                 {
+                     selfDir,
+                     SystemOps.ReadArpInstallLocation(Product.ArpKeyName),
+                     SystemOps.ReadArpInstallLocation(Product.OldArpKeyName),
+                     Product.DefaultInstallDir,
+                 })
+        {
+            var dir = PathGuard.Normalize(candidate);
+            if (dir != null && !PathGuard.IsProtected(dir) && InstallManifest.Load(dir) != null)
                 return dir;
         }
-        catch { }
-
-        if (Directory.Exists(DefaultInstallDir))
-            return DefaultInstallDir;
-
-        try
-        {
-            var beside = Path.GetDirectoryName(Environment.ProcessPath);
-            if (!string.IsNullOrWhiteSpace(beside) &&
-                File.Exists(Path.Combine(beside, ExeName)))
-                return beside;
-        }
-        catch { }
-
         return null;
     }
 
-    /// <summary>Remove app files, shortcuts, ARP entry. Restores display first. Does not show UI.</summary>
-    internal static void PerformUninstall(bool confirmUi, bool silent, Action<string>? log = null)
+    public static bool HasPayload() =>
+        Assembly.GetExecutingAssembly().GetManifestResourceInfo(PayloadResource) != null;
+
+    public static TargetState Inspect(string? dir)
     {
-        _ = confirmUi;
-        var dir = FindInstallLocation() ?? DefaultInstallDir;
+        if (dir == null) return new TargetState(TargetKind.Invalid, null);
+        if (PathGuard.IsProtected(dir)) return new TargetState(TargetKind.Protected, dir);
+        if (File.Exists(dir)) return new TargetState(TargetKind.Foreign, dir);
+        if (!Directory.Exists(dir)) return new TargetState(TargetKind.Fresh, dir);
 
-        log?.Invoke("Closing Display Profile Manager…");
+        var manifest = InstallManifest.Load(dir);
+        if (manifest != null) return new TargetState(TargetKind.Upgrade, dir, manifest.Files, manifest.Version);
+
+        // No manifest: accept only an empty folder or one holding nothing but known Visor files.
+        var files = new List<string>();
         try
         {
-            foreach (var p in Process.GetProcessesByName("DisplayProfileManager"))
+            var root = dir.TrimEnd('\\') + "\\";
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             {
-                try { p.CloseMainWindow(); p.WaitForExit(2000); } catch { }
-                try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { try { p.Kill(); } catch { } }
-            }
-            Thread.Sleep(400);
-        }
-        catch { }
-
-        DisplayRestore.RestoreNeutralDisplay(log);
-
-        log?.Invoke("Removing autostart task…");
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "schtasks.exe",
-                ArgumentList = { "/Delete", "/F", "/TN", "DisplayProfileManager" },
-                CreateNoWindow = true,
-                UseShellExecute = false
-            };
-            using var p = Process.Start(psi);
-            p?.WaitForExit(5000);
-        }
-        catch { }
-
-        try
-        {
-            var start = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", AppName + ".lnk");
-            var desk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), AppName + ".lnk");
-            if (File.Exists(start)) File.Delete(start);
-            if (File.Exists(desk)) File.Delete(desk);
-        }
-        catch { }
-
-        log?.Invoke("Unregistering from Apps & Features…");
-        try
-        {
-            Registry.CurrentUser.DeleteSubKeyTree($@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{AppId}", false);
-        }
-        catch { }
-
-        log?.Invoke("Deleting application files…");
-        if (Directory.Exists(dir))
-        {
-            var self = Path.GetFullPath(Environment.ProcessPath ?? "");
-            foreach (var file in Directory.GetFiles(dir))
-            {
-                try
-                {
-                    if (string.Equals(Path.GetFullPath(file), self, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    File.SetAttributes(file, FileAttributes.Normal);
-                    File.Delete(file);
-                }
-                catch { }
-            }
-            foreach (var sub in Directory.GetDirectories(dir))
-            {
-                try { Directory.Delete(sub, true); } catch { }
+                var rel = f.Substring(root.Length);
+                if (!PathGuard.IsKnownAppFile(rel) || files.Count > 1000)
+                    return new TargetState(TargetKind.Foreign, dir);
+                if (!rel.Equals(Product.ManifestName, StringComparison.OrdinalIgnoreCase)) files.Add(rel);
             }
         }
+        catch { return new TargetState(TargetKind.Foreign, dir); }
 
-        log?.Invoke("Finishing…");
-        _ = silent;
+        // Only known Visor files (e.g. a leftover Uninstall.exe whose self-delete did not run): owned.
+        return files.Count == 0
+            ? new TargetState(TargetKind.Fresh, dir)
+            : new TargetState(TargetKind.Upgrade, dir, files);
     }
+
+    // ------------------------------------------------------------------ install
 
     /// <summary>
-    /// Schedule remaining locked files (Uninstall.exe + folder) for deletion on reboot.
-    /// Avoids spawning hidden cmd cleanup scripts — those look like droppers to AV heuristics.
+    /// Installs or upgrades. Running apps must already be closed (see <see cref="AppProcesses"/>).
+    /// Payload is extracted to a staging folder next to the target, then swapped in file by file;
+    /// on any failure the previous files are moved back.
     /// </summary>
-    internal static void ScheduleSelfCleanup(string? installDir)
+    public static InstallResult Install(InstallOptions o, LegacyInstall? legacy, Action<string>? log)
     {
+        var state = Inspect(ResolveInstallDir(o.TargetDir));
+        switch (state.Kind)
+        {
+            case TargetKind.Invalid: throw new InstallerException(L.InvalidPath);
+            case TargetKind.Protected: throw new InstallerException(L.ProtectedFolder(state.Dir!));
+            case TargetKind.Foreign: throw new InstallerException(L.FolderNotEmpty(state.Dir!));
+        }
+        if (!HasPayload()) throw new InstallerException(L.PayloadMissing);
+
+        var dir = state.Dir!;
+        var result = new InstallResult { Dir = dir, Upgraded = state.Kind == TargetKind.Upgrade };
+
+        // Running apps lock files (and the legacy app shares Visor's hotkeys). The UI asks the user
+        // before calling this; silent mode closes them directly.
+        // CloseAll throws if anything survives (e.g. an elevated instance), so no file is touched then.
+        bool removeLegacy = legacy != null && o.RemoveLegacy;
+        var running = AppProcesses.Find(dir, removeLegacy, legacy?.Dir);
+        if (removeLegacy) legacy!.RestoreDisplayIfActive(running, log);
+        if (AppProcesses.CloseAll(running, log))
+            DisplayRestore.AfterAppClosed(null, appWasKilled: true, log);
+
+        var parent = Path.GetDirectoryName(dir)!;
+        Directory.CreateDirectory(parent);
+        var id = Guid.NewGuid().ToString("N").Substring(0, 8);
+        var staging = Path.Combine(parent, ".visor-staging-" + id);
+        var backup = Path.Combine(parent, ".visor-backup-" + id);
+
         try
         {
-            var self = Environment.ProcessPath;
-            if (!string.IsNullOrWhiteSpace(self) && File.Exists(self))
-                MoveFileEx(self, null, MoveFileDelayUntilReboot);
-        }
-        catch { }
-
-        if (string.IsNullOrWhiteSpace(installDir) || !Directory.Exists(installDir))
-            return;
-
-        try
-        {
-            foreach (var file in Directory.GetFiles(installDir, "*", SearchOption.AllDirectories))
-            {
-                try { MoveFileEx(file, null, MoveFileDelayUntilReboot); } catch { }
-            }
-            try { MoveFileEx(installDir, null, MoveFileDelayUntilReboot); } catch { }
-        }
-        catch { }
-    }
-
-    private static void ExtractPayloadZip(string dir)
-    {
-        var asm = Assembly.GetExecutingAssembly();
-        var resName = asm.GetManifestResourceNames()
-            .FirstOrDefault(n => n.EndsWith(PayloadResourceHint, StringComparison.OrdinalIgnoreCase))
-            ?? asm.GetManifestResourceNames().FirstOrDefault(n => n.Contains("payload", StringComparison.OrdinalIgnoreCase));
-
-        if (resName == null)
-            throw new InvalidOperationException("Installer payload is empty. Rebuild with build-release.ps1");
-
-        using var src = asm.GetManifestResourceStream(resName)
-            ?? throw new InvalidOperationException("Cannot open installer payload stream.");
-        using var zip = new ZipArchive(src, ZipArchiveMode.Read);
-
-        var rootFull = Path.GetFullPath(dir).TrimEnd('\\') + '\\';
-        foreach (var entry in zip.Entries)
-        {
-            if (string.IsNullOrWhiteSpace(entry.FullName) || entry.FullName.EndsWith('/'))
-                continue;
-
-            var relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
-            if (relative.Contains("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
-                continue;
-            if (!IsAllowedPayloadPath(relative))
-                continue;
-
-            var dest = Path.GetFullPath(Path.Combine(dir, relative));
-            if (!dest.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(dest.TrimEnd('\\'), rootFull.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var parent = Path.GetDirectoryName(dest);
-            if (!string.IsNullOrEmpty(parent))
-                Directory.CreateDirectory(parent);
-
-            using var entryStream = entry.Open();
-            using var dst = File.Create(dest);
-            entryStream.CopyTo(dst);
-        }
-    }
-
-    private static bool IsAllowedPayloadPath(string relative)
-    {
-        var name = Path.GetFileName(relative);
-        if (name.Equals(ExeName, StringComparison.OrdinalIgnoreCase)) return true;
-        if (name.Equals("QRes.exe", StringComparison.OrdinalIgnoreCase)) return true;
-
-        var norm = relative.Replace('/', '\\');
-        return norm.StartsWith("Assets\\", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void WriteUninstallKey(string dir, string exe, string uninst)
-    {
-        using var key = Registry.CurrentUser.CreateSubKey($@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{AppId}")!;
-        key.SetValue("DisplayName", AppName);
-        key.SetValue("DisplayVersion", Version);
-        key.SetValue("Publisher", Publisher);
-        key.SetValue("InstallLocation", dir);
-        key.SetValue("DisplayIcon", exe);
-        key.SetValue("UninstallString", $"\"{uninst}\" /uninstall");
-        key.SetValue("QuietUninstallString", $"\"{uninst}\" /uninstall /silent");
-        key.SetValue("InstallDate", DateTime.Now.ToString("yyyyMMdd"));
-        key.SetValue("NoModify", 1, RegistryValueKind.DWord);
-        key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
-        try
-        {
-            var sizeKb = Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
-                .Sum(f => new FileInfo(f).Length) / 1024;
-            key.SetValue("EstimatedSize", (int)Math.Min(sizeKb, int.MaxValue), RegistryValueKind.DWord);
-        }
-        catch { }
-    }
-
-    private static void CreateShortcut(string lnkPath, string target, string workDir)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(lnkPath)!);
-        var shellType = Type.GetTypeFromProgID("WScript.Shell")
-            ?? throw new InvalidOperationException("WScript.Shell unavailable");
-        dynamic shell = Activator.CreateInstance(shellType)!;
-        try
-        {
-            var sc = shell.CreateShortcut(lnkPath);
-            sc.TargetPath = target;
-            sc.WorkingDirectory = workDir;
-            sc.Description = AppName + " by " + Publisher;
-            sc.IconLocation = target + ",0";
-            sc.Save();
-            Marshal.FinalReleaseComObject(sc);
+            log?.Invoke(L.StExtracting);
+            var newFiles = ExtractPayload(staging);
+            log?.Invoke(L.StInstalling);
+            SwapIn(dir, staging, backup, state.ExistingFiles, newFiles);
         }
         finally
         {
-            Marshal.FinalReleaseComObject(shell);
+            TryDeleteTree(staging);
         }
+
+        if (legacy != null && o.RemoveLegacy)
+        {
+            try { legacy.Remove(log, result.Warnings); }
+            catch (Exception ex) { result.Warnings.Add(ex.Message); }
+        }
+
+        log?.Invoke(L.StRegister);
+        try { SystemOps.WriteArpKey(dir); }
+        catch (Exception ex) { result.Warnings.Add(L.RegisterFailed(ex.Message)); }
+        SystemOps.DeleteArpKeyIfFor(Product.OldArpKeyName, dir); // early-build key name, ours only
+
+        log?.Invoke(L.StShortcuts);
+        var exe = result.ExePath;
+        if (o.StartMenuShortcut) TryShortcut(Product.StartMenuShortcut, exe, dir, "Start Menu", result.Warnings);
+        if (o.DesktopShortcut) TryShortcut(Product.DesktopShortcut, exe, dir, "Desktop", result.Warnings);
+
+        log?.Invoke(L.StDone);
+        return result;
     }
 
-    private static void TryUnblockTree(string dir)
+    /// <summary>Creates the shortcut if missing; overwrites only one that already points into our install folder.</summary>
+    private static void TryShortcut(string lnk, string exe, string dir, string which, List<string> warnings)
     {
         try
         {
-            foreach (var file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
-                TryUnblock(file);
+            if (File.Exists(lnk))
+            {
+                var target = Native.GetShortcutTarget(lnk);
+                if (target == null || !PathGuard.IsInsideOrSame(target, dir))
+                {
+                    warnings.Add(L.ShortcutExists(which, lnk));
+                    return;
+                }
+            }
+            Native.CreateShortcut(lnk, exe, dir, Product.Name + " by " + Product.Publisher);
+        }
+        catch (Exception ex) { warnings.Add(L.ShortcutFailed(which, ex.Message)); }
+    }
+
+    /// <summary>Extracts the embedded payload into <paramref name="staging"/>; returns relative file paths.</summary>
+    private static List<string> ExtractPayload(string staging)
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        using var src = asm.GetManifestResourceStream(PayloadResource)
+            ?? throw new InstallerException(L.PayloadMissing);
+        using var zip = new ZipArchive(src, ZipArchiveMode.Read);
+
+        Directory.CreateDirectory(staging);
+        var files = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in zip.Entries)
+        {
+            if (string.IsNullOrEmpty(entry.Name)) continue; // directory entry
+            var rel = PathGuard.SafeRelative(entry.FullName);
+            if (rel == null || !IsAllowedPayloadPath(rel) || !seen.Add(rel)) continue;
+            var dest = PathGuard.ResolveInside(staging, rel);
+            if (dest == null) continue;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            using (var es = entry.Open())
+            using (var fs = File.Create(dest))
+                es.CopyTo(fs);
+            files.Add(rel);
+        }
+
+        if (!files.Any(f => f.Equals(Product.ExeName, StringComparison.OrdinalIgnoreCase)))
+            throw new InstallerException(L.PayloadMissing);
+
+        // Release builds ship a payload-less Uninstall.exe inside payload.zip; dev builds fall back to a copy of Setup.
+        if (!files.Any(f => f.Equals(Product.UninstallerName, StringComparison.OrdinalIgnoreCase)))
+        {
+            File.Copy(Product.SelfPath, Path.Combine(staging, Product.UninstallerName), true);
+            files.Add(Product.UninstallerName);
+        }
+        return files;
+    }
+
+    private static bool IsAllowedPayloadPath(string rel) =>
+        rel.Equals(Product.ExeName, StringComparison.OrdinalIgnoreCase) ||
+        rel.Equals(Product.UninstallerName, StringComparison.OrdinalIgnoreCase) ||
+        rel.StartsWith(@"Assets\", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Moves old owned files to a backup folder, moves staged files in, writes the manifest; rolls back on failure.</summary>
+    private static void SwapIn(string dir, string staging, string backup, List<string> oldFiles, List<string> newFiles)
+    {
+        var moved = new List<string>();
+        var placed = new List<string>();
+        bool dirExisted = Directory.Exists(dir);
+        bool manifestWritten = false;
+        var manifestPath = InstallManifest.PathIn(dir);
+        var oldOwned = oldFiles.Concat(new[] { Product.ManifestName })
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        try
+        {
+            Directory.CreateDirectory(dir);
+            foreach (var rel in oldOwned)
+            {
+                var src = PathGuard.ResolveInside(dir, rel);
+                if (src == null || !File.Exists(src)) continue;
+                var dst = Path.Combine(backup, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                File.SetAttributes(src, FileAttributes.Normal);
+                File.Move(src, dst);
+                moved.Add(rel);
+            }
+
+            foreach (var rel in newFiles)
+            {
+                var dst = PathGuard.ResolveInside(dir, rel)
+                    ?? throw new InvalidOperationException("Unsafe payload path: " + rel);
+                if (File.Exists(dst))
+                    throw new InvalidOperationException("File already exists and is not part of the previous install: " + dst);
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                File.Move(Path.Combine(staging, rel), dst);
+                placed.Add(rel);
+            }
+
+            manifestWritten = true;
+            new InstallManifest { Files = newFiles }.Save(dir);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                if (manifestWritten)
+                {
+                    if (File.Exists(manifestPath)) File.Delete(manifestPath);
+                    if (File.Exists(manifestPath + ".tmp")) File.Delete(manifestPath + ".tmp");
+                }
+                foreach (var rel in placed)
+                {
+                    var p = Path.Combine(dir, rel);
+                    if (File.Exists(p)) File.Delete(p);
+                }
+                foreach (var rel in moved)
+                {
+                    var target = Path.Combine(dir, rel);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    File.Move(Path.Combine(backup, rel), target);
+                }
+                PruneEmptyDirs(dir, placed);
+            }
+            catch (Exception rex)
+            {
+                throw new InstallerException(L.RollbackFailed(ex.Message + " / " + rex.Message, backup));
+            }
+            TryDeleteTree(backup);
+            if (!dirExisted) TryDeleteEmptyDir(dir);
+            throw new InstallerException(L.RolledBack(ex.Message));
+        }
+
+        TryDeleteTree(backup);
+        PruneEmptyDirs(dir, oldFiles.Except(newFiles, StringComparer.OrdinalIgnoreCase));
+    }
+
+    // ------------------------------------------------------------------ uninstall
+
+    /// <summary>
+    /// Removes the install: closes Visor, lets it restore the display, removes autostart / shortcuts,
+    /// deletes only manifest-listed files, then removes the Apps &amp; Features entry.
+    /// </summary>
+    public static UninstallResult Uninstall(Action<string>? log)
+    {
+        var dir = FindInstallLocation();
+        if (dir == null) return new UninstallResult { NotFound = true };
+
+        var manifest = InstallManifest.Load(dir)!;
+        var exe = Path.Combine(dir, Product.ExeName);
+        var result = new UninstallResult { Dir = dir };
+
+        // CloseAll throws if Visor survives (e.g. elevated) — nothing is deleted then.
+        bool killed = AppProcesses.CloseAll(AppProcesses.Find(dir, includeLegacy: false), log);
+        DisplayRestore.AfterAppClosed(exe, killed, log);
+
+        log?.Invoke(L.StAutostart);
+        SystemOps.DeleteTaskIfReferences("Visor", exe);
+        SystemOps.DeleteTaskIfReferences("DisplayProfileManager", exe);
+        SystemOps.DeleteRunValuesFor(exe);
+        bool IsOurExe(string t) => PathGuard.SamePath(t, exe);
+        SystemOps.DeleteShortcutIf(Product.StartMenuShortcut, IsOurExe);
+        SystemOps.DeleteShortcutIf(Product.DesktopShortcut, IsOurExe);
+
+        log?.Invoke(L.StDeleting);
+        var self = Product.SelfPath;
+        var failed = new List<string>();
+        foreach (var rel in manifest.Files)
+        {
+            var path = PathGuard.ResolveInside(dir, rel);
+            if (path == null || !File.Exists(path)) continue;
+            if (PathGuard.SamePath(path, self)) { result.SelfToDelete = path; continue; }
+            try
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+                File.Delete(path);
+            }
+            catch { failed.Add(rel); }
+        }
+
+        if (failed.Count > 0)
+        {
+            // Keep the manifest (now listing only what is left) and the ARP entry so a retry works.
+            try
+            {
+                manifest.Files = failed.Concat(result.SelfToDelete != null ? new[] { Product.UninstallerName } : new string[0]).ToList();
+                manifest.Save(dir);
+            }
+            catch { }
+            result.SelfToDelete = null;
+            throw new InstallerException(L.UninstallIncomplete(string.Join("\n", failed.Take(10))));
+        }
+
+        PruneEmptyDirs(dir, manifest.Files);
+        if (result.SelfToDelete != null)
+        {
+            // The running Uninstall.exe stays until the cleanup command removes it. Keep a manifest
+            // that lists only it, so the folder is still recognized as ours if that cleanup never runs;
+            // the cleanup deletes the manifest last.
+            try
+            {
+                manifest.Files = new List<string> { Product.UninstallerName };
+                manifest.Save(dir);
+            }
+            catch { }
+        }
+        else
+        {
+            try { File.Delete(InstallManifest.PathIn(dir)); } catch { }
+        }
+
+        log?.Invoke(L.StUnregister);
+        var arpDir = PathGuard.Normalize(SystemOps.ReadArpInstallLocation(Product.ArpKeyName));
+        if (arpDir == null || PathGuard.SamePath(arpDir, dir))
+        {
+            try { SystemOps.DeleteArpKey(Product.ArpKeyName); } catch { }
+        }
+        SystemOps.DeleteArpKeyIfFor(Product.OldArpKeyName, dir);
+
+        if (result.SelfToDelete == null) TryDeleteEmptyDir(dir);
+        log?.Invoke(L.StDone);
+        return result;
+    }
+
+    /// <summary>
+    /// The uninstaller cannot delete its own exe. Spawn a hidden cmd that waits for this process to
+    /// exit, retries deleting the exe (about 20 s in total), then deletes the manifest and removes the
+    /// install folder if it is empty (rmdir without /s never deletes contents).
+    /// Paths are passed through environment variables and cmd runs with /V:OFF, so characters such
+    /// as % ! &amp; ^ ( ) in paths are never interpreted. No FOR loop is used, because a %i loop variable
+    /// would make cmd pair the % signs differently.
+    /// </summary>
+    public static void ScheduleSelfDelete(string selfPath, string dir)
+    {
+        if (selfPath.IndexOf('"') >= 0 || dir.IndexOf('"') >= 0) return; // impossible in Windows paths
+        if (!PathGuard.IsInsideOrSame(selfPath, dir) || PathGuard.IsProtected(dir)) return;
+
+        const string self = "\"%VISOR_UNINST_SELF%\"";
+        const string del = "del /f /q " + self + " >nul 2>&1";
+        const string cleanup = "del /f /q \"%VISOR_UNINST_MANIFEST%\" >nul 2>&1 & rmdir \"%VISOR_UNINST_DIR%\" >nul 2>&1";
+        static string Wait(int s) => "ping -n " + s + " 127.0.0.1 >nul";
+
+        // W3 & D & if exist S (W4 & D & if exist S (W6 & D & if exist S (W11 & D & if not exist S (C)) else (C)) else (C)) else (C)
+        string step = "if not exist " + self + " (" + cleanup + ")";
+        foreach (var wait in new[] { 11, 6, 4 })
+            step = "if exist " + self + " (" + Wait(wait) + " & " + del + " & " + step + ") else (" + cleanup + ")";
+        var script = Wait(3) + " & " + del + " & " + step;
+
+        try
+        {
+            var psi = new ProcessStartInfo(
+                Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                "/d /v:off /s /c \"" + script + "\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = Path.GetTempPath()
+            };
+            psi.EnvironmentVariables["VISOR_UNINST_SELF"] = selfPath;
+            psi.EnvironmentVariables["VISOR_UNINST_MANIFEST"] = InstallManifest.PathIn(dir);
+            psi.EnvironmentVariables["VISOR_UNINST_DIR"] = dir;
+            Process.Start(psi)?.Dispose();
+        }
+        catch { /* leaves Uninstall.exe + manifest; the folder stays recognized as ours for reinstall */ }
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    /// <summary>Deletes now-empty parent folders of the given relative files (never <paramref name="dir"/> itself).</summary>
+    private static void PruneEmptyDirs(string dir, IEnumerable<string> relFiles)
+    {
+        var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rel in relFiles)
+        {
+            var p = Path.GetDirectoryName(rel);
+            while (!string.IsNullOrEmpty(p))
+            {
+                dirs.Add(p!);
+                p = Path.GetDirectoryName(p);
+            }
+        }
+        foreach (var rel in dirs.OrderByDescending(d => d.Length))
+        {
+            var full = PathGuard.ResolveInside(dir, rel);
+            if (full != null) TryDeleteEmptyDir(full);
+        }
+    }
+
+    private static void TryDeleteEmptyDir(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                Directory.Delete(dir, false);
         }
         catch { }
     }
 
-    private static void TryUnblock(string path)
+    /// <summary>Only used on the installer's own uniquely named staging / backup folders.</summary>
+    private static void TryDeleteTree(string dir)
     {
-        try
-        {
-            var zone = path + ":Zone.Identifier";
-            if (File.Exists(zone))
-                File.Delete(zone);
-        }
-        catch { /* ignore */ }
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
     }
 }

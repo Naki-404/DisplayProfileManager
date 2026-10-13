@@ -1,6 +1,6 @@
-using DisplayProfileManager.Models;
+using Visor.Models;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
 /// RivaTuner / SoftRiva low-level LUT.

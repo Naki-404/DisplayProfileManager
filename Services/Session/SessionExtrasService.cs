@@ -1,93 +1,197 @@
 using System.Runtime.InteropServices;
-using System.Text;
-using DisplayProfileManager.Models;
+using Visor.Models;
 using Microsoft.Win32;
+using static Visor.Services.DisplayNative;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
 /// System-only session extras: notifications, HDR, audio, monitors, DDC/CI, scaling.
-/// No game process injection.
+/// No game process injection. Original values and "changed" flags live in the
+/// <see cref="ActiveSessionSnapshot"/> (persisted), so a normal exit and a crash restart
+/// use the same restore path and only what Apply changed is put back.
 /// </summary>
-public sealed class SessionExtrasService : IDisposable
+public sealed class SessionExtrasService
 {
-    private SessionSnapshot? _snap;
+    private const string PushNotificationsKey = @"Software\Microsoft\Windows\CurrentVersion\PushNotifications";
+    private const string VideoSettingsKey = @"Software\Microsoft\Windows\CurrentVersion\VideoSettings";
+    private static bool _nightLightLogged;
 
     /// <summary>Last non-fatal warning from Apply (DDC / isolate). Cleared at start of Apply.</summary>
     public string? LastWarning { get; private set; }
 
-    public void Apply(SessionExtras extras, string? resolution, string? displayDevice)
+    /// <summary>
+    /// Applies the profile's extras. The first time an item is changed in this session its
+    /// original value is recorded in <paramref name="snap"/> together with a "changed" flag.
+    /// </summary>
+    public void Apply(SessionExtras extras, string? resolution, string? displayDevice, ActiveSessionSnapshot snap)
     {
         extras ??= new SessionExtras();
         LastWarning = null;
 
-        bool isolate = ResolveIsolate(extras);
-        if (!HasAnyExtra(extras, resolution, isolate))
-            return;
-
-        try
+        Step("Toast notifications", () =>
         {
-            _snap ??= Capture();
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("Session extras capture: " + ex.Message);
-            return;
-        }
-
-        try
-        {
-            if (extras.QuietNotifications)
-                SetToastEnabled(false);
-
-            if (extras.DisableAutoHdr)
-                SetAutoHdr(false);
-
-            if (extras.DisableNightLight)
-                TrySetNightLight(false);
-
-            if (extras.SwitchAudioDevice && !string.IsNullOrWhiteSpace(extras.AudioDeviceId))
-                AudioEndpoint.SetDefault(extras.AudioDeviceId!);
-
-            if (extras.ApplyMonitorBrightness)
+            if (!extras.QuietNotifications) return;
+            if (!snap.ToastChanged)
             {
-                if (!MonitorBrightness.Set(Math.Clamp(extras.MonitorBrightness, 0, 100)))
-                    LastWarning = "DDC brightness failed";
+                snap.ToastOriginal = ReadDword(PushNotificationsKey, "ToastEnabled");
+                snap.ToastChanged = true;
             }
+            WriteDword(PushNotificationsKey, "ToastEnabled", 0, "Toast notifications");
+        });
 
-            if (isolate)
+        Step("Auto HDR", () =>
+        {
+            if (!extras.DisableAutoHdr) return;
+            if (!snap.AutoHdrChanged)
             {
-                // One-shot: DisplayTopology keeps the original snapshot; never re-capture after isolate.
-                if (_snap != null && !_snap.TopologySaved)
+                snap.AutoHdrOriginal = ReadDword(VideoSettingsKey, "EnableHDRForGamingApps");
+                snap.AutoHdrChanged = true;
+            }
+            WriteDword(VideoSettingsKey, "EnableHDRForGamingApps", 0, "Auto HDR");
+        });
+
+        if (extras.DisableNightLight && !_nightLightLogged)
+        {
+            _nightLightLogged = true;
+            AppLog.Info("\"Disable Night Light\" is not supported (no public Windows API) — setting ignored.");
+        }
+
+        Step("Audio device", () =>
+        {
+            if (!extras.SwitchAudioDevice || string.IsNullOrWhiteSpace(extras.AudioDeviceId)) return;
+            if (!snap.AudioChanged)
+            {
+                snap.AudioDeviceId = AudioEndpoint.GetDefaultId(AudioEndpoint.Role.Multimedia);
+                snap.AudioConsoleDeviceId = AudioEndpoint.GetDefaultId(AudioEndpoint.Role.Console);
+                snap.AudioChanged = true;
+            }
+            AudioEndpoint.SetDefault(extras.AudioDeviceId!);
+        });
+
+        Step("Monitor brightness", () =>
+        {
+            if (!extras.ApplyMonitorBrightness) return;
+            if (!snap.BrightnessChanged)
+            {
+                snap.MonitorBrightnessLevels = MonitorBrightness.GetAll();
+                snap.BrightnessChanged = true;
+            }
+            if (!MonitorBrightness.SetAll(Math.Clamp(extras.MonitorBrightness, 0, 100)))
+                AddWarning("DDC brightness failed");
+        });
+
+        Step("Monitor layout", () =>
+        {
+            if (!ResolveIsolate(extras) || snap.TopologySaved) return;
+            switch (DisplayTopology.IsolatePrimary(out var saved))
+            {
+                case DisplayTopology.IsolateResult.Applied:
+                    snap.TopologySaved = true;
+                    snap.TopologyPathsB64 = Convert.ToBase64String(saved.Paths);
+                    snap.TopologyModesB64 = Convert.ToBase64String(saved.Modes);
+                    snap.TopologyPathCount = saved.PathCount;
+                    snap.TopologyModeCount = saved.ModeCount;
+                    break;
+                case DisplayTopology.IsolateResult.Failed:
+                    AddWarning("Isolate primary failed");
+                    break;
+            }
+        });
+
+        Step("Scaling mode", () =>
+        {
+            if (string.IsNullOrWhiteSpace(extras.ScalingMode)
+                || string.Equals(extras.ScalingMode, "default", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(resolution))
+                return;
+            if (!snap.ScalingSaved && TryGetCurrentMode(displayDevice, out var cur))
+            {
+                snap.ScalingDevice = displayDevice;
+                snap.ScalingFixedOutput = cur.dmDisplayFixedOutput;
+                snap.ScalingWidth = cur.dmPelsWidth;
+                snap.ScalingHeight = cur.dmPelsHeight;
+                snap.ScalingSaved = true;
+            }
+            ScalingModeHelper.Apply(resolution!, extras.ScalingMode!, displayDevice);
+        });
+    }
+
+    /// <summary>
+    /// Restores every extra flagged as changed in <paramref name="snap"/> and clears the flags.
+    /// </summary>
+    /// <returns>False if any restore step failed (details are logged).</returns>
+    public bool Restore(ActiveSessionSnapshot snap)
+    {
+        bool ok = true;
+
+        // Each flag is cleared only when its restore succeeded, so a failed step is retried
+        // (next restore attempt / next start) instead of being forgotten.
+
+        // Layout first — display modes / scaling refer to the restored topology.
+        if (snap.TopologySaved)
+        {
+            if (Step("Topology restore", () =>
                 {
-                    if (DisplayTopology.IsolatePrimary())
-                        _snap.TopologySaved = true;
-                    else
-                        LastWarning = string.IsNullOrWhiteSpace(LastWarning)
-                            ? "Isolate primary failed"
-                            : LastWarning + " · Isolate primary failed";
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(extras.ScalingMode) &&
-                !string.Equals(extras.ScalingMode, "default", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(resolution))
+                    if (!DisplayTopology.Restore(snap))
+                        throw new InvalidOperationException("SetDisplayConfig rejected the saved layout");
+                }))
             {
-                if (_snap != null && !_snap.ScalingSaved)
-                {
-                    _snap.ScalingDevice = displayDevice;
-                    _snap.ScalingFixedOutput = ScalingModeHelper.CaptureFixedOutput(displayDevice);
-                    _snap.ScalingWidth = ScalingModeHelper.CaptureWidth(displayDevice);
-                    _snap.ScalingHeight = ScalingModeHelper.CaptureHeight(displayDevice);
-                    _snap.ScalingSaved = true;
-                }
-                ScalingModeHelper.Apply(resolution!, extras.ScalingMode!, displayDevice);
+                snap.TopologySaved = false;
+                snap.TopologyPathsB64 = snap.TopologyModesB64 = null;
             }
+            else ok = false;
         }
-        catch (Exception ex)
+
+        if (snap.ScalingSaved)
         {
-            AppLog.Error("Session extras apply: " + ex.Message);
+            if (!snap.ScalingWidth.HasValue || !snap.ScalingHeight.HasValue
+                || Step("Scaling restore", () => ScalingModeHelper.Restore(
+                    snap.ScalingWidth.Value, snap.ScalingHeight.Value, snap.ScalingFixedOutput ?? 0, snap.ScalingDevice)))
+                snap.ScalingSaved = false;
+            else ok = false;
         }
+
+        if (snap.ToastChanged)
+        {
+            if (Step("Toast restore", () => WriteDword(PushNotificationsKey, "ToastEnabled", snap.ToastOriginal, "Toast notifications")))
+                snap.ToastChanged = false;
+            else ok = false;
+        }
+
+        if (snap.AutoHdrChanged)
+        {
+            if (Step("Auto HDR restore", () => WriteDword(VideoSettingsKey, "EnableHDRForGamingApps", snap.AutoHdrOriginal, "Auto HDR")))
+                snap.AutoHdrChanged = false;
+            else ok = false;
+        }
+
+        if (snap.AudioChanged)
+        {
+            if (Step("Audio restore", () =>
+                {
+                    if (!string.IsNullOrWhiteSpace(snap.AudioConsoleDeviceId))
+                        AudioEndpoint.SetDefaultForRole(snap.AudioConsoleDeviceId!, AudioEndpoint.Role.Console);
+                    if (!string.IsNullOrWhiteSpace(snap.AudioDeviceId))
+                        AudioEndpoint.SetDefaultForRole(snap.AudioDeviceId!, AudioEndpoint.Role.Multimedia);
+                }))
+                snap.AudioChanged = false;
+            else ok = false;
+        }
+
+        if (snap.BrightnessChanged)
+        {
+            if (snap.MonitorBrightnessLevels is not { Count: > 0 } levels
+                || Step("Brightness restore", () =>
+                {
+                    if (!MonitorBrightness.RestoreAll(levels))
+                        throw new InvalidOperationException("no monitor accepted the DDC/CI value");
+                }))
+                snap.BrightnessChanged = false;
+            else ok = false;
+        }
+
+        return ok;
     }
 
     /// <summary>
@@ -108,240 +212,42 @@ public sealed class SessionExtrasService : IDisposable
         return e.IsolatePrimaryMonitor;
     }
 
-    private static bool HasAnyExtra(SessionExtras e, string? resolution, bool isolate) =>
-        e.QuietNotifications
-        || e.DisableAutoHdr
-        || e.DisableNightLight
-        || isolate
-        || e.ApplyMonitorBrightness
-        || (e.SwitchAudioDevice && !string.IsNullOrWhiteSpace(e.AudioDeviceId))
-        || (!string.IsNullOrWhiteSpace(e.ScalingMode)
-            && !string.Equals(e.ScalingMode, "default", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(resolution));
-    public void Restore()
+    private void AddWarning(string w) =>
+        LastWarning = string.IsNullOrWhiteSpace(LastWarning) ? w : LastWarning + " · " + w;
+
+    private static bool Step(string what, Action action)
     {
-        if (_snap == null) return;
         try
         {
-            SetToastEnabled(_snap.ToastEnabled);
-            SetAutoHdr(_snap.AutoHdrEnabled);
-            if (_snap.NightLightKnown)
-                TrySetNightLight(_snap.NightLightOn);
-            if (!string.IsNullOrWhiteSpace(_snap.AudioDeviceId))
-                AudioEndpoint.SetDefault(_snap.AudioDeviceId!);
-            if (_snap.Brightness.HasValue)
-                MonitorBrightness.Set(_snap.Brightness.Value);
-            if (_snap.TopologySaved)
-                DisplayTopology.Restore();
-            if (_snap.ScalingSaved && _snap.ScalingWidth.HasValue && _snap.ScalingHeight.HasValue)
-            {
-                ScalingModeHelper.Restore(
-                    _snap.ScalingWidth.Value,
-                    _snap.ScalingHeight.Value,
-                    _snap.ScalingFixedOutput ?? 0,
-                    _snap.ScalingDevice);
-            }
+            action();
+            return true;
         }
         catch (Exception ex)
         {
-            AppLog.Error("Session extras restore: " + ex.Message);
-        }
-        finally
-        {
-            _snap = null;
+            AppLog.Error($"Session extras — {what}: {ex.Message}");
+            return false;
         }
     }
 
-    /// <summary>Copy current system extras into an ActiveSessionSnapshot (before profile apply).</summary>
-    public void FillSnapshotExtras(Models.ActiveSessionSnapshot target)
+    private static int? ReadDword(string keyPath, string name)
     {
-        var c = Capture();
-        target.ToastEnabled = c.ToastEnabled;
-        target.AutoHdrEnabled = c.AutoHdrEnabled;
-        target.NightLightKnown = c.NightLightKnown;
-        target.NightLightOn = c.NightLightOn;
-        target.AudioDeviceId = c.AudioDeviceId;
-        target.MonitorBrightness = c.Brightness;
+        using var k = Registry.CurrentUser.OpenSubKey(keyPath);
+        return k?.GetValue(name) is int i ? i : null;
     }
 
-    /// <summary>Restore extras from persisted ActiveSessionSnapshot (crash / emergency).</summary>
-    public void RestoreFromSnapshot(Models.ActiveSessionSnapshot snap)
+    /// <summary>Writes a DWORD, or deletes the value when <paramref name="value"/> is null (it was absent before).</summary>
+    private static void WriteDword(string keyPath, string name, int? value, string label)
     {
-        try
-        {
-            SetToastEnabled(snap.ToastEnabled);
-            SetAutoHdr(snap.AutoHdrEnabled);
-            if (snap.NightLightKnown)
-                TrySetNightLight(snap.NightLightOn);
-            if (!string.IsNullOrWhiteSpace(snap.AudioDeviceId))
-                AudioEndpoint.SetDefault(snap.AudioDeviceId!);
-            if (snap.MonitorBrightness.HasValue)
-                MonitorBrightness.Set(snap.MonitorBrightness.Value);
-            if (snap.TopologySaved)
-                DisplayTopology.RestoreFromSnapshot(snap);
-            if (snap.ScalingSaved && snap.ScalingWidth.HasValue && snap.ScalingHeight.HasValue)
-            {
-                ScalingModeHelper.Restore(
-                    snap.ScalingWidth.Value,
-                    snap.ScalingHeight.Value,
-                    snap.ScalingFixedOutput ?? 0,
-                    snap.ScalingDevice);
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("RestoreFromSnapshot: " + ex.Message);
-        }
-        finally
-        {
-            _snap = null;
-        }
-    }
-
-    /// <summary>Merge live topology/scaling flags from in-memory apply into the disk snapshot.</summary>
-    public void MergeLiveInto(Models.ActiveSessionSnapshot target)
-    {
-        if (_snap == null) return;
-        if (_snap.TopologySaved)
-        {
-            target.TopologySaved = true;
-            if (DisplayTopology.TryExport(
-                    out var paths, out var modes, out int pc, out int mc))
-            {
-                target.TopologyPathsB64 = Convert.ToBase64String(paths);
-                target.TopologyModesB64 = Convert.ToBase64String(modes);
-                target.TopologyPathCount = pc;
-                target.TopologyModeCount = mc;
-            }
-        }
-        if (_snap.ScalingSaved)
-        {
-            target.ScalingSaved = true;
-            target.ScalingDevice = _snap.ScalingDevice;
-            target.ScalingFixedOutput = _snap.ScalingFixedOutput;
-            target.ScalingWidth = _snap.ScalingWidth;
-            target.ScalingHeight = _snap.ScalingHeight;
-        }
-    }
-
-    private static SessionSnapshot Capture() => new()
-    {
-        ToastEnabled = GetToastEnabled(),
-        AutoHdrEnabled = GetAutoHdr(),
-        NightLightKnown = TryGetNightLight(out bool nl),
-        NightLightOn = nl,
-        AudioDeviceId = AudioEndpoint.GetDefaultId(),
-        Brightness = MonitorBrightness.Get(),
-        TopologySaved = false
-    };
-
-    private static bool GetToastEnabled()
-    {
-        try
-        {
-            using var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PushNotifications");
-            var v = k?.GetValue("ToastEnabled");
-            if (v is int i) return i != 0;
-        }
-        catch { }
-        return true;
-    }
-
-    private static void SetToastEnabled(bool on)
-    {
-        try
-        {
-            using var k = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\PushNotifications");
-            k?.SetValue("ToastEnabled", on ? 1 : 0, RegistryValueKind.DWord);
-            AppLog.Info($"Toast notifications → {(on ? "on" : "off")}");
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("ToastEnabled: " + ex.Message);
-        }
-    }
-
-    private static bool GetAutoHdr()
-    {
-        try
-        {
-            using var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\VideoSettings");
-            var v = k?.GetValue("EnableHDRForGamingApps");
-            if (v is int i) return i != 0;
-        }
-        catch { }
-        return true;
-    }
-
-    private static void SetAutoHdr(bool on)
-    {
-        try
-        {
-            using var k = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\VideoSettings");
-            k?.SetValue("EnableHDRForGamingApps", on ? 1 : 0, RegistryValueKind.DWord);
-            AppLog.Info($"Auto HDR → {(on ? "on" : "off")}");
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("AutoHDR: " + ex.Message);
-        }
-    }
-
-    // Night Light: one-way best-effort disable only (OS state cannot be read reliably).
-    private static bool TryGetNightLight(out bool on)
-    {
-        on = false;
-        return false;
-    }
-
-    private static void TrySetNightLight(bool on)
-    {
-        if (on)
-        {
-            // We never captured prior state — refuse to guess "enable".
-            AppLog.Info("Night Light re-enable skipped (state unknown).");
-            return;
-        }
-        try
-        {
-            using var k = Registry.CurrentUser.CreateSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\$$windows.data.bluelightreduction.bluelightreductionstate\windows.data.bluelightreduction.bluelightreductionstate");
-            if (k != null)
-            {
-                byte[] off =
-                {
-                    0x43, 0x42, 0x01, 0x00, 0x0A, 0x02, 0x01, 0x00, 0x2A, 0x06,
-                    0x24, 0xA9, 0x8A, 0xE5, 0xD5, 0x01, 0x00
-                };
-                k.SetValue("Data", off, RegistryValueKind.Binary);
-                AppLog.Info("Night Light disable attempted (best-effort, one-way).");
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLog.Info("Night Light tweak skipped: " + ex.Message);
-        }
-    }
-
-    public void Dispose() => _snap = null; // restore already done by EmergencyRestore / ApplyRestoreMode
-
-    private sealed class SessionSnapshot
-    {
-        public bool ToastEnabled { get; set; } = true;
-        public bool AutoHdrEnabled { get; set; } = true;
-        public bool NightLightKnown { get; set; }
-        public bool NightLightOn { get; set; }
-        public string? AudioDeviceId { get; set; }
-        public int? Brightness { get; set; }
-        public bool TopologySaved { get; set; }
-        public bool ScalingSaved { get; set; }
-        public string? ScalingDevice { get; set; }
-        public int? ScalingFixedOutput { get; set; }
-        public int? ScalingWidth { get; set; }
-        public int? ScalingHeight { get; set; }
+        using var k = Registry.CurrentUser.CreateSubKey(keyPath);
+        if (value.HasValue)
+            k.SetValue(name, value.Value, RegistryValueKind.DWord);
+        else
+            k.DeleteValue(name, throwOnMissingValue: false);
+        AppLog.Info($"{label} → {(value.HasValue ? value.Value.ToString() : "(default)")}");
     }
 }
 
+/// <summary>DDC/CI backlight for every physical monitor (dxva2).</summary>
 internal static class MonitorBrightness
 {
     [DllImport("dxva2.dll", SetLastError = true)]
@@ -364,7 +270,7 @@ internal static class MonitorBrightness
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct PHYSICAL_MONITOR
     {
         public IntPtr hPhysicalMonitor;
@@ -372,120 +278,84 @@ internal static class MonitorBrightness
         public string szPhysicalMonitorDescription;
     }
 
-    public static int? Get()
+    /// <summary>Calls <paramref name="visit"/>(index, handle) for every physical monitor in a stable order.</summary>
+    private static void ForEachPhysical(Action<int, IntPtr> visit)
     {
-        int? result = null;
-        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) =>
+        int index = 0;
+        MonitorEnumProc proc = (h, _, _, _) =>
         {
             uint n = 0;
             if (!GetNumberOfPhysicalMonitorsFromHMONITOR(h, ref n) || n == 0) return true;
             var arr = new PHYSICAL_MONITOR[n];
-            if (!GetPhysicalMonitorsFromHMONITOR(h, n, arr)) return true;
+            if (!GetPhysicalMonitorsFromHMONITOR(h, n, arr)) { index += (int)n; return true; }
             try
             {
-                uint min = 0, cur = 0, max = 0;
-                if (GetMonitorBrightness(arr[0].hPhysicalMonitor, ref min, ref cur, ref max) && max > min)
-                    result = (int)Math.Round((cur - min) * 100.0 / (max - min));
+                foreach (var pm in arr)
+                    visit(index++, pm.hPhysicalMonitor);
             }
             finally { DestroyPhysicalMonitors(n, arr); }
-            return false; // first only
-        }, IntPtr.Zero);
-        return result;
+            return true;
+        };
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, proc, IntPtr.Zero);
+        GC.KeepAlive(proc);
+    }
+
+    /// <summary>Current brightness (0–100) per physical monitor; null where DDC/CI is unavailable.</summary>
+    public static List<int?> GetAll()
+    {
+        var levels = new List<int?>();
+        ForEachPhysical((_, h) =>
+        {
+            uint min = 0, cur = 0, max = 0;
+            levels.Add(GetMonitorBrightness(h, ref min, ref cur, ref max) && max > min
+                ? (int)Math.Round((cur - min) * 100.0 / (max - min))
+                : null);
+        });
+        return levels;
     }
 
     /// <returns>True if at least one monitor accepted the new brightness.</returns>
-    public static bool Set(int percent)
+    public static bool SetAll(int percent)
     {
         percent = Math.Clamp(percent, 0, 100);
         bool ok = false;
-        try
-        {
-            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) =>
-            {
-                uint n = 0;
-                if (!GetNumberOfPhysicalMonitorsFromHMONITOR(h, ref n) || n == 0) return true;
-                var arr = new PHYSICAL_MONITOR[n];
-                if (!GetPhysicalMonitorsFromHMONITOR(h, n, arr)) return true;
-                try
-                {
-                    uint min = 0, cur = 0, max = 0;
-                    if (GetMonitorBrightness(arr[0].hPhysicalMonitor, ref min, ref cur, ref max) && max > min)
-                    {
-                        uint val = min + (uint)Math.Round((max - min) * (percent / 100.0));
-                        if (SetMonitorBrightness(arr[0].hPhysicalMonitor, val))
-                        {
-                            ok = true;
-                            AppLog.Info($"Monitor brightness → {percent}%");
-                        }
-                    }
-                }
-                finally { DestroyPhysicalMonitors(n, arr); }
-                return true; // all monitors
-            }, IntPtr.Zero);
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("MonitorBrightness.Set: " + ex.Message);
-            return false;
-        }
+        ForEachPhysical((_, h) => ok |= SetPercent(h, percent));
+        if (ok) AppLog.Info($"Monitor brightness → {percent}%");
         return ok;
+    }
+
+    /// <summary>Puts each monitor back to its own captured level.</summary>
+    /// <returns>False when a monitor that had a readable level could not be set back.</returns>
+    public static bool RestoreAll(IReadOnlyList<int?> levels)
+    {
+        bool ok = true;
+        ForEachPhysical((i, h) =>
+        {
+            if (i < levels.Count && levels[i] is int pct && !SetPercent(h, pct))
+                ok = false;
+        });
+        AppLog.Info(ok ? "Monitor brightness restored per monitor." : "Monitor brightness restore incomplete.");
+        return ok;
+    }
+
+    private static bool SetPercent(IntPtr h, int percent)
+    {
+        uint min = 0, cur = 0, max = 0;
+        if (!GetMonitorBrightness(h, ref min, ref cur, ref max) || max <= min) return false;
+        uint val = min + (uint)Math.Round((max - min) * (Math.Clamp(percent, 0, 100) / 100.0));
+        return val == cur || SetMonitorBrightness(h, val);
     }
 }
 
 internal static class ScalingModeHelper
 {
-    private const int ENUM_CURRENT_SETTINGS = -1;
-    private const int CDS_UPDATEREGISTRY = 0x01;
-    private const int DM_DISPLAYFIXEDOUTPUT = 0x20000000;
-    private const int DM_PELSWIDTH = 0x80000;
-    private const int DM_PELSHEIGHT = 0x100000;
     private const int DMDFO_DEFAULT = 0;
     private const int DMDFO_STRETCH = 1;
     private const int DMDFO_CENTER = 2;
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool EnumDisplaySettings(string? deviceName, int modeNum, ref DEVMODE devMode);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int ChangeDisplaySettingsEx(string? lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, int dwflags, IntPtr lParam);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct DEVMODE
-    {
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
-        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
-        public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
-        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
-        public short dmLogPixels;
-        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
-    }
-
-    public static int? CaptureFixedOutput(string? device)
-    {
-        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref dm)) return null;
-        return dm.dmDisplayFixedOutput;
-    }
-
-    public static int? CaptureWidth(string? device)
-    {
-        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref dm)) return null;
-        return dm.dmPelsWidth;
-    }
-
-    public static int? CaptureHeight(string? device)
-    {
-        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref dm)) return null;
-        return dm.dmPelsHeight;
-    }
-
     public static void Apply(string resolution, string mode, string? device)
     {
-        var parts = resolution.ToLowerInvariant().Split('x');
-        if (parts.Length != 2 || !int.TryParse(parts[0], out int w) || !int.TryParse(parts[1], out int h))
+        if (!DisplayEngine.TryParseRes(resolution, out int w, out int h))
             return;
 
         int fixedOut = mode.ToLowerInvariant() switch
@@ -495,49 +365,64 @@ internal static class ScalingModeHelper
             _ => DMDFO_DEFAULT
         };
 
-        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref dm)) return;
-        dm.dmPelsWidth = w;
-        dm.dmPelsHeight = h;
-        dm.dmDisplayFixedOutput = fixedOut;
-        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFIXEDOUTPUT;
-        int r = ChangeDisplaySettingsEx(device, ref dm, IntPtr.Zero, CDS_UPDATEREGISTRY, IntPtr.Zero);
+        int r = Change(device, w, h, fixedOut);
         AppLog.Info($"Scaling mode → {mode} ({resolution}) result={r}");
     }
 
     public static void Restore(int width, int height, int fixedOutput, string? device)
     {
-        try
-        {
-            var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-            if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref dm)) return;
-            dm.dmPelsWidth = width;
-            dm.dmPelsHeight = height;
-            dm.dmDisplayFixedOutput = fixedOutput;
-            dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFIXEDOUTPUT;
-            int r = ChangeDisplaySettingsEx(device, ref dm, IntPtr.Zero, CDS_UPDATEREGISTRY, IntPtr.Zero);
-            AppLog.Info($"Scaling mode restored ({width}x{height}) result={r}");
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("Scaling restore: " + ex.Message);
-        }
+        int r = Change(device, width, height, fixedOutput);
+        AppLog.Info($"Scaling mode restored ({width}x{height}) result={r}");
+        if (r != DISP_CHANGE_SUCCESSFUL)
+            throw new InvalidOperationException($"ChangeDisplaySettingsEx returned {r}");
+    }
+
+    /// <summary>Dynamic change (CDS flags 0) — nothing is written to the registry.</summary>
+    private static int Change(string? device, int width, int height, int fixedOutput)
+    {
+        if (!TryGetCurrentMode(device, out var dm)) return -1;
+        if (dm.dmPelsWidth == width && dm.dmPelsHeight == height && dm.dmDisplayFixedOutput == fixedOutput)
+            return DISP_CHANGE_SUCCESSFUL;
+        dm.dmPelsWidth = width;
+        dm.dmPelsHeight = height;
+        dm.dmDisplayFixedOutput = fixedOutput;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFIXEDOUTPUT;
+        return ChangeDisplaySettingsEx(NullIfEmpty(device), ref dm, IntPtr.Zero, CDS_DYNAMIC, IntPtr.Zero);
     }
 }
 
-/// <summary>Best-effort: save path array and disable non-primary outputs via CCD.</summary>
+/// <summary>
+/// "Primary monitor only" via CCD: keeps the active paths whose source sits at desktop (0,0)
+/// (the primary display, plus its clones) and deactivates the rest — not saved to the
+/// display database, and the original active configuration is kept for restore.
+/// </summary>
 internal static class DisplayTopology
 {
-    private static byte[]? _savedPaths;
-    private static byte[]? _savedModes;
-    private static int _pathCount;
-    private static int _modeCount;
+    public enum IsolateResult { Applied, NothingToDo, Failed }
 
-    private const uint QDC_ALL_PATHS = 1;
-    private const uint SDC_APPLY = 0x00000080;
-    private const uint SDC_USE_SUPPLIED_DISPLAY_CONFIG = 0x00000020;
-    private const uint SDC_SAVE_TO_DATABASE = 0x00000200;
-    private const uint SDC_ALLOW_CHANGES = 0x00000400;
+    public readonly record struct SavedConfig(byte[] Paths, byte[] Modes, int PathCount, int ModeCount);
+
+    private const uint QDC_ONLY_ACTIVE_PATHS = 0x2;
+    private const uint SDC_TOPOLOGY_DATABASE_CURRENT = 0x0F; // SDC_USE_DATABASE_CURRENT
+    private const uint SDC_USE_SUPPLIED_DISPLAY_CONFIG = 0x20;
+    private const uint SDC_APPLY = 0x80;
+    private const uint SDC_ALLOW_CHANGES = 0x400;
+    private const uint DISPLAYCONFIG_PATH_ACTIVE = 0x1;
+    private const uint DISPLAYCONFIG_PATH_MODE_IDX_INVALID = 0xFFFFFFFF;
+    private const uint DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE = 1;
+
+    // DISPLAYCONFIG_PATH_INFO (72 bytes): sourceInfo { LUID 0, id 8, modeInfoIdx 12, statusFlags 16 },
+    // targetInfo { LUID 20, id 28, modeInfoIdx 32, … }, flags 68.
+    private const int PathSize = 72;
+    private const int PathSourceIdOffset = 8;
+    private const int PathSourceModeIdxOffset = 12;
+    private const int PathTargetModeIdxOffset = 32;
+    private const int PathFlagsOffset = 68;
+    // DISPLAYCONFIG_MODE_INFO (64 bytes): infoType 0, id 4, LUID 8, sourceMode { width 16, height 20, format 24, position.x 28, position.y 32 }.
+    private const int ModeSize = 64;
+    private const int ModeInfoTypeOffset = 0;
+    private const int ModePositionXOffset = 28;
+    private const int ModePositionYOffset = 32;
 
     [DllImport("user32.dll")]
     private static extern int GetDisplayConfigBufferSizes(uint flags, out int numPathArrayElements, out int numModeInfoArrayElements);
@@ -550,143 +435,104 @@ internal static class DisplayTopology
     private static extern int SetDisplayConfig(int numPathArrayElements, byte[]? pathArray,
         int numModeInfoArrayElements, byte[]? modeInfoArray, uint flags);
 
-    // DISPLAYCONFIG_PATH_INFO is 72 bytes on x64 (flags UINT32 at offset 68).
-    // On 32-bit layouts differ — isolate is skipped rather than corrupting topology.
-    private static readonly int PathSize = IntPtr.Size == 8 ? 72 : 0;
-    private static readonly int ModeSize = IntPtr.Size == 8 ? 64 : 0;
-    private const int PathFlagsOffset = 68;
-
-    /// <returns>True if isolate was applied (or already active).</returns>
-    public static bool IsolatePrimary()
+    public static IsolateResult IsolatePrimary(out SavedConfig saved)
     {
+        saved = default;
         try
         {
-            if (PathSize == 0)
-            {
-                AppLog.Info("Isolate primary skipped — unsupported process architecture.");
-                return false;
-            }
-
-            if (_savedPaths != null)
-            {
-                AppLog.Info("Isolate primary already active — skip re-capture.");
-                return true;
-            }
-
-            if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, out int pc, out int mc) != 0) return false;
-            if (pc <= 0 || mc < 0) return false;
+            if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out int pc, out int mc) != 0 || pc <= 0)
+                return IsolateResult.Failed;
             var paths = new byte[checked(pc * PathSize)];
             var modes = new byte[checked(Math.Max(mc, 1) * ModeSize)];
             int pcr = pc, mcr = mc;
-            if (QueryDisplayConfig(QDC_ALL_PATHS, ref pcr, paths, ref mcr, modes, IntPtr.Zero) != 0) return false;
-            if (pcr <= 0 || paths.Length < pcr * PathSize) return false;
+            if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pcr, paths, ref mcr, modes, IntPtr.Zero) != 0 || pcr <= 0)
+                return IsolateResult.Failed;
 
-            _savedPaths = (byte[])paths.Clone();
-            _savedModes = (byte[])modes.Clone();
-            _pathCount = pcr;
-            _modeCount = mcr;
-
-            // Clear PATH_ACTIVE (0x1) on non-first paths via flags at offset 68
-            for (int i = 1; i < pcr; i++)
+            // Primary = the source whose desktop position is (0,0).
+            int primary = -1;
+            for (int i = 0; i < pcr && primary < 0; i++)
             {
-                int off = i * PathSize + PathFlagsOffset;
-                if (off + 4 <= paths.Length)
-                {
-                    paths[off] = 0;
-                    paths[off + 1] = 0;
-                    paths[off + 2] = 0;
-                    paths[off + 3] = 0;
-                }
+                uint idx = BitConverter.ToUInt32(paths, i * PathSize + PathSourceModeIdxOffset);
+                if (idx >= (uint)mcr) continue;
+                int m = (int)idx * ModeSize;
+                if (BitConverter.ToUInt32(modes, m + ModeInfoTypeOffset) != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE) continue;
+                if (BitConverter.ToInt32(modes, m + ModePositionXOffset) == 0 && BitConverter.ToInt32(modes, m + ModePositionYOffset) == 0)
+                    primary = i;
+            }
+            if (primary < 0)
+            {
+                AppLog.Warn("Isolate primary: no source at (0,0) found.");
+                return IsolateResult.Failed;
+            }
+
+            saved = new SavedConfig((byte[])paths.Clone(), (byte[])modes.Clone(), pcr, mcr);
+
+            int disabled = 0;
+            for (int i = 0; i < pcr; i++)
+            {
+                if (SameSource(paths, i, primary)) continue;
+                int p = i * PathSize;
+                uint flags = BitConverter.ToUInt32(paths, p + PathFlagsOffset) & ~DISPLAYCONFIG_PATH_ACTIVE;
+                BitConverter.TryWriteBytes(paths.AsSpan(p + PathFlagsOffset, 4), flags);
+                BitConverter.TryWriteBytes(paths.AsSpan(p + PathSourceModeIdxOffset, 4), DISPLAYCONFIG_PATH_MODE_IDX_INVALID);
+                BitConverter.TryWriteBytes(paths.AsSpan(p + PathTargetModeIdxOffset, 4), DISPLAYCONFIG_PATH_MODE_IDX_INVALID);
+                disabled++;
+            }
+
+            if (disabled == 0)
+            {
+                AppLog.Info("Isolate primary: only the primary display is active — nothing to do.");
+                saved = default;
+                return IsolateResult.NothingToDo;
             }
 
             int r = SetDisplayConfig(pcr, paths, mcr, modes, SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
-            AppLog.Info($"Isolate primary monitors result={r}");
+            AppLog.Info($"Isolate primary: {disabled} display(s) turned off, result={r}");
             if (r != 0)
             {
-                // Failed apply — drop snapshot so Restore is a no-op
-                _savedPaths = null;
-                _savedModes = null;
-                return false;
+                saved = default;
+                return IsolateResult.Failed;
             }
-            return true;
+            return IsolateResult.Applied;
         }
         catch (Exception ex)
         {
             AppLog.Error("IsolatePrimary: " + ex.Message);
-            _savedPaths = null;
-            _savedModes = null;
-            return false;
+            saved = default;
+            return IsolateResult.Failed;
         }
     }
 
-    public static void Restore()
+    /// <summary>Same adapter LUID (bytes 0..7) and source id as the primary path.</summary>
+    private static bool SameSource(byte[] paths, int i, int primary) =>
+        paths.AsSpan(i * PathSize, PathSourceIdOffset + 4)
+            .SequenceEqual(paths.AsSpan(primary * PathSize, PathSourceIdOffset + 4));
+
+    /// <summary>Re-applies the saved active configuration; falls back to the display database.</summary>
+    public static bool Restore(ActiveSessionSnapshot snap)
     {
-        if (_savedPaths == null || _savedModes == null) return;
-        try
+        if (!string.IsNullOrWhiteSpace(snap.TopologyPathsB64) && !string.IsNullOrWhiteSpace(snap.TopologyModesB64)
+            && snap.TopologyPathCount > 0)
         {
-            SetDisplayConfig(_pathCount, _savedPaths, _modeCount, _savedModes,
-                SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES);
-            AppLog.Info("Display topology restored.");
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("Topology restore: " + ex.Message);
-        }
-        finally
-        {
-            _savedPaths = null;
-            _savedModes = null;
-        }
-    }
-
-    public static bool TryExport(out byte[] paths, out byte[] modes, out int pathCount, out int modeCount)
-    {
-        paths = Array.Empty<byte>();
-        modes = Array.Empty<byte>();
-        pathCount = 0;
-        modeCount = 0;
-        if (_savedPaths == null || _savedModes == null) return false;
-        paths = (byte[])_savedPaths.Clone();
-        modes = (byte[])_savedModes.Clone();
-        pathCount = _pathCount;
-        modeCount = _modeCount;
-        return true;
-    }
-
-    /// <summary>
-    /// Restore from in-memory isolate snapshot, or from persisted CCD blobs after crash.
-    /// </summary>
-    public static void RestoreFromSnapshot(Models.ActiveSessionSnapshot snap)
-    {
-        if (_savedPaths != null && _savedModes != null)
-        {
-            Restore();
-            return;
+            try
+            {
+                var paths = Convert.FromBase64String(snap.TopologyPathsB64!);
+                var modes = Convert.FromBase64String(snap.TopologyModesB64!);
+                int r = SetDisplayConfig(snap.TopologyPathCount, paths, snap.TopologyModeCount, modes,
+                    SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES);
+                AppLog.Info($"Display topology restored from snapshot, result={r}");
+                if (r == 0) return true;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Topology restore from snapshot: " + ex.Message);
+            }
         }
 
-        if (string.IsNullOrWhiteSpace(snap.TopologyPathsB64)
-            || string.IsNullOrWhiteSpace(snap.TopologyModesB64)
-            || snap.TopologyPathCount <= 0
-            || snap.TopologyModeCount <= 0)
-        {
-            AppLog.Info("TopologySaved but no CCD blob — cannot restore after crash.");
-            return;
-        }
-
-        try
-        {
-            var paths = Convert.FromBase64String(snap.TopologyPathsB64!);
-            var modes = Convert.FromBase64String(snap.TopologyModesB64!);
-            int r = SetDisplayConfig(
-                snap.TopologyPathCount, paths,
-                snap.TopologyModeCount, modes,
-                SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES);
-            AppLog.Info($"Display topology restored from snapshot blob result={r}");
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("Topology restore from blob: " + ex.Message);
-        }
+        // Isolate was never saved to the database, so "database current" is the user's layout.
+        int db = SetDisplayConfig(0, null, 0, null, SDC_APPLY | SDC_TOPOLOGY_DATABASE_CURRENT);
+        AppLog.Info($"Display topology restored from database, result={db}");
+        return db == 0;
     }
 }
 
@@ -737,12 +583,15 @@ public static class AudioEndpoint
         return list;
     }
 
-    public static string? GetDefaultId()
+    /// <summary>Default render roles Visor reads / writes (communications is never touched).</summary>
+    public enum Role { Console = 0, Multimedia = 1 }
+
+    public static string? GetDefaultId(Role role)
     {
         try
         {
             var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-            int hr = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out var dev);
+            int hr = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, (ERole)(int)role, out var dev);
             if (hr != 0 || dev == null)
             {
                 Marshal.ReleaseComObject(enumerator);
@@ -766,31 +615,47 @@ public static class AudioEndpoint
         }
     }
 
+    /// <summary>
+    /// Makes the device the default for playback (console + multimedia roles). The communications
+    /// role is left alone so a separate headset / chat device setup keeps working.
+    /// </summary>
     public static void SetDefault(string idOrName)
     {
+        var id = ResolveId(idOrName);
+        if (id == null) return;
+        SetDefaultForRole(id, Role.Console);
+        SetDefaultForRole(id, Role.Multimedia);
+    }
+
+    public static void SetDefaultForRole(string id, Role role)
+    {
+        var policy = (IPolicyConfigVista)new CPolicyConfigClient();
         try
         {
-            string? id = idOrName;
-            // Allow friendly-name match
-            if (!idOrName.StartsWith("{", StringComparison.Ordinal))
-            {
-                var match = ListDevices().FirstOrDefault(d =>
-                    d.Name.Contains(idOrName, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrEmpty(match.Id)) id = match.Id;
-            }
-            if (string.IsNullOrWhiteSpace(id)) return;
-
-            var policy = (IPolicyConfigVista)new CPolicyConfigClient();
-            policy.SetDefaultEndpoint(id, (int)ERole.eConsole);
-            policy.SetDefaultEndpoint(id, (int)ERole.eMultimedia);
-            policy.SetDefaultEndpoint(id, (int)ERole.eCommunications);
-            Marshal.ReleaseComObject(policy);
-            AppLog.Info("Default audio → " + id);
+            int hr = policy.SetDefaultEndpoint(id, (int)role);
+            if (hr != 0)
+                throw new COMException($"SetDefaultEndpoint({role}) failed", hr);
+            AppLog.Info($"Default audio ({role}) → {id}");
         }
-        catch (Exception ex)
+        finally
         {
-            AppLog.Error("SetDefault audio: " + ex.Message);
+            Marshal.ReleaseComObject(policy);
         }
+    }
+
+    /// <summary>Endpoint id, or the first active device whose friendly name contains the text.</summary>
+    private static string? ResolveId(string idOrName)
+    {
+        if (string.IsNullOrWhiteSpace(idOrName)) return null;
+        if (idOrName.StartsWith("{", StringComparison.Ordinal)) return idOrName;
+        var match = ListDevices().FirstOrDefault(d =>
+            d.Name.Contains(idOrName, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrEmpty(match.Id))
+        {
+            AppLog.Warn("Audio device not found: " + idOrName);
+            return null;
+        }
+        return match.Id;
     }
 
     private enum EDataFlow { eRender = 0, eCapture = 1, eAll = 2 }

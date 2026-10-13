@@ -1,64 +1,136 @@
-<Window x:Class="DisplayProfileManager.SetupWizardWindow"
+<Window x:Class="Visor.SetupWizardWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="Setup" Height="520" Width="560"
+        Title="Visor setup" Height="580" Width="600"
+        MinHeight="460" MinWidth="480"
         WindowStartupLocation="CenterScreen"
-        WindowStyle="None" ResizeMode="NoResize"
+        WindowStyle="None" ResizeMode="CanResize"
+        Icon="pack://application:,,,/Assets/app.ico"
         Background="{DynamicResource BgBrush}"
         Foreground="{DynamicResource TextBrush}">
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="36" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+        <shell:WindowChrome CaptionHeight="40" ResizeBorderThickness="5" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
     <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource BgBrush}">
-        <Grid Margin="22">
+        <Grid Margin="24,14,24,20">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <StackPanel>
-                <TextBlock x:Name="TxtTitle" Text="Welcome" FontSize="22" FontWeight="SemiBold"/>
-                <TextBlock x:Name="TxtSub" Text="Quick setup" Foreground="{DynamicResource MutedBrush}" Margin="0,6,0,0" TextWrapping="Wrap"/>
-            </StackPanel>
-
-            <ScrollViewer Grid.Row="1" Margin="0,18,0,12" VerticalScrollBarVisibility="Hidden">
+            <!-- Header: logo, title, step dots, close -->
+            <DockPanel>
+                <Button x:Name="BtnClose" DockPanel.Dock="Right" Style="{StaticResource CaptionCloseButton}"
+                        Width="36" Height="30" VerticalAlignment="Top" Click="Close_Click"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Path Width="9" Height="9" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
+                          Data="M1,1 L9,9 M9,1 L1,9"/>
+                </Button>
+                <Image x:Name="Logo" DockPanel.Dock="Left" Width="44" Height="44" Margin="0,4,14,0" VerticalAlignment="Top"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
                 <StackPanel>
-                    <TextBlock x:Name="LblLang" Text="Language" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                    <ComboBox x:Name="CmbLang" SelectionChanged="Lang_Changed">
-                        <ComboBoxItem Content="English" Tag="en"/>
-                        <ComboBoxItem Content="Русский" Tag="ru"/>
-                    </ComboBox>
-
-                    <TextBlock x:Name="LblTheme" Text="Theme" FontWeight="SemiBold" Margin="0,16,0,6"/>
-                    <ComboBox x:Name="CmbTheme" SelectionChanged="Theme_Changed">
-                        <ComboBoxItem Content="Dark" Tag="dark"/>
-                        <ComboBoxItem Content="Light" Tag="light"/>
-                        <ComboBoxItem Content="Custom" Tag="custom"/>
-                    </ComboBox>
-                    <Button x:Name="BtnEditPalette" Content="Edit palette…" Style="{StaticResource GhostButton}"
-                            HorizontalAlignment="Left" Margin="0,8,0,0" Click="EditPalette_Click" Visibility="Collapsed"/>
-
-                    <TextBlock x:Name="LblMonitor" Text="Monitor" FontWeight="SemiBold" Margin="0,16,0,6"/>
-                    <ComboBox x:Name="CmbMonitor"/>
-
-                    <Separator Margin="0,16"/>
-                    <CheckBox x:Name="ChkAutostart" Content="Start with Windows" IsChecked="True"/>
-                    <CheckBox x:Name="ChkStartMin" Content="Start minimized to tray"/>
-                    <CheckBox x:Name="ChkNotify" Content="Toast when a game starts" IsChecked="True"/>
-                    <CheckBox x:Name="ChkBackup" Content="Backup config before save" IsChecked="True"/>
-                    <CheckBox x:Name="ChkTrayClose" Content="Close window → stay in tray" IsChecked="True"/>
-
-                    <TextBlock x:Name="LblTips" Margin="0,16,0,0" FontSize="12" TextWrapping="Wrap"
-                               Foreground="{DynamicResource MutedBrush}"
-                               Text="After setup: use the Play tab for live color while gaming, Presets for hotkey profiles, and Pack gallery for ready-made packs."/>
+                    <TextBlock x:Name="TxtTitle" Text="Welcome to Visor" FontSize="22" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtSub" Text="" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="StepDots" Orientation="Horizontal" Margin="0,10,0,0">
+                        <Border x:Name="Dot1" Width="22" Height="4" CornerRadius="2" Margin="0,0,6,0" Background="{DynamicResource BrandGradientBrush}"/>
+                        <Border x:Name="Dot2" Width="22" Height="4" CornerRadius="2" Margin="0,0,6,0" Background="{DynamicResource TrackBrush}"/>
+                        <Border x:Name="Dot3" Width="22" Height="4" CornerRadius="2" Background="{DynamicResource TrackBrush}"/>
+                    </StackPanel>
                 </StackPanel>
-            </ScrollViewer>
+            </DockPanel>
+
+            <Grid Grid.Row="1" Margin="0,18,0,12">
+                <!-- Step 1: what Visor does + language / theme -->
+                <ScrollViewer x:Name="Step1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,0,10,0">
+                        <Border Background="{DynamicResource PanelBrush}" CornerRadius="10" Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock x:Name="LblWhatTitle" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="LblWhat1" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="LblWhat2" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="LblWhat3" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}"/>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="LblLang" Text="Language" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="CmbLang" SelectionChanged="Lang_Changed">
+                            <ComboBoxItem Content="English" Tag="en"/>
+                            <ComboBoxItem Content="Русский" Tag="ru"/>
+                        </ComboBox>
+
+                        <TextBlock x:Name="LblTheme" Text="Theme" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                        <ComboBox x:Name="CmbTheme" SelectionChanged="Theme_Changed">
+                            <ComboBoxItem Content="Dark" Tag="dark"/>
+                            <ComboBoxItem Content="Light" Tag="light"/>
+                            <ComboBoxItem Content="Custom" Tag="custom"/>
+                        </ComboBox>
+                        <Button x:Name="BtnEditPalette" Content="Edit palette…" Style="{StaticResource GhostButton}"
+                                HorizontalAlignment="Left" Margin="0,8,0,0" Click="EditPalette_Click" Visibility="Collapsed"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Step 2: behavior -->
+                <ScrollViewer x:Name="Step2" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                    <StackPanel Margin="0,0,10,0">
+                        <TextBlock x:Name="LblMonitor" Text="Monitor" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="CmbMonitor"/>
+                        <Separator Margin="0,16"/>
+                        <CheckBox x:Name="ChkAutostart" IsChecked="False"/>
+                        <TextBlock x:Name="LblAutostartHint" Margin="28,0,0,8" FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource MutedBrush}"/>
+                        <CheckBox x:Name="ChkStartMin"/>
+                        <CheckBox x:Name="ChkNotify" IsChecked="True"/>
+                        <CheckBox x:Name="ChkTrayClose" IsChecked="True"/>
+                        <CheckBox x:Name="ChkBackup" IsChecked="True"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Step 3: games -->
+                <Grid x:Name="Step3" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Name="LblScanIntro" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,12"/>
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button x:Name="BtnScan" Style="{StaticResource AccentButton}" Click="Scan_Click"/>
+                        <TextBlock x:Name="TxtScanStatus" Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource MutedBrush}" MaxWidth="340"/>
+                    </StackPanel>
+                    <ListBox x:Name="FoundList" Grid.Row="2" Visibility="Collapsed">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                <Setter Property="Padding" Value="8,4"/>
+                                <Setter Property="Margin" Value="0,0,0,2"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding Include, Mode=TwoWay}" Margin="0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding Process}" Margin="8,0,0,0" Foreground="{DynamicResource MutedBrush}" FontSize="11"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock x:Name="LblTips" Grid.Row="3" Margin="0,12,0,0" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                </Grid>
+            </Grid>
 
             <DockPanel Grid.Row="2">
-                <Button x:Name="BtnFinish" Content="Finish" Style="{StaticResource AccentButton}"
-                        HorizontalAlignment="Right" MinWidth="110" Click="Finish_Click"/>
+                <Button x:Name="BtnBack" Content="Back" Style="{StaticResource GhostButton}" Click="Back_Click" Visibility="Hidden"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="BtnSkip" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Close_Click"/>
+                    <Button x:Name="BtnNext" Content="Next" Style="{StaticResource AccentButton}" IsDefault="True"
+                            MinWidth="110" Click="Next_Click"/>
+                </StackPanel>
             </DockPanel>
         </Grid>
     </Border>

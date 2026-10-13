@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace DisplayProfileManager.Models;
+namespace Visor.Models;
 
 public sealed class AppConfig
 {
@@ -12,7 +12,7 @@ public sealed class AppConfig
     public List<GameProfile> Profiles { get; set; } = new();
     /// <summary>Legacy global presets — migrated into each GameProfile.Presets.</summary>
     public List<QuickPreset>? Presets { get; set; }
-    public bool StartWithWindows { get; set; } = true;
+    public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; } = false;
     public bool FirstScanDone { get; set; }
     /// <summary>True after core games were seeded once — deleted cores stay deleted.</summary>
@@ -136,7 +136,8 @@ public sealed class DefaultSettings
 {
     public string? Resolution { get; set; } = "1920x1080";
     public int RefreshRate { get; set; }
-    public string? PowerPlan { get; set; } = "balanced";
+    /// <summary>Plan alias (balanced / highPerformance …) or scheme GUID. Null = leave the power plan alone.</summary>
+    public string? PowerPlan { get; set; }
     public ColorSettings Color { get; set; } = new();
     public ColorSettings? ColorLowLevel { get; set; }
     public ColorSettings? ColorDriver { get; set; }
@@ -266,7 +267,7 @@ public sealed class ColorSettings
             Backend = ColorBackend.LowLevel;
     }
 
-    /// <summary>DPM floats → classic RivaTuner slider units (exact ints for B/C).</summary>
+    /// <summary>Visor floats → classic RivaTuner slider units (exact ints for B/C).</summary>
     public (int Brightness, int Contrast, double Gamma) ToRivaTunerUnits()
     {
         int b = (int)Math.Round((Brightness - 0.5) * 250.0);
@@ -304,7 +305,7 @@ public sealed class ColorSettings
     };
 
     /// <summary>
-    /// Classic RivaTuner B (−125..125), C (−82..82), G (0.5..6) → DPM floats.
+    /// Classic RivaTuner B (−125..125), C (−82..82), G (0.5..6) → Visor floats.
     /// Same encoding as RT registry schemes (gamma-1 = 0/10/1.5, etc.).
     /// </summary>
     public static ColorSettings FromRivaTuner(double bRt, double cRt, double gRt, ColorBackend backend = ColorBackend.LowLevel)
@@ -534,11 +535,13 @@ public sealed class GameProfile
     /// <summary>Win32 device name (\\\\.\\DISPLAY1) or null for primary / app default.</summary>
     public string? DisplayDevice { get; set; }
     public string? PowerPlan { get; set; } = "highPerformance";
+    // legacy: kept for config compat — color is applied via presets only, never from the profile.
     public ColorSettings Color { get; set; } = ColorSettings.Neutral;
-    /// <summary>Independent Low Level (RivaTuner) B/C/G slot — kept when switching to NVIDIA/AMD.</summary>
+    // legacy: kept for config compat (independent Low Level slot).
     public ColorSettings? ColorLowLevel { get; set; }
-    /// <summary>Independent Driver (NVIDIA CP / AMD) slot — kept when switching to Low Level.</summary>
+    // legacy: kept for config compat (independent Driver slot).
     public ColorSettings? ColorDriver { get; set; }
+    // legacy: kept for config compat (forced false since config v15).
     public bool ApplyColor { get; set; }
     public bool ApplyResolution { get; set; }
     public bool ApplyPowerPlan { get; set; } = true;
@@ -590,9 +593,35 @@ public sealed class GameProfile
         return c;
     }
 
-    [JsonIgnore]
-    public string ResolutionDisplay =>
-        string.IsNullOrWhiteSpace(Resolution) ? "—" : Resolution;
+    /// <summary>Deep copy (keeps Id — callers that need a new identity reassign it).</summary>
+    public GameProfile Clone() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Enabled = Enabled,
+        ProcessName = ProcessName,
+        ProcessAliases = (ProcessAliases ?? new List<string>()).ToList(),
+        ExePath = ExePath,
+        Resolution = Resolution,
+        RefreshRate = RefreshRate,
+        StartupPresetId = StartupPresetId,
+        ApplyDelaySeconds = ApplyDelaySeconds,
+        ApplyOnFocus = ApplyOnFocus,
+        DisplayDevice = DisplayDevice,
+        PowerPlan = PowerPlan,
+        ApplyColor = ApplyColor,
+        ApplyResolution = ApplyResolution,
+        ApplyPowerPlan = ApplyPowerPlan,
+        FpsLimit = FpsLimit,
+        SoftRestoreOnAltTab = SoftRestoreOnAltTab,
+        RestoreMode = RestoreMode,
+        Color = (Color ?? ColorSettings.Neutral).Clone(),
+        ColorLowLevel = ColorLowLevel?.Clone(),
+        ColorDriver = ColorDriver?.Clone(),
+        Session = (Session ?? new SessionExtras()).Clone(),
+        Companions = (Companions ?? new List<CompanionApp>()).Select(c => c.Clone()).ToList(),
+        Presets = (Presets ?? new List<QuickPreset>()).Select(QuickPreset.CloneOf).ToList()
+    };
 
     [JsonIgnore]
     public System.Windows.Media.Brush? TileBrush { get; set; }
@@ -610,6 +639,10 @@ public sealed class SessionExtras
     /// <summary>Re-apply display/color N seconds after game start (0 = off).</summary>
     public int DeferredApplySeconds { get; set; }
 
+    /// <summary>
+    /// Not applied: Windows has no supported Night Light API and the CloudStore blob is undocumented.
+    /// Kept so existing configs round-trip.
+    /// </summary>
     public bool DisableNightLight { get; set; }
     public bool DisableAutoHdr { get; set; }
     /// <summary>Mute Windows toast notifications while game runs.</summary>
@@ -664,6 +697,18 @@ public sealed class CompanionApp
     public bool DismissDialogs { get; set; }
     public bool MinimizeToTray { get; set; }
 
+    public CompanionApp Clone() => new()
+    {
+        Path = Path,
+        Arguments = Arguments,
+        LaunchMode = LaunchMode,
+        TaskName = TaskName,
+        OnStop = OnStop,
+        StopHotkey = StopHotkey,
+        DismissDialogs = DismissDialogs,
+        MinimizeToTray = MinimizeToTray
+    };
+
     /// <summary>List row text: path + args.</summary>
     public string ListLabel =>
         string.IsNullOrWhiteSpace(Arguments) ? Path : $"{Path}  {Arguments.Trim()}";
@@ -671,31 +716,58 @@ public sealed class CompanionApp
 
 /// <summary>
 /// Pre-game PC state persisted to active-session.json for crash-safe restore.
+/// Captured once per game session (profile switches keep it); every "*Changed" flag marks
+/// something Visor actually changed, and only flagged items are restored.
 /// </summary>
 public sealed class ActiveSessionSnapshot
 {
+    public const int CurrentVersion = 2;
+
+    /// <summary>0 = written by Display Profile Manager (no change flags), 2 = Visor.</summary>
+    public int Version { get; set; }
     public DateTime CapturedUtc { get; set; } = DateTime.UtcNow;
     public string? ProfileId { get; set; }
     public string? ProfileName { get; set; }
 
+    /// <summary>Per-device pre-game mode + gamma ramp for every display Visor touched.</summary>
+    public List<SnapshotDisplay> Displays { get; set; } = new();
+
+    // Legacy single-display fields (version 0 files) — upgraded into Displays on load.
     public string? Resolution { get; set; }
     public int RefreshRate { get; set; }
     public string? DisplayDevice { get; set; }
-    public string? PowerPlanGuid { get; set; }
-
-    /// <summary>Base64 of 256 ushorts (little-endian) per channel.</summary>
     public string? GammaRedB64 { get; set; }
     public string? GammaGreenB64 { get; set; }
     public string? GammaBlueB64 { get; set; }
     public bool HasGammaRamp { get; set; }
 
+    public string? PowerPlanGuid { get; set; }
+    public bool PowerPlanChanged { get; set; }
+
+    /// <summary>Original HKCU PushNotifications\ToastEnabled (null = value absent).</summary>
+    public int? ToastOriginal { get; set; }
+    public bool ToastChanged { get; set; }
+    /// <summary>Original HKCU VideoSettings\EnableHDRForGamingApps (null = value absent).</summary>
+    public int? AutoHdrOriginal { get; set; }
+    public bool AutoHdrChanged { get; set; }
+    // Legacy (version 0) values.
     public bool ToastEnabled { get; set; } = true;
     public bool AutoHdrEnabled { get; set; } = true;
     public bool NightLightKnown { get; set; }
     public bool NightLightOn { get; set; }
-    public string? AudioDeviceId { get; set; }
-    public int? MonitorBrightness { get; set; }
 
+    /// <summary>Default render endpoint (multimedia role) before the switch.</summary>
+    public string? AudioDeviceId { get; set; }
+    public string? AudioConsoleDeviceId { get; set; }
+    public bool AudioChanged { get; set; }
+
+    /// <summary>Legacy single DDC value (version 0).</summary>
+    public int? MonitorBrightness { get; set; }
+    /// <summary>DDC/CI brightness per physical monitor, enumeration order (null = unreadable).</summary>
+    public List<int?>? MonitorBrightnessLevels { get; set; }
+    public bool BrightnessChanged { get; set; }
+
+    /// <summary>True when Visor changed the monitor layout (isolate primary).</summary>
     public bool TopologySaved { get; set; }
     /// <summary>CCD path array (base64) so crash restart can restore isolate.</summary>
     public string? TopologyPathsB64 { get; set; }
@@ -712,9 +784,38 @@ public sealed class ActiveSessionSnapshot
     /// <summary>Pre-game GPU driver vibrance/sat (crash-safe).</summary>
     public bool HasDriverColor { get; set; }
     public string? DriverVendor { get; set; }
+    public string? DriverDisplayName { get; set; }
     public int? DriverVibranceLevel { get; set; }
     public float? DriverNormalizedVibrance { get; set; }
+    public int? DriverHueAngle { get; set; }
     public int? DriverBrightness { get; set; }
     public int? DriverContrast { get; set; }
     public int? DriverSaturation { get; set; }
+
+    /// <summary>NVIDIA DRS Frame Rate Limiter state before Visor set a cap.</summary>
+    public bool FpsLimitChanged { get; set; }
+    public string? FpsLimitTarget { get; set; }
+    public bool FpsLimitHadSetting { get; set; }
+    public bool FpsLimitWasPredefined { get; set; }
+    public uint FpsLimitOriginalValue { get; set; }
+    public bool FpsLimitCreatedProfile { get; set; }
+
+    /// <summary>Failed full-restore attempts so far (snapshot is kept for retry, up to a limit).</summary>
+    public int RestoreAttempts { get; set; }
+}
+
+/// <summary>One display's pre-game state inside <see cref="ActiveSessionSnapshot"/>.</summary>
+public sealed class SnapshotDisplay
+{
+    /// <summary>\.\DISPLAYn.</summary>
+    public string? Device { get; set; }
+    public string? Resolution { get; set; }
+    public int RefreshRate { get; set; }
+    /// <summary>True once Visor changed this display's mode during the session.</summary>
+    public bool ModeChanged { get; set; }
+    public bool HasGammaRamp { get; set; }
+    /// <summary>Base64 of 256 ushorts (little-endian) per channel.</summary>
+    public string? GammaRedB64 { get; set; }
+    public string? GammaGreenB64 { get; set; }
+    public string? GammaBlueB64 { get; set; }
 }

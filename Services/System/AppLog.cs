@@ -1,7 +1,7 @@
 using System.IO;
 using System.Reflection;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 public static class AppLog
 {
@@ -11,10 +11,11 @@ public static class AppLog
     private const long MaxLogBytes = 2 * 1024 * 1024;
     private const int MaxMessageChars = 2000;
 
-    private static string _path = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "DisplayProfileManager",
-        "DisplayProfileManager.log");
+    private static string _path = Path.Combine(ConfigService.DefaultConfigDirectory, ConfigService.LogFileName);
+
+    /// <summary>%USERPROFILE% (C:\Users\Name) — replaced with "~" in every log line.</summary>
+    private static readonly string UserProfile =
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\');
 
     public static string LogFilePath => _path;
 
@@ -58,7 +59,7 @@ public static class AppLog
     public static void StartupBanner()
     {
         var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?";
-        Info($"Display Profile Manager {ver} starting — log: {_path}");
+        Info($"Visor {ver} starting — log: {_path}");
     }
 
     private static string FlattenStack(string stack)
@@ -70,6 +71,7 @@ public static class AppLog
     private static void Write(string level, string msg)
     {
         if (string.IsNullOrEmpty(msg)) msg = "(empty)";
+        msg = MaskUserPaths(msg);
         // Avoid dumping huge payloads / paths that could leak secrets into shared logs.
         if (msg.Length > MaxMessageChars)
             msg = msg[..MaxMessageChars] + "…";
@@ -93,6 +95,13 @@ public static class AppLog
             }
         }
         DebugWrite(line);
+    }
+
+    /// <summary>Keeps personal profile paths (and the user name in them) out of shared logs.</summary>
+    private static string MaskUserPaths(string msg)
+    {
+        if (UserProfile.Length < 4) return msg;
+        return msg.Replace(UserProfile, "~", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void DebugWrite(string line)

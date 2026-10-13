@@ -1,29 +1,55 @@
+using System;
+using System.Diagnostics;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 
-namespace DisplayProfileManager.Setup;
+namespace Visor.Setup;
 
 public partial class SetupWindow : Window
 {
+    private readonly LegacyInstall? _legacy;
     private Storyboard? _spin;
     private Storyboard? _progress;
+    private bool _busy;
 
     public SetupWindow()
     {
         InitializeComponent();
-        TxtPath.Text = InstallerCore.DefaultInstallDir;
+        TxtVersion.Text = L.Version(Product.Version);
+        TxtPath.Text = InstallerCore.FindInstallLocation() ?? Product.DefaultInstallDir;
         TxtPath.TextChanged += (_, _) => UpdateResolvedHint();
+
+        _legacy = LegacyInstall.Detect();
+        if (_legacy != null)
+        {
+            TxtLegacy.Text = L.RemoveLegacy(_legacy.Dir ?? "");
+            ChkLegacy.Visibility = Visibility.Visible;
+        }
+
         UpdateResolvedHint();
-        if (!InstallerCore.HasDesktopRuntime())
-            TxtRuntime.Text = ".NET Desktop Runtime not found — Install will open the download page first.";
+        Closing += (_, e) => e.Cancel = _busy;
     }
 
     private void UpdateResolvedHint()
     {
-        var resolved = InstallerCore.ResolveInstallDir(TxtPath.Text);
-        TxtResolved.Text = "Will install to: " + resolved;
+        var state = InstallerCore.Inspect(InstallerCore.ResolveInstallDir(TxtPath.Text));
+        bool ok = state.Kind is TargetKind.Fresh or TargetKind.Upgrade;
+        TxtResolved.Foreground = (Brush)FindResource(ok ? "AccentHoverBrush" : "DangerBrush");
+        TxtResolved.Text = state.Kind switch
+        {
+            TargetKind.Upgrade => L.WillUpdate(state.Dir!, state.ExistingVersion),
+            TargetKind.Fresh => L.WillInstallTo(state.Dir!),
+            TargetKind.Foreign => state.Dir + "\n" + L.FolderNotEmptyShort,
+            TargetKind.Protected => state.Dir + "\n" + L.ProtectedFolderShort,
+            _ => L.InvalidPath,
+        };
+        BtnInstall.Content = state.Kind == TargetKind.Upgrade ? L.Update : L.Install;
+        BtnInstall.IsEnabled = ok && !_busy;
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -34,12 +60,12 @@ public partial class SetupWindow : Window
         };
         Chrome.BeginAnimation(OpacityProperty, fade);
 
-        var scaleX = new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(460))
+        var scale = new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(460))
         {
             EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.28 }
         };
-        ChromeScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, scaleX);
-        ChromeScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, scaleX.Clone());
+        ChromeScale.BeginAnimation(ScaleTransform.ScaleXProperty, scale);
+        ChromeScale.BeginAnimation(ScaleTransform.ScaleYProperty, scale.Clone());
 
         var contentFade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(420))
         {
@@ -51,51 +77,144 @@ public partial class SetupWindow : Window
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.Left)
-            DragMove();
+        if (e.ChangedButton == MouseButton.Left) DragMove();
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_busy) Close();
+    }
 
     private void Browse_Click(object sender, RoutedEventArgs e)
     {
-        using var d = new System.Windows.Forms.FolderBrowserDialog
-        {
-            SelectedPath = DirectoryExistsOrParent(TxtPath.Text),
-            Description = "Choose parent folder — a DisplayProfileManager folder will be created inside"
-        };
-        if (d.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            TxtPath.Text = d.SelectedPath;
-    }
-
-    private static string DirectoryExistsOrParent(string path)
-    {
         try
         {
-            if (Directory.Exists(path)) return path;
-            var parent = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent)) return parent;
+            // Start from the parent of the current "...\Visor" target.
+            var resolved = InstallerCore.ResolveInstallDir(TxtPath.Text);
+            var start = resolved == null ? null : Path.GetDirectoryName(resolved);
+            if (start == null || !Directory.Exists(start))
+                start = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            var picked = Native.PickFolder(new WindowInteropHelper(this).Handle, L.BrowseTitle, start);
+            if (picked != null)
+                TxtPath.Text = InstallerCore.ResolveInstallDir(picked) ?? picked;
         }
-        catch { }
-        return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
-    private void StartInstallAnimations()
+    private void SetStatus(string text) =>
+        Dispatcher.BeginInvoke(new Action(() => TxtStatus.Text = text));
+
+    private async void Install_Click(object sender, RoutedEventArgs e)
+    {
+        var target = InstallerCore.ResolveInstallDir(TxtPath.Text);
+        if (target == null) { ShowError(L.InvalidPath); return; }
+
+        var options = new InstallOptions
+        {
+            TargetDir = target,
+            StartMenuShortcut = ChkStartMenu.IsChecked == true,
+            DesktopShortcut = ChkDesktop.IsChecked == true,
+            RemoveLegacy = _legacy != null && ChkLegacy.IsChecked == true,
+        };
+        bool launch = ChkLaunch.IsChecked == true;
+
+        // Ask before closing anything that is running.
+        var running = AppProcesses.Find(target, options.RemoveLegacy, _legacy?.Dir);
+        if (running.Count > 0)
+        {
+            var answer = MessageBox.Show(this, L.AppsRunning(AppProcesses.Names(running)), Title,
+                MessageBoxButton.YesNo, MessageBoxImage.Question);
+            foreach (var r in running) r.Process.Dispose();
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            var result = await App.RunSta(() => InstallerCore.Install(options, _legacy, SetStatus));
+            StopAnimations();
+
+            if (launch)
+            {
+                try { LaunchApp(result); }
+                catch (Exception ex) { result.Warnings.Add(ex.Message); }
+            }
+
+            _busy = false;
+            await ShowSuccessAsync(result);
+        }
+        catch (Exception ex)
+        {
+            StopAnimations();
+            SetBusy(false);
+            ShowError(ex.Message);
+            MessageBox.Show(this, L.InstallFailed + ex.Message, Title, MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// Starts Visor as the normal user. If Setup itself runs elevated (e.g. "Run as administrator"),
+    /// Visor must not inherit the admin token: hand the launch to the shell (explorer.exe), which
+    /// starts it un-elevated in the user's session.
+    /// </summary>
+    private static void LaunchApp(InstallResult result)
+    {
+        if (Native.IsElevated())
+        {
+            Process.Start(new ProcessStartInfo(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"),
+                "\"" + result.ExePath + "\"")
+            {
+                UseShellExecute = false
+            })?.Dispose();
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo(result.ExePath)
+        {
+            WorkingDirectory = result.Dir,
+            UseShellExecute = true
+        })?.Dispose();
+    }
+
+    private void ShowError(string text)
+    {
+        TxtError.Text = text;
+        TxtError.Visibility = Visibility.Visible;
+    }
+
+    private void SetBusy(bool busy)
+    {
+        _busy = busy;
+        BtnCancel.IsEnabled = !busy;
+        BtnClose.IsEnabled = !busy;
+        TxtPath.IsEnabled = !busy;
+        ChkStartMenu.IsEnabled = ChkDesktop.IsEnabled = ChkLegacy.IsEnabled = ChkLaunch.IsEnabled = !busy;
+        if (busy)
+        {
+            BtnInstall.IsEnabled = false;
+            TxtError.Visibility = Visibility.Collapsed;
+            StartAnimations();
+        }
+        else
+        {
+            UpdateResolvedHint();
+        }
+    }
+
+    private void StartAnimations()
     {
         ProgressPanel.Visibility = Visibility.Visible;
-        ProgressPanel.Opacity = 0;
-        TxtRuntime.Visibility = Visibility.Collapsed;
-
-        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220))
-        {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        ProgressPanel.BeginAnimation(OpacityProperty, fadeIn);
+        ProgressPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)));
 
         _spin = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
         var spinAnim = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.85));
         Storyboard.SetTarget(spinAnim, SpinRotate);
-        Storyboard.SetTargetProperty(spinAnim, new PropertyPath(System.Windows.Media.RotateTransform.AngleProperty));
+        Storyboard.SetTargetProperty(spinAnim, new PropertyPath(RotateTransform.AngleProperty));
         _spin.Children.Add(spinAnim);
         _spin.Begin();
 
@@ -105,108 +224,44 @@ public partial class SetupWindow : Window
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
         };
         Storyboard.SetTarget(slide, ProgressSlide);
-        Storyboard.SetTargetProperty(slide, new PropertyPath(System.Windows.Media.TranslateTransform.XProperty));
+        Storyboard.SetTargetProperty(slide, new PropertyPath(TranslateTransform.XProperty));
         _progress.Children.Add(slide);
         _progress.Begin();
     }
 
-    private void StopInstallAnimations()
+    private void StopAnimations()
     {
         _spin?.Stop();
         _progress?.Stop();
+        ProgressPanel.Visibility = Visibility.Collapsed;
     }
 
-    private void SetStatus(string text)
+    private async Task ShowSuccessAsync(InstallResult result)
     {
-        if (!Dispatcher.CheckAccess())
+        TxtSuccessTitle.Text = result.Upgraded ? L.UpdatedOk : L.InstalledOk;
+        if (result.Warnings.Count > 0)
         {
-            Dispatcher.Invoke(() => SetStatus(text));
-            return;
+            TxtWarnings.Text = L.Warnings + "\n• " + string.Join("\n• ", result.Warnings);
+            TxtWarnings.Visibility = Visibility.Visible;
+            BtnDone.Visibility = Visibility.Visible;
         }
-        TxtStatus.Text = text;
-    }
-
-    private async void Install_Click(object sender, RoutedEventArgs e)
-    {
-        BtnInstall.IsEnabled = false;
-        BtnCancel.IsEnabled = false;
-        try
-        {
-            if (!InstallerCore.HasDesktopRuntime())
-            {
-                InstallerCore.OpenRuntimeDownload();
-                System.Windows.MessageBox.Show(this,
-                    "Install the .NET Desktop Runtime, then click Install again.",
-                    "Display Profile Manager",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            var target = InstallerCore.ResolveInstallDir(TxtPath.Text);
-            TxtPath.Text = target;
-            UpdateResolvedHint();
-
-            var startMenu = ChkStartMenu.IsChecked == true;
-            var desktop = ChkDesktop.IsChecked == true;
-            var launch = ChkLaunch.IsChecked == true;
-
-            StartInstallAnimations();
-            SetStatus("Installing…");
-
-            await Task.Run(() => InstallerCore.ExtractAppFiles(target, SetStatus)).ConfigureAwait(true);
-            InstallerCore.RegisterInstallation(target, startMenu, desktop, SetStatus);
-
-            StopInstallAnimations();
-            SetStatus("Done — registered in Apps & Features.");
-
-            if (launch)
-            {
-                var exe = Path.Combine(target, "DisplayProfileManager.exe");
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = exe,
-                    WorkingDirectory = target,
-                    UseShellExecute = true
-                });
-            }
-
-            await ShowSuccessAndCloseAsync(
-                "Installed successfully",
-                "Thank you for installing Display Profile Manager.\nEnjoy — made by Nakidev");
-        }
-        catch (Exception ex)
-        {
-            StopInstallAnimations();
-            System.Windows.MessageBox.Show(this, "Install failed:\n" + ex.Message, Title,
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-        finally
-        {
-            BtnInstall.IsEnabled = true;
-            BtnCancel.IsEnabled = true;
-        }
-    }
-
-    private async Task ShowSuccessAndCloseAsync(string title, string body)
-    {
-        TxtSuccessTitle.Text = title;
-        TxtSuccessBody.Text = body;
         SuccessOverlay.Visibility = Visibility.Visible;
 
-        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320))
+        SuccessOverlay.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320))
         {
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        SuccessOverlay.BeginAnimation(OpacityProperty, fade);
-
+        });
         var pop = new DoubleAnimation(0.4, 1, TimeSpan.FromMilliseconds(480))
         {
             EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.5 }
         };
-        SuccessCheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, pop);
-        SuccessCheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, pop.Clone());
+        SuccessCheckScale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+        SuccessCheckScale.BeginAnimation(ScaleTransform.ScaleYProperty, pop.Clone());
 
-        await Task.Delay(2200);
-        Close();
+        if (result.Warnings.Count == 0)
+        {
+            await Task.Delay(2400);
+            Close();
+        }
     }
 }

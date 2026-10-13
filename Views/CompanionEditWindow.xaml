@@ -1,60 +1,89 @@
-<Window x:Class="DisplayProfileManager.CompanionEditWindow"
+<Window x:Class="Visor.CompanionEditWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Companion" Height="460" Width="540"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Companion app" Height="560" Width="560"
+        MinHeight="420" MinWidth="440"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
+        WindowStyle="None" ResizeMode="CanResize"
+        ShowInTaskbar="False"
         Background="{DynamicResource BgBrush}"
         Foreground="{DynamicResource TextBrush}">
-    <Grid Margin="16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        <StackPanel>
-            <TextBlock Text="Executable path (.exe only)" Foreground="{DynamicResource MutedBrush}"/>
-            <Grid Margin="0,4,0,10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBox x:Name="TxtPath"/>
-                <Button Grid.Column="1" Content="…" Width="36" Margin="6,0,0,0" Style="{StaticResource GhostButton}" Click="Browse_Click"/>
-            </Grid>
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="36" ResizeBorderThickness="5" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+    <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource BgBrush}">
+        <Grid Margin="18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-            <TextBlock Text="Launch arguments (optional)" Foreground="{DynamicResource MutedBrush}"/>
-            <TextBox x:Name="TxtArgs" Margin="0,4,0,4"
-                     ToolTip="Example: -launchapp elkagffjjeonbcmfpdndkckppafabjeklmdidong"/>
-            <TextBlock TextWrapping="Wrap" Margin="0,0,0,10" FontSize="11" Foreground="{DynamicResource MutedBrush}"
-                       Text="Example: -launchapp elkagffjjeonbcmfpdndkckppafabjeklmdidong"/>
+            <DockPanel>
+                <Button x:Name="BtnClose" Style="{StaticResource CaptionCloseButton}" DockPanel.Dock="Right"
+                        Width="36" Height="28" Click="Cancel_Click"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Path Width="9" Height="9" Stretch="Uniform" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.2"
+                          Data="M1,1 L9,9 M9,1 L1,9"/>
+                </Button>
+                <TextBlock x:Name="TxtTitle" Text="Companion app" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </DockPanel>
 
-            <TextBlock Text="Launch mode" Foreground="{DynamicResource MutedBrush}"/>
-            <ComboBox x:Name="CmbLaunch" Margin="0,4,0,10">
-                <ComboBoxItem Content="direct"/>
-                <ComboBoxItem Content="scheduledTask"/>
-            </ComboBox>
+            <ScrollViewer Grid.Row="1" Margin="0,14,0,12" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0,0,8,0">
+                    <TextBlock x:Name="LblLaunch" Text="How to start it" Foreground="{DynamicResource MutedBrush}"/>
+                    <ComboBox x:Name="CmbLaunch" Margin="0,4,0,12" SelectionChanged="CmbLaunch_SelectionChanged">
+                        <ComboBoxItem x:Name="ItmDirect" Tag="direct"/>
+                        <ComboBoxItem x:Name="ItmTask" Tag="scheduledTask"/>
+                    </ComboBox>
 
-            <TextBlock Text="Scheduled task name (letters, digits, . - \ only)" Foreground="{DynamicResource MutedBrush}"/>
-            <TextBox x:Name="TxtTask" Margin="0,4,0,10"/>
+                    <StackPanel x:Name="PanelDirect">
+                        <TextBlock x:Name="LblPath" Text="Program (.exe)" Foreground="{DynamicResource MutedBrush}"/>
+                        <Grid Margin="0,4,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TxtPath"/>
+                            <Button x:Name="BtnBrowse" Grid.Column="1" Content="Browse" Margin="6,0,0,0"
+                                    Style="{StaticResource CompactGhostButton}" Click="Browse_Click"/>
+                        </Grid>
 
-            <TextBlock Text="On stop (companion process only — never the game)" Foreground="{DynamicResource MutedBrush}"/>
-            <ComboBox x:Name="CmbOnStop" Margin="0,4,0,10">
-                <ComboBoxItem Content="closeThenKill"/>
-                <ComboBoxItem Content="close"/>
-                <ComboBoxItem Content="kill"/>
-                <ComboBoxItem Content="none"/>
-            </ComboBox>
+                        <TextBlock x:Name="LblArgs" Text="Launch arguments (optional)" Foreground="{DynamicResource MutedBrush}"/>
+                        <TextBox x:Name="TxtArgs" Margin="0,4,0,4"/>
+                        <TextBlock x:Name="LblArgsHint" TextWrapping="Wrap" Margin="0,0,0,10" FontSize="11"
+                                   Foreground="{DynamicResource MutedBrush}"/>
+                    </StackPanel>
 
-            <TextBlock TextWrapping="Wrap" Margin="0,4,0,8" Foreground="{DynamicResource MutedBrush}"
-                       Text="Companions are separate tools. Stop never sends global keyboard input and never injects into the game."/>
+                    <StackPanel x:Name="PanelTask" Visibility="Collapsed">
+                        <TextBlock x:Name="LblTask" Text="Scheduled task name" Foreground="{DynamicResource MutedBrush}"/>
+                        <TextBox x:Name="TxtTask" Margin="0,4,0,4"/>
+                        <TextBlock x:Name="LblTaskHint" TextWrapping="Wrap" Margin="0,0,0,10" FontSize="11"
+                                   Foreground="{DynamicResource MutedBrush}"/>
+                    </StackPanel>
 
-            <CheckBox x:Name="ChkDismiss" Content="Dismiss startup dialogs (click No)"/>
-            <CheckBox x:Name="ChkTray" Content="Minimize to tray after launch"/>
-        </StackPanel>
+                    <TextBlock x:Name="LblOnStop" Text="When the game exits" Foreground="{DynamicResource MutedBrush}"/>
+                    <ComboBox x:Name="CmbOnStop" Margin="0,4,0,10">
+                        <ComboBoxItem x:Name="ItmCloseKill" Tag="closeThenKill"/>
+                        <ComboBoxItem x:Name="ItmClose" Tag="close"/>
+                        <ComboBoxItem x:Name="ItmKill" Tag="kill"/>
+                        <ComboBoxItem x:Name="ItmNone" Tag="none"/>
+                    </ComboBox>
 
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Cancel" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Cancel_Click"/>
-            <Button Content="OK" Style="{StaticResource AccentButton}" Click="Ok_Click"/>
-        </StackPanel>
-    </Grid>
+                    <CheckBox x:Name="ChkDismiss"/>
+                    <CheckBox x:Name="ChkTray"/>
+
+                    <TextBlock x:Name="LblSafety" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="BtnCancel" Content="Cancel" Style="{StaticResource GhostButton}" Margin="0,0,8,0"
+                        IsCancel="True" Click="Cancel_Click"/>
+                <Button x:Name="BtnOk" Content="Save" Style="{StaticResource AccentButton}" IsDefault="True" Click="Ok_Click"/>
+            </StackPanel>
+        </Grid>
+    </Border>
 </Window>

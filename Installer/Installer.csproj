@@ -1,33 +1,45 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Visor Setup / Uninstall.exe.
+    Targets .NET Framework 4.8 (built into Windows 10 1903+ and Windows 11), so the
+    installer itself is tiny and needs no runtime. The app it installs is a
+    self-contained single-file build, embedded here as payload.zip by build-release.ps1.
+    Built without payload.zip it becomes the standalone uninstaller (Uninstall.exe).
+  -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net6.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
+    <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
-    <UseWindowsForms>true</UseWindowsForms>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>DisplayProfileManager-Setup</AssemblyName>
-    <RootNamespace>DisplayProfileManager.Setup</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Visor-Setup</AssemblyName>
+    <RootNamespace>Visor.Setup</RootNamespace>
     <ApplicationIcon>..\Assets\app.ico</ApplicationIcon>
-    <Version>1.8.0</Version>
-    <FileVersion>1.8.0.0</FileVersion>
-    <InformationalVersion>1.8.0</InformationalVersion>
-    <Product>Display Profile Manager Setup</Product>
-    <Company>Nakidev</Company>
-    <Authors>Nakidev</Authors>
-    <Copyright>Copyright (c) Nakidev</Copyright>
-    <Description>Installer for Display Profile Manager by Nakidev</Description>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>false</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
-    <PublishReadyToRun>false</PublishReadyToRun>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Product>Visor Setup</Product>
+    <AssemblyTitle>Visor Setup</AssemblyTitle>
+    <Description>Installer for Visor by Nakidev</Description>
+    <!-- Run as a native 64-bit process on x64 (correct Program Files / registry views). -->
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- No app.config next to the exe: the single Setup.exe must be self-sufficient. -->
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
   <ItemGroup>
     <Resource Include="..\Assets\app.ico" Link="Assets\app.ico" />
-    <!-- Single zip payload — avoids shipping NvAPI / loose DLL extract patterns -->
     <EmbeddedResource Include="payload.zip" Condition="Exists('payload.zip')" LogicalName="payload.zip" />
   </ItemGroup>
 </Project>

@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>Finds known games that are running or installed on disk.</summary>
 public static class GameScanner
@@ -123,7 +123,7 @@ public static class GameScanner
 
                 var exePath = Path.Combine(install, launch.Replace('/', '\\'));
                 var process = Path.GetFileName(exePath);
-                if (!GameCatalog.IsKnown(process) && !LooksLikeGameExe(process)) continue;
+                if (!GameCatalog.IsKnown(process)) continue;
                 if (!File.Exists(exePath)) continue;
 
                 var name = GameCatalog.GetFriendlyName(process)
@@ -266,7 +266,4 @@ public static class GameScanner
     {
         if (Directory.Exists(path)) list.Add(path);
     }
-
-    private static bool LooksLikeGameExe(string process) =>
-        GameCatalog.IsKnown(process);
 }

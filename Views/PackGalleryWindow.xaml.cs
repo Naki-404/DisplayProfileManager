@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows;
-using DisplayProfileManager.Services;
+using Visor.Services;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
 public partial class PackGalleryWindow : Window
 {
@@ -12,7 +12,7 @@ public partial class PackGalleryWindow : Window
     {
         public string Name { get; set; } = "";
         public string? Subtitle { get; set; }
-        public string ApplyLabel { get; set; } = "Apply";
+        public string ApplyLabel { get; set; } = "";
         public List<Models.QuickPreset> Presets { get; set; } = new();
 
         private bool _canApply;
@@ -49,10 +49,18 @@ public partial class PackGalleryWindow : Window
         _packs.Clear();
         foreach (var pack in PresetPackService.LoadBundledPacks())
         {
+            // Built-in packs get localized titles; unknown / user packs keep their own text.
+            string? key = pack.Id switch
+            {
+                "tarkov-riva" => "pack.tarkov",
+                "valorant-stretch" => "pack.valorant",
+                "pubg-stretch" => "pack.pubg",
+                _ => null
+            };
             _packs.Add(new PackItem
             {
-                Name = pack.Name,
-                Subtitle = pack.Subtitle,
+                Name = key != null ? Loc.T(key) : pack.Name,
+                Subtitle = key != null ? Loc.T(key + ".sub") : pack.Subtitle,
                 ApplyLabel = Loc.T("btn.apply"),
                 Presets = pack.Presets
             });
@@ -81,7 +89,8 @@ public partial class PackGalleryWindow : Window
         Title = Loc.T("presets.gallery");
         TxtTitle.Text = Loc.T("presets.gallery");
         LblHint.Text = Loc.T("presets.gallery.hint");
-        BtnClose.Content = Loc.T("btn.cancel");
+        BtnClose.Content = Loc.T("btn.close");
+        BtnCaptionClose.ToolTip = Loc.T("btn.close");
         foreach (var p in _packs)
             p.ApplyLabel = Loc.T("btn.apply");
     }

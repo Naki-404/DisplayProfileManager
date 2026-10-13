@@ -1,14 +1,17 @@
 using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using Visor.Services;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
 public partial class BootSplashWindow : Window
 {
     public BootSplashWindow()
     {
         InitializeComponent();
+        AppIcon.Source = AssetLoader.AppIcon(64);
+        Subtitle.Text = Loc.T("splash.starting");
         Loaded += OnLoaded;
     }
 
@@ -19,8 +22,7 @@ public partial class BootSplashWindow : Window
         {
             if (done) return;
             done = true;
-            try { DialogResult = true; }
-            catch { Close(); }
+            Close(); // shown modeless (Show), so DialogResult is not available
         }
 
         if (FindResource("BootStory") is Storyboard sb)

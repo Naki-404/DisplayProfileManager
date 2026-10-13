@@ -1,49 +1,28 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
-using DisplayProfileManager.Services;
+using Visor.Services;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
-public enum UnsavedChoice
-{
-    Stay,
-    Save,
-    Discard
-}
-
+/// <summary>
+/// Themed replacement for MessageBox: info, confirm (optionally destructive) and text prompt.
+/// Enter = primary button, Esc / × = cancel.
+/// </summary>
 public partial class ThemedDialog : Window
 {
-    public bool? Result { get; private set; }
-    public UnsavedChoice UnsavedResult { get; private set; } = UnsavedChoice.Stay;
+    private bool _closing;
 
-    private readonly bool _unsavedMode;
-
-    public ThemedDialog(string title, string message, bool showCancel = false, bool unsavedMode = false)
+    public ThemedDialog(string title, string message, bool showCancel = false)
     {
         InitializeComponent();
-        TitleText.Text = string.IsNullOrWhiteSpace(title) ? "Display Profile Manager" : title;
+        TitleText.Text = string.IsNullOrWhiteSpace(title) ? Loc.T("app.name") : title;
+        Title = TitleText.Text;
         MessageText.Text = message ?? "";
-        _unsavedMode = unsavedMode;
-
-        if (unsavedMode)
-        {
-            BtnDiscard.Visibility = Visibility.Visible;
-            BtnCancel.Visibility = Visibility.Visible;
-            BtnOk.Content = "Save";
-            BtnCancel.Content = "Cancel";
-            BtnDiscard.Content = "Don't save";
-        }
-        else
-        {
-            BtnDiscard.Visibility = Visibility.Collapsed;
-            BtnCancel.Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed;
-            if (showCancel)
-            {
-                BtnOk.Content = "Yes";
-                BtnCancel.Content = "No";
-            }
-        }
+        BtnClose.ToolTip = Loc.T("btn.close");
+        BtnCancel.Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed;
+        BtnOk.Content = showCancel ? Loc.T("btn.yes") : Loc.T("btn.ok");
+        BtnCancel.Content = showCancel ? Loc.T("btn.no") : Loc.T("btn.cancel");
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -67,12 +46,27 @@ public partial class ThemedDialog : Window
         };
         Card.RenderTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, scaleX);
         Card.RenderTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, scaleY);
+
+        if (InputBox.Visibility == Visibility.Visible)
+        {
+            InputBox.Focus();
+            InputBox.SelectAll();
+        }
+        else if (BtnCancel.Visibility == Visibility.Visible && ReferenceEquals(BtnOk.Style, TryFindResource("DangerButton")))
+            BtnCancel.Focus(); // destructive: safe default for keyboard users (Enter still = primary)
+        else
+            BtnOk.Focus();
     }
 
-    private void CloseWithFade(bool? result, UnsavedChoice unsaved = UnsavedChoice.Stay)
+    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        Result = result;
-        UnsavedResult = unsaved;
+        try { DragMove(); } catch { }
+    }
+
+    private void CloseWithFade(bool result)
+    {
+        if (_closing) return;
+        _closing = true;
         IsHitTestVisible = false;
         var fade = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(120))
         {
@@ -80,55 +74,65 @@ public partial class ThemedDialog : Window
         };
         fade.Completed += (_, _) =>
         {
-            try { DialogResult = result == true; }
+            try { DialogResult = result; }
             catch { Close(); }
         };
         BeginAnimation(OpacityProperty, fade);
     }
 
-    private void Ok_Click(object sender, RoutedEventArgs e)
-        => CloseWithFade(true, _unsavedMode ? UnsavedChoice.Save : UnsavedChoice.Stay);
+    private void Ok_Click(object sender, RoutedEventArgs e) => CloseWithFade(true);
 
-    private void Cancel_Click(object sender, RoutedEventArgs e)
-        => CloseWithFade(false, UnsavedChoice.Stay);
+    private void Cancel_Click(object sender, RoutedEventArgs e) => CloseWithFade(false);
 
-    private void Discard_Click(object sender, RoutedEventArgs e)
-        => CloseWithFade(false, UnsavedChoice.Discard);
+    private void Close_Click(object sender, RoutedEventArgs e) => CloseWithFade(false);
 
-    private void Close_Click(object sender, RoutedEventArgs e)
-        => CloseWithFade(false, UnsavedChoice.Stay);
-
-    protected override void OnKeyDown(System.Windows.Input.KeyEventArgs e)
+    protected override void OnPreviewKeyDown(System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key == Key.Escape) { CloseWithFade(false, UnsavedChoice.Stay); e.Handled = true; }
-        base.OnKeyDown(e);
+        if (e.Key == Key.Escape) { CloseWithFade(false); e.Handled = true; }
+        base.OnPreviewKeyDown(e);
     }
 
+    private static ThemedDialog Create(Window? owner, string message, string? title, bool showCancel)
+    {
+        var dlg = new ThemedDialog(title ?? Loc.T("app.name"), message, showCancel);
+        if (owner != null && owner.IsVisible)
+        {
+            dlg.Owner = owner;
+            dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
+        else
+            dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        return dlg;
+    }
+
+    /// <summary>Info (OK) or yes/no confirm.</summary>
     public static bool Show(Window? owner, string message, string? title = null, bool confirm = false)
     {
-        var dlg = new ThemedDialog(title ?? "Display Profile Manager", message, confirm)
-        {
-            Owner = owner,
-            WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen
-        };
+        var dlg = Create(owner, message, title, confirm);
         return dlg.ShowDialog() == true;
     }
 
-    public static UnsavedChoice ShowUnsaved(Window? owner)
+    /// <summary>Confirm with an explicit action label ("Delete", "Import"…). <paramref name="danger"/> paints it red.</summary>
+    public static bool Confirm(Window? owner, string message, string title, string confirmText, bool danger = false)
     {
-        var dlg = new ThemedDialog(
-            Loc.T("unsaved.title"),
-            Loc.T("unsaved.message"),
-            showCancel: true,
-            unsavedMode: true)
-        {
-            Owner = owner,
-            WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen
-        };
-        dlg.BtnOk.Content = Loc.T("unsaved.save");
-        dlg.BtnDiscard.Content = Loc.T("unsaved.discard");
-        dlg.BtnCancel.Content = Loc.T("unsaved.cancel");
-        dlg.ShowDialog();
-        return dlg.UnsavedResult;
+        var dlg = Create(owner, message, title, showCancel: true);
+        dlg.BtnOk.Content = confirmText;
+        dlg.BtnCancel.Content = Loc.T("btn.cancel");
+        if (danger && dlg.TryFindResource("DangerButton") is Style st)
+            dlg.BtnOk.Style = st;
+        return dlg.ShowDialog() == true;
+    }
+
+    /// <summary>Single-line text prompt. Returns null when cancelled.</summary>
+    public static string? Prompt(Window? owner, string title, string message, string defaultText, string? okText = null)
+    {
+        var dlg = Create(owner, message, title, showCancel: true);
+        dlg.InputBox.Visibility = Visibility.Visible;
+        dlg.InputBox.Text = defaultText ?? "";
+        dlg.BtnOk.Content = okText ?? Loc.T("btn.ok");
+        dlg.BtnCancel.Content = Loc.T("btn.cancel");
+        if (string.IsNullOrWhiteSpace(message))
+            dlg.MessageText.Visibility = Visibility.Collapsed;
+        return dlg.ShowDialog() == true ? dlg.InputBox.Text : null;
     }
 }

@@ -1,9 +1,9 @@
 using System.Runtime.InteropServices;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
-/// AMD Display Library (atiadlxx) — brightness / contrast / saturation at driver level.
+/// AMD Display Library (atiadlxx) — saturation at driver level on the target display.
 /// </summary>
 internal sealed class AmdAdlColor : IDisposable
 {
@@ -11,13 +11,24 @@ internal sealed class AmdAdlColor : IDisposable
     private const int AdlDisplayColorBrightness = 1;
     private const int AdlDisplayColorContrast = 2;
     private const int AdlDisplayColorSaturation = 4;
+    private const int AdlDisplayInfoConnected = 0x1;
+    private const int AdlDisplayInfoMapped = 0x2;
+
+    private delegate IntPtr AdlMainMemoryAlloc(int size);
+
+    /// <summary>
+    /// ADL keeps this callback for the lifetime of the context and calls it from native code —
+    /// it must never be collected, so it lives in a static field (not a temporary delegate).
+    /// </summary>
+    private static readonly AdlMainMemoryAlloc AllocCallback = Marshal.AllocHGlobal;
 
     private IntPtr _context;
     private bool _ready;
     private int _adapterIndex = -1;
     private int _displayIndex = -1;
-
-    private delegate IntPtr AdlMainMemoryAlloc(int size);
+    private string? _targetDevice;
+    /// <summary>Saturation per adapter/display the first time Visor saw it — the "50%" point.</summary>
+    private readonly Dictionary<(int Adapter, int Display), int> _baselineSaturation = new();
 
     [DllImport("atiadlxx.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int ADL2_Main_Control_Create(AdlMainMemoryAlloc callback, int enumConnectedAdapters, out IntPtr context);
@@ -33,9 +44,6 @@ internal sealed class AmdAdlColor : IDisposable
 
     [DllImport("atiadlxx.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int ADL2_Adapter_Active_Get(IntPtr context, int adapterIndex, out int status);
-
-    [DllImport("atiadlxx.dll", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ADL2_Display_NumberOfDisplays_Get(IntPtr context, int adapterIndex, out int numDisplays);
 
     [DllImport("atiadlxx.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int ADL2_Display_DisplayInfo_Get(IntPtr context, int adapterIndex, out int numDisplays, out IntPtr info, int forceDetect);
@@ -58,6 +66,7 @@ internal sealed class AmdAdlColor : IDisposable
         public int FunctionNumber;
         public int VendorID;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string AdapterName;
+        /// <summary>GDI device name of this logical adapter (\\.\DISPLAYn).</summary>
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string DisplayName;
         public int Present;
         public int Exist;
@@ -67,13 +76,14 @@ internal sealed class AmdAdlColor : IDisposable
         public int OSDisplayIndex;
     }
 
+    /// <summary>ADLDisplayInfo (ADLDisplayID first: logical, physical, logical adapter, physical adapter).</summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct AdlDisplayInfo
     {
-        public int DisplayID_DisplayLogicalIndex;
-        public int DisplayID_DisplayPhysicalAdapterIndex;
-        public int DisplayID_DisplayPhysicalIndex;
-        public int DisplayID_DisplayLogicalAdapterIndex;
+        public int DisplayLogicalIndex;
+        public int DisplayPhysicalIndex;
+        public int DisplayLogicalAdapterIndex;
+        public int DisplayPhysicalAdapterIndex;
         public int DisplayControllerIndex;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string DisplayName;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string DisplayManufacturerName;
@@ -86,71 +96,35 @@ internal sealed class AmdAdlColor : IDisposable
 
     public bool IsAvailable => _ready;
 
+    /// <summary>Requested target (\.DISPLAYn) or null for the first connected display.</summary>
+    public string? CurrentDisplayName => _targetDevice;
+
+    /// <summary>Target display (\\.\DISPLAYn); null = first connected AMD display.</summary>
+    public void SetTargetDevice(string? deviceName)
+    {
+        if (string.Equals(deviceName, _targetDevice, StringComparison.OrdinalIgnoreCase)) return;
+        _targetDevice = deviceName;
+        if (_ready) SelectDisplay();
+    }
+
     public bool TryInit()
     {
         if (_ready) return true;
         try
         {
-            if (ADL2_Main_Control_Create(Marshal.AllocHGlobal, 1, out _context) != AdlOk)
+            if (_context == IntPtr.Zero &&
+                ADL2_Main_Control_Create(AllocCallback, 1, out _context) != AdlOk)
             {
                 _context = IntPtr.Zero;
                 return false;
             }
 
-            if (ADL2_Adapter_NumberOfAdapters_Get(_context, out int n) != AdlOk || n <= 0)
+            if (!SelectDisplay())
             {
                 FailCleanup();
                 return false;
             }
-
-            int size = Marshal.SizeOf<AdapterInfo>();
-            IntPtr buf = Marshal.AllocHGlobal(size * n);
-            try
-            {
-                for (int i = 0; i < n; i++)
-                {
-                    var tmp = new AdapterInfo { Size = size };
-                    Marshal.StructureToPtr(tmp, buf + i * size, false);
-                }
-                if (ADL2_Adapter_AdapterInfo_Get(_context, buf, size * n) != AdlOk)
-                {
-                    FailCleanup();
-                    return false;
-                }
-
-                for (int i = 0; i < n; i++)
-                {
-                    var info = Marshal.PtrToStructure<AdapterInfo>(buf + i * size);
-                    if (ADL2_Adapter_Active_Get(_context, info.AdapterIndex, out int active) != AdlOk || active == 0)
-                        continue;
-                    if (ADL2_Display_NumberOfDisplays_Get(_context, info.AdapterIndex, out int nd) != AdlOk || nd <= 0)
-                        continue;
-
-                    if (ADL2_Display_DisplayInfo_Get(_context, info.AdapterIndex, out int got, out IntPtr dinfo, 0) != AdlOk)
-                        continue;
-                    try
-                    {
-                        if (got <= 0) continue;
-                        _adapterIndex = info.AdapterIndex;
-                        var di = Marshal.PtrToStructure<AdlDisplayInfo>(dinfo);
-                        _displayIndex = di.DisplayID_DisplayLogicalIndex;
-                        _ready = true;
-                        AppLog.Info($"AMD ADL ready: adapter={_adapterIndex} display={_displayIndex}");
-                        return true;
-                    }
-                    finally
-                    {
-                        if (dinfo != IntPtr.Zero) Marshal.FreeHGlobal(dinfo);
-                    }
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buf);
-            }
-
-            FailCleanup();
-            return false;
+            return true;
         }
         catch (DllNotFoundException)
         {
@@ -165,11 +139,78 @@ internal sealed class AmdAdlColor : IDisposable
         return false;
     }
 
+    /// <summary>Picks the connected + mapped display of the adapter whose GDI name is the target (else the first such display).</summary>
+    private bool SelectDisplay()
+    {
+        if (ADL2_Adapter_NumberOfAdapters_Get(_context, out int n) != AdlOk || n <= 0)
+            return false;
+
+        int size = Marshal.SizeOf<AdapterInfo>();
+        IntPtr buf = Marshal.AllocHGlobal(size * n);
+        (int Adapter, int Display)? first = null, preferred = null;
+        try
+        {
+            for (int i = 0; i < n; i++)
+                Marshal.StructureToPtr(new AdapterInfo { Size = size }, buf + i * size, false);
+            if (ADL2_Adapter_AdapterInfo_Get(_context, buf, size * n) != AdlOk)
+                return false;
+
+            for (int i = 0; i < n && preferred == null; i++)
+            {
+                var info = Marshal.PtrToStructure<AdapterInfo>(buf + i * size);
+                if (ADL2_Adapter_Active_Get(_context, info.AdapterIndex, out int active) != AdlOk || active == 0)
+                    continue;
+                int? display = FindConnectedDisplay(info.AdapterIndex);
+                if (display == null) continue;
+
+                first ??= (info.AdapterIndex, display.Value);
+                if (_targetDevice != null && string.Equals(info.DisplayName, _targetDevice, StringComparison.OrdinalIgnoreCase))
+                    preferred = (info.AdapterIndex, display.Value);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buf);
+        }
+
+        var pick = preferred ?? first;
+        if (pick == null) return false;
+        _adapterIndex = pick.Value.Adapter;
+        _displayIndex = pick.Value.Display;
+        _ready = true;
+        if (!_baselineSaturation.ContainsKey(pick.Value) && Read(AdlDisplayColorSaturation) is int sat)
+            _baselineSaturation[pick.Value] = sat;
+        AppLog.Info($"AMD ADL ready: adapter={_adapterIndex} display={_displayIndex}");
+        return true;
+    }
+
+    private int? FindConnectedDisplay(int adapterIndex)
+    {
+        if (ADL2_Display_DisplayInfo_Get(_context, adapterIndex, out int got, out IntPtr dinfo, 0) != AdlOk)
+            return null;
+        try
+        {
+            int size = Marshal.SizeOf<AdlDisplayInfo>();
+            for (int j = 0; j < got; j++)
+            {
+                var di = Marshal.PtrToStructure<AdlDisplayInfo>(dinfo + j * size);
+                const int want = AdlDisplayInfoConnected | AdlDisplayInfoMapped;
+                if ((di.DisplayInfoValue & want) == want && di.DisplayLogicalAdapterIndex == adapterIndex)
+                    return di.DisplayLogicalIndex;
+            }
+            return null;
+        }
+        finally
+        {
+            if (dinfo != IntPtr.Zero) Marshal.FreeHGlobal(dinfo);
+        }
+    }
+
     private void FailCleanup()
     {
         if (_context != IntPtr.Zero)
         {
-            try { ADL2_Main_Control_Destroy(_context); } catch { }
+            try { ADL2_Main_Control_Destroy(_context); } catch { /* best effort */ }
             _context = IntPtr.Zero;
         }
         _ready = false;
@@ -179,12 +220,13 @@ internal sealed class AmdAdlColor : IDisposable
 
     public DriverColorSnapshot? Capture()
     {
-        if (!_ready && !TryInit()) return null;
+        if (!TryInit()) return null;
         try
         {
             return new DriverColorSnapshot
             {
                 Vendor = "amd",
+                DisplayName = _targetDevice,
                 Brightness = Read(AdlDisplayColorBrightness),
                 Contrast = Read(AdlDisplayColorContrast),
                 Saturation = Read(AdlDisplayColorSaturation)
@@ -197,20 +239,25 @@ internal sealed class AmdAdlColor : IDisposable
         }
     }
 
-    public void Apply(Models.ColorSettings color, int vibrancePercent)
+    /// <summary>
+    /// Saturation from the UI vibrance slider: 50 = the display's baseline, 0 = min, 100 = max.
+    /// Brightness/contrast stay untouched (those belong to the gamma ramp).
+    /// </summary>
+    public void Apply(int vibrancePercent)
     {
-        if (!_ready && !TryInit()) return;
+        if (vibrancePercent < 0) return;
+        if (!TryInit()) return;
         try
         {
-            // Only saturation/vibrance from the UI slider.
-            // Do NOT map profile Brightness/Contrast (those are for GDI/RT Low Level) —
-            // that was crushing ADL B/C and looking like extreme contrast / gray.
-            if (vibrancePercent >= 0)
-            {
-                // 50 ≈ keep around default center of ADL range
-                WriteMapped(AdlDisplayColorSaturation, vibrancePercent / 100.0, 0.0, 1.0);
-            }
-            AppLog.Info($"AMD saturation → vib UI {vibrancePercent}% (B/C left untouched).");
+            if (ADL2_Display_Color_Get(_context, _adapterIndex, _displayIndex, AdlDisplayColorSaturation,
+                    out _, out int def, out int min, out int max, out _) != AdlOk || max <= min)
+                return;
+
+            int baseline = _baselineSaturation.TryGetValue((_adapterIndex, _displayIndex), out var b) ? b : def;
+            double t = (Math.Clamp(vibrancePercent, 0, 100) - 50) / 50.0;
+            double value = t >= 0 ? baseline + (max - baseline) * t : baseline + (baseline - min) * t;
+            Write(AdlDisplayColorSaturation, Math.Clamp((int)Math.Round(value), min, max));
+            AppLog.Info($"AMD saturation → vib UI {vibrancePercent}% (baseline {baseline}, B/C left untouched).");
         }
         catch (Exception ex)
         {
@@ -218,30 +265,28 @@ internal sealed class AmdAdlColor : IDisposable
         }
     }
 
-    /// <summary>
-    /// AMD ADL has no public HUE offset control (only brightness/contrast/saturation via
-    /// ADL_DISPLAY_COLOR). Stub kept parallel to NvidiaDriverColor.TrySetHue so callers can
-    /// treat both vendors uniformly; always returns false.
-    /// </summary>
-    public bool TrySetHue(int hue)
+    /// <returns>False when ADL is unavailable or a write was rejected.</returns>
+    public bool Restore(DriverColorSnapshot snap)
     {
-        _ = hue;
-        AppLog.Info("AMD HUE control not available (ADL has no HUE API) - skipped.");
-        return false;
-    }
-
-    public void Restore(DriverColorSnapshot snap)
-    {
-        if (!_ready || snap.Vendor != "amd") return;
+        if (snap.Vendor != "amd") return false;
+        if (snap.DisplayName != null) SetTargetDevice(snap.DisplayName);
+        if (!TryInit())
+        {
+            AppLog.Warn("AMD restore skipped: ADL not available.");
+            return false;
+        }
         try
         {
-            if (snap.Brightness.HasValue) Write(AdlDisplayColorBrightness, snap.Brightness.Value);
-            if (snap.Contrast.HasValue) Write(AdlDisplayColorContrast, snap.Contrast.Value);
-            if (snap.Saturation.HasValue) Write(AdlDisplayColorSaturation, snap.Saturation.Value);
+            bool ok = true;
+            if (snap.Brightness.HasValue) ok &= Write(AdlDisplayColorBrightness, snap.Brightness.Value);
+            if (snap.Contrast.HasValue) ok &= Write(AdlDisplayColorContrast, snap.Contrast.Value);
+            if (snap.Saturation.HasValue) ok &= Write(AdlDisplayColorSaturation, snap.Saturation.Value);
+            return ok;
         }
         catch (Exception ex)
         {
             AppLog.Error("AMD restore failed: " + ex.Message);
+            return false;
         }
     }
 
@@ -253,30 +298,19 @@ internal sealed class AmdAdlColor : IDisposable
         return cur;
     }
 
-    private void Write(int type, int value)
+    private bool Write(int type, int value)
     {
-        ADL2_Display_Color_Set(_context, _adapterIndex, _displayIndex, type, value);
-    }
-
-    private void WriteMapped(int type, double normalized, double srcMin, double srcMax)
-    {
-        if (ADL2_Display_Color_Get(_context, _adapterIndex, _displayIndex, type,
-                out _, out int def, out int min, out int max, out _) != AdlOk)
-            return;
-        double t = (normalized - srcMin) / Math.Max(0.001, srcMax - srcMin);
-        t = Math.Clamp(t, 0.0, 1.0);
-        int value = (int)Math.Round(min + t * (max - min));
-        value = Math.Clamp(value, min, max);
-        // Prefer keeping default when near neutral center of our scale
-        _ = def;
-        Write(type, value);
+        int rc = ADL2_Display_Color_Set(_context, _adapterIndex, _displayIndex, type, value);
+        if (rc == AdlOk) return true;
+        AppLog.Warn($"ADL color set (type {type}) returned {rc}.");
+        return false;
     }
 
     public void Dispose()
     {
         if (_context != IntPtr.Zero)
         {
-            try { ADL2_Main_Control_Destroy(_context); } catch { }
+            try { ADL2_Main_Control_Destroy(_context); } catch { /* best effort */ }
             _context = IntPtr.Zero;
         }
         _ready = false;
@@ -286,6 +320,8 @@ internal sealed class AmdAdlColor : IDisposable
 public sealed class DriverColorSnapshot
 {
     public string Vendor { get; set; } = "";
+    /// <summary>\\.\DISPLAYn the values were read from (null = first connected display).</summary>
+    public string? DisplayName { get; set; }
     public int? Brightness { get; set; }
     public int? Contrast { get; set; }
     public int? Saturation { get; set; }

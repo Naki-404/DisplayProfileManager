@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
-using DisplayProfileManager.Models;
+using Visor.Models;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
 /// Center-screen digital zoom via Windows Magnification API (accessibility).
@@ -26,15 +26,10 @@ public sealed class ScreenZoomService : IDisposable
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
-    private const int SmCxVirtualScreen = 78;
-    private const int SmCyVirtualScreen = 79;
-    private const int SmXVirtualScreen = 76;
-    private const int SmYVirtualScreen = 77;
     private const int SmCxScreen = 0;
     private const int SmCyScreen = 1;
 
     public bool IsAvailable => _ready;
-    public bool IsActive => _active;
     public float Factor => _factor;
 
     public ScreenZoomService()
@@ -86,31 +81,32 @@ public sealed class ScreenZoomService : IDisposable
 
     private void ApplyTransform(float factor)
     {
-        // Prefer virtual desktop bounds so multi-monitor setups stay centered correctly.
-        int vx = GetSystemMetrics(SmXVirtualScreen);
-        int vy = GetSystemMetrics(SmYVirtualScreen);
-        int vw = GetSystemMetrics(SmCxVirtualScreen);
-        int vh = GetSystemMetrics(SmCyVirtualScreen);
-        if (vw <= 0 || vh <= 0)
+        // Center on the monitor the game is on (foreground window / cursor) — never the seam
+        // between screens of the virtual desktop. Offsets are in desktop (physical) coordinates.
+        int mx, my, mw, mh;
+        if (OverlayWin32.TryGetTargetMonitorBounds(out var b) && b.Width > 0 && b.Height > 0)
         {
-            vx = 0;
-            vy = 0;
-            vw = GetSystemMetrics(SmCxScreen);
-            vh = GetSystemMetrics(SmCyScreen);
+            mx = b.Left;
+            my = b.Top;
+            mw = b.Width;
+            mh = b.Height;
+        }
+        else
+        {
+            mx = 0;
+            my = 0;
+            mw = GetSystemMetrics(SmCxScreen);
+            mh = GetSystemMetrics(SmCyScreen);
         }
 
-        if (vw <= 0 || vh <= 0 || factor < 1.01f)
+        if (mw <= 0 || mh <= 0 || factor < 1.01f)
         {
             MagSetFullscreenTransform(1f, 0, 0);
             return;
         }
 
-        // Mag offsets are relative to the virtual desktop origin.
-        int xOffset = vx + (int)Math.Round((vw - vw / factor) / 2.0);
-        int yOffset = vy + (int)Math.Round((vh - vh / factor) / 2.0);
-        if (xOffset < vx) xOffset = vx;
-        if (yOffset < vy) yOffset = vy;
-
+        int xOffset = mx + (int)Math.Round((mw - mw / factor) / 2.0);
+        int yOffset = my + (int)Math.Round((mh - mh / factor) / 2.0);
         MagSetFullscreenTransform(factor, xOffset, yOffset);
     }
 

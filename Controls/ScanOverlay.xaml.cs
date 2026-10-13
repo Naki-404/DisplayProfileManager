@@ -2,7 +2,7 @@ using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
 public partial class ScanOverlay : System.Windows.Controls.UserControl
 {
@@ -18,6 +18,8 @@ public partial class ScanOverlay : System.Windows.Controls.UserControl
 
     public void ShowAnimated()
     {
+        TitleText.Text = Visor.Services.Loc.T("scan.title");
+        StatusText.Text = Visor.Services.Loc.T("scan.status");
         IsHitTestVisible = true;
         Visibility = Visibility.Visible;
         Opacity = 0;

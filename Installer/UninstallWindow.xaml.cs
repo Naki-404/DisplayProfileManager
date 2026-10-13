@@ -1,51 +1,52 @@
+using System;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 
-namespace DisplayProfileManager.Setup;
+namespace Visor.Setup;
 
 public partial class UninstallWindow : Window
 {
-    private readonly string? _installDir;
     private Storyboard? _spin;
+    private bool _busy;
 
     public UninstallWindow()
     {
         InitializeComponent();
-        _installDir = InstallerCore.FindInstallLocation();
-        if (string.IsNullOrWhiteSpace(_installDir))
+        var dir = InstallerCore.FindInstallLocation();
+        if (dir == null)
         {
-            TxtPath.Text = "(not found — nothing to remove)";
-            TxtMissing.Text = "No installation was found in Apps & Features.";
+            TxtPath.Text = L.NotFound;
+            TxtMissing.Text = L.NothingInstalled;
             TxtMissing.Visibility = Visibility.Visible;
             BtnUninstall.IsEnabled = false;
         }
         else
         {
-            TxtPath.Text = _installDir;
+            TxtPath.Text = dir;
         }
+        Closing += (_, e) => e.Cancel = _busy;
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(360))
+        Chrome.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(360))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-        };
-        Chrome.BeginAnimation(OpacityProperty, fade);
+        });
         var scale = new DoubleAnimation(0.94, 1, TimeSpan.FromMilliseconds(420))
         {
             EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.28 }
         };
-        ChromeScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, scale);
-        ChromeScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, scale.Clone());
-
-        var content = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(380))
+        ChromeScale.BeginAnimation(ScaleTransform.ScaleXProperty, scale);
+        ChromeScale.BeginAnimation(ScaleTransform.ScaleYProperty, scale.Clone());
+        PanelConfirm.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(380))
         {
             BeginTime = TimeSpan.FromMilliseconds(80),
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-        };
-        PanelConfirm.BeginAnimation(OpacityProperty, content);
+        });
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -53,59 +54,60 @@ public partial class UninstallWindow : Window
         if (e.ChangedButton == MouseButton.Left) DragMove();
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_busy) Close();
+    }
 
     private async void Uninstall_Click(object sender, RoutedEventArgs e)
     {
+        _busy = true;
         BtnUninstall.IsEnabled = false;
+        BtnClose.IsEnabled = false;
         PanelConfirm.Visibility = Visibility.Collapsed;
         PanelWork.Visibility = Visibility.Visible;
 
         _spin = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
         var spinAnim = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.85));
         Storyboard.SetTarget(spinAnim, SpinRotate);
-        Storyboard.SetTargetProperty(spinAnim, new PropertyPath(System.Windows.Media.RotateTransform.AngleProperty));
+        Storyboard.SetTargetProperty(spinAnim, new PropertyPath(RotateTransform.AngleProperty));
         _spin.Children.Add(spinAnim);
         _spin.Begin();
 
         try
         {
-            TxtStatus.Text = "Closing app…";
-            await Task.Delay(120);
-
-            await Task.Run(() =>
-            {
-                InstallerCore.PerformUninstall(confirmUi: false, silent: true, log: msg =>
-                {
-                    Dispatcher.Invoke(() => TxtStatus.Text = msg);
-                });
-            }).ConfigureAwait(true);
+            var result = await App.RunSta(() => InstallerCore.Uninstall(
+                msg => Dispatcher.BeginInvoke(new Action(() => TxtStatus.Text = msg))));
 
             _spin.Stop();
+            if (result.NotFound)
+                throw new InstallerException(L.NothingInstalled);
+
             PanelWork.Visibility = Visibility.Collapsed;
             PanelDone.Visibility = Visibility.Visible;
-
-            var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300));
-            PanelDone.BeginAnimation(OpacityProperty, fade);
+            PanelDone.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300)));
             var pop = new DoubleAnimation(0.5, 1, TimeSpan.FromMilliseconds(420))
             {
                 EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.45 }
             };
-            CheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, pop);
-            CheckScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, pop.Clone());
+            CheckScale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+            CheckScale.BeginAnimation(ScaleTransform.ScaleYProperty, pop.Clone());
 
             await Task.Delay(1800);
-            InstallerCore.ScheduleSelfCleanup(_installDir);
-            System.Windows.Application.Current.Shutdown();
+            if (result.SelfToDelete != null)
+                InstallerCore.ScheduleSelfDelete(result.SelfToDelete, result.Dir!);
+            _busy = false;
+            Application.Current.Shutdown(App.ExitOk);
         }
         catch (Exception ex)
         {
             _spin?.Stop();
-            System.Windows.MessageBox.Show(this, "Uninstall failed:\n" + ex.Message, Title,
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            _busy = false;
+            MessageBox.Show(this, L.UninstallFailed + ex.Message, Title, MessageBoxButton.OK, MessageBoxImage.Error);
             PanelWork.Visibility = Visibility.Collapsed;
             PanelConfirm.Visibility = Visibility.Visible;
-            BtnUninstall.IsEnabled = true;
+            BtnUninstall.IsEnabled = InstallerCore.FindInstallLocation() != null;
+            BtnClose.IsEnabled = true;
         }
     }
 }

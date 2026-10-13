@@ -1,17 +1,27 @@
 ﻿using System.Windows;
-using DisplayProfileManager.Services;
+using Visor.Services;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
 public partial class App : System.Windows.Application
 {
+    private const string SingleInstanceMutexName = @"Local\Visor.SingleInstance";
+    /// <summary>Signalled by the installer to request a clean exit of the running instance.</summary>
+    private const string ExitRequestEventName = @"Local\Visor.ExitRequest";
+
     public static AppServices Services { get; private set; } = null!;
     private System.Windows.Forms.NotifyIcon? _tray;
+    private System.Drawing.Font? _trayFont;
+    private System.Drawing.Font? _trayFontBold;
+    private System.Drawing.Icon? _trayIcon;
     private MainWindow? _main;
     private GameOverlayWindow? _overlay;
     private bool _exitRequested;
+    private bool _cleanedUp;
     private bool _mainHiddenForOverlay;
     private Mutex? _mutex;
+    private EventWaitHandle? _exitRequestEvent;
+    private RegisteredWaitHandle? _exitRequestWait;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -22,10 +32,20 @@ public partial class App : System.Windows.Application
 
         DispatcherUnhandledException += (_, args) =>
         {
-            AppLog.Error(args.Exception, "UI exception");
+            var ex = args.Exception;
+            if (IsFatal(ex))
+            {
+                // Process state is unreliable — let it crash; the session snapshot on disk is
+                // restored on the next start.
+                AppLog.Error(ex, "Fatal UI exception");
+                args.Handled = false;
+                return;
+            }
+
+            AppLog.Error(ex, "UI exception");
             args.Handled = true;
-            try { ThemedDialog.Show(null, "Something went wrong:\n" + args.Exception.Message); }
-            catch { }
+            try { ThemedDialog.Show(null, "Something went wrong:\n" + ex.Message); }
+            catch (Exception dex) { AppLog.Warn(dex, "Error dialog"); }
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
@@ -39,15 +59,21 @@ public partial class App : System.Windows.Application
             AppLog.Error(args.Exception, "Task exception");
             args.SetObserved();
         };
+        // Logoff / shutdown is not a crash: restore the game session synchronously and exit cleanly.
+        SessionEnding += (_, args) =>
+        {
+            AppLog.Info($"Windows session ending ({args.ReasonSessionEnding}) — restoring.");
+            _exitRequested = true;
+            CleanupForExit(stopCompanions: false);
+        };
 
         try
         {
-            bool created;
-            _mutex = new Mutex(true, @"Local\DisplayProfileManager.SingleInstance", out created);
+            _mutex = new Mutex(true, SingleInstanceMutexName, out bool created);
             if (!created)
             {
                 bool silent = e.Args.Any(a =>
-                    a.Equals("--minimized", StringComparison.OrdinalIgnoreCase) ||
+                    a.Equals(AutostartService.StartupArgument, StringComparison.OrdinalIgnoreCase) ||
                     a.Equals("/minimized", StringComparison.OrdinalIgnoreCase) ||
                     a.Equals("--silent", StringComparison.OrdinalIgnoreCase));
                 if (!silent)
@@ -55,12 +81,13 @@ public partial class App : System.Windows.Application
                     Loc.SetLocale("en");
                     ThemedDialog.Show(null, Loc.T("alreadyRunning"));
                 }
-                try { _mutex.Dispose(); } catch { }
+                try { _mutex.Dispose(); } catch (ObjectDisposedException) { }
                 _mutex = null;
                 Shutdown();
                 return;
             }
 
+            StartExitRequestListener();
             Services = new AppServices();
             AppLog.StartupBanner();
             var ui = Services.Config.Current.Ui ?? new Models.UiPreferences();
@@ -69,12 +96,14 @@ public partial class App : System.Windows.Application
             UiSound.ApplyFromConfig(ui);
 
             bool startMinimized = e.Args.Any(a =>
-                a.Equals("--minimized", StringComparison.OrdinalIgnoreCase) ||
+                a.Equals(AutostartService.StartupArgument, StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("/minimized", StringComparison.OrdinalIgnoreCase));
 
             // First-run wizard (new config only)
+            bool wizardRan = false;
             if (!ui.SetupCompleted && !startMinimized)
             {
+                wizardRan = true;
                 try
                 {
                     var wiz = new SetupWizardWindow();
@@ -90,6 +119,25 @@ public partial class App : System.Windows.Application
                     ui.SetupCompleted = true;
                     Services.Config.Current.Ui = ui;
                     Services.Config.Save(Services.Config.Current);
+                }
+            }
+
+            // Right after the wizard the user expects the window, even if they ticked "start minimized".
+            bool showWindow = !startMinimized && (wizardRan || !Services.Config.Current.StartMinimized);
+
+            // Splash only covers real start-up work (main window construction + first render).
+            BootSplashWindow? splash = null;
+            if (showWindow)
+            {
+                try
+                {
+                    splash = new BootSplashWindow();
+                    splash.Show();
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("Boot splash failed: " + ex.Message);
+                    splash = null;
                 }
             }
 
@@ -120,39 +168,8 @@ public partial class App : System.Windows.Application
                         Services.Monitor.CurrentProfile,
                         _main.HotkeyPresetFallback);
                     NotifyHotkeyFailures();
-                    Services.Hotkeys.HotkeyPressed += action =>
-                        _main.Dispatcher.Invoke(() =>
-                        {
-                            if (action == "toggleZoom")
-                            {
-                                if (!Services.Zoom.IsAvailable)
-                                    _main.ShowToast(Loc.T("toast.zoom.unavailable"));
-                                else
-                                {
-                                    bool on = Services.Zoom.Toggle();
-                                    _main.ShowToast(on
-                                        ? Loc.Tf("toast.zoom.on", (int)Services.Zoom.Factor)
-                                        : Loc.T("toast.zoom.off"));
-                                }
-                            }
-                            else
-                            {
-                                Services.Monitor.HandleHotkey(action);
-                                if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase))
-                                    && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
-                                    _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
-                                else if (action is "nextPreset" or "previousPreset"
-                                         && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
-                                    _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
-                                else if (action == "compareAb")
-                                    _main.ShowToast(Loc.T("toast.hotkey.ab"));
-                                else if (action == "emergencyRestore")
-                                {
-                                    Services.Zoom.Off();
-                                    _main.ShowToast(Loc.T("toast.emergency"));
-                                }
-                            }
-                        });
+                    // Raised on the UI thread (queued by the hotkey service, never inside the hook).
+                    Services.Hotkeys.HotkeyPressed += OnHotkeyPressed;
                 }
                 catch (Exception ex)
                 {
@@ -161,22 +178,29 @@ public partial class App : System.Windows.Application
             };
 
             Services.Config.ConfigChanged += () =>
-                _main.Dispatcher.Invoke(() =>
+                _main.Dispatcher.BeginInvoke(() =>
                 {
-                    var u = Services.Config.Current.Ui;
-                    if (u != null)
+                    try
                     {
-                        Loc.SetLocale(u.Locale);
-                        ThemeService.Apply(u);
+                        var u = Services.Config.Current.Ui;
+                        if (u != null)
+                        {
+                            Loc.SetLocale(u.Locale);
+                            ThemeService.Apply(u);
+                        }
+                        Services.Hotkeys.RegisterFromConfig(
+                            Services.Config.Current,
+                            Services.Monitor.CurrentProfile,
+                            _main.HotkeyPresetFallback);
+                        _main.ReloadFromConfig();
+                        _main.ApplyLocalization();
+                        _overlay?.ApplyLocalization();
+                        RebuildTrayMenu();
                     }
-                    Services.Hotkeys.RegisterFromConfig(
-                        Services.Config.Current,
-                        Services.Monitor.CurrentProfile,
-                        _main.HotkeyPresetFallback);
-                    _main.ReloadFromConfig();
-                    _main.ApplyLocalization();
-                    _overlay?.ApplyLocalization();
-                    RebuildTrayMenu();
+                    catch (Exception ex)
+                    {
+                        AppLog.Error(ex, "ConfigChanged UI");
+                    }
                 });
 
             Services.Monitor.ActiveProfileChanged += profile =>
@@ -260,12 +284,10 @@ public partial class App : System.Windows.Application
 
                 try
                 {
-                    var gpu = GpuVendorDetect.DriverLabel;
-                    var msg = Loc.Tf("toast.health", gpu);
+                    AppLog.Info("Startup health: GPU " + GpuVendorDetect.DriverLabel
+                                + (Services.CrashRestored ? ", restored after crash" : ""));
                     if (Services.CrashRestored)
-                        msg += " · " + Loc.T("toast.crash.restored");
-                    _main.ShowToast(msg);
-                    AppLog.Info("Startup health: " + msg);
+                        _main.ShowToast(Loc.T("toast.crash.restored"));
 
                     if (!string.IsNullOrWhiteSpace(Services.Config.LastRecoveryMessage))
                     {
@@ -275,29 +297,15 @@ public partial class App : System.Windows.Application
                 }
                 catch (Exception ex)
                 {
-                    AppLog.Error("Startup health toast: " + ex.Message);
+                    AppLog.Error("Startup notices: " + ex.Message);
                 }
 
                 RunConflictCheckFireAndForget();
             };
 
-            try
-            {
-                if (Services.Config.Current.StartWithWindows)
-                {
-                    var exe = Environment.ProcessPath
-                              ?? System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
-                              ?? "";
-                    if (!string.IsNullOrWhiteSpace(exe))
-                        AutostartService.SetEnabled(true, exe);
-                }
-            }
-            catch (Exception ex)
-            {
-                AppLog.Error("Autostart setup failed: " + ex.Message);
-            }
+            SetupAutostart();
 
-            if (startMinimized || Services.Config.Current.StartMinimized)
+            if (!showWindow)
             {
                 _main.ShowInTaskbar = false;
                 _main.WindowState = WindowState.Minimized;
@@ -306,31 +314,92 @@ public partial class App : System.Windows.Application
             }
             else
             {
-                try
+                if (splash != null)
                 {
-                    var splash = new BootSplashWindow();
-                    splash.ShowDialog();
+                    // Hide (not Close): the splash closes itself when its own animation ends.
+                    _main.ContentRendered += (_, _) =>
+                    {
+                        try { splash.Hide(); }
+                        catch (InvalidOperationException) { /* already closed itself */ }
+                    };
                 }
-                catch (Exception ex)
-                {
-                    AppLog.Error("Boot splash failed: " + ex.Message);
-                }
-
                 _main.ShowInTaskbar = true;
                 _main.WindowState = WindowState.Normal;
                 _main.ShowWithFade();
-                // Splash first, then soft welcome chime (after fade starts)
                 UiSound.PlayWelcome(delayMs: 320);
             }
         }
         catch (Exception ex)
         {
             AppLog.Error("Startup failed: " + ex);
-            try { ThemedDialog.Show(null, "Startup failed:\n" + ex.Message); } catch { }
-            try { _mutex?.ReleaseMutex(); } catch { }
-            try { _mutex?.Dispose(); } catch { }
-            _mutex = null;
+            try { ThemedDialog.Show(null, "Startup failed:\n" + ex.Message); }
+            catch (Exception dex) { AppLog.Warn(dex, "Startup error dialog"); }
+            ReleaseMutex();
             Shutdown();
+        }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        // Covers every shutdown path (tray Exit, logoff, Application.Shutdown from elsewhere).
+        CleanupForExit(stopCompanions: true);
+        base.OnExit(e);
+    }
+
+    private static bool IsFatal(Exception ex) =>
+        ex is OutOfMemoryException or AccessViolationException or StackOverflowException
+            or InvalidProgramException or System.Runtime.InteropServices.SEHException
+            or BadImageFormatException;
+
+    /// <summary>Hotkey actions arrive here on the UI thread.</summary>
+    private void OnHotkeyPressed(string action)
+    {
+        if (_main == null) return;
+        if (action == "toggleZoom")
+        {
+            if (!Services.Zoom.IsAvailable)
+                _main.ShowToast(Loc.T("toast.zoom.unavailable"));
+            else
+            {
+                bool on = Services.Zoom.Toggle();
+                _main.ShowToast(on
+                    ? Loc.Tf("toast.zoom.on", (int)Services.Zoom.Factor)
+                    : Loc.T("toast.zoom.off"));
+            }
+            return;
+        }
+
+        Services.Monitor.HandleHotkey(action);
+        if ((action.StartsWith("preset:", StringComparison.OrdinalIgnoreCase) || action is "nextPreset" or "previousPreset")
+            && !string.IsNullOrWhiteSpace(Services.Monitor.LastPresetHotkeyName))
+            _main.ShowToast($"{Loc.T("toast.preset.hotkey")}: {Services.Monitor.LastPresetHotkeyName}");
+        else if (action == "compareAb")
+            _main.ShowToast(Loc.T("toast.hotkey.ab"));
+        else if (action == "emergencyRestore")
+        {
+            Services.Zoom.Off();
+            _main.ShowToast(Loc.T("toast.emergency"));
+        }
+    }
+
+    /// <summary>Run key (HKCU) when enabled; one-time removal of the old scheduled task after the rename.</summary>
+    private static void SetupAutostart()
+    {
+        try
+        {
+            if (Services.Config.LoadedConfigVersion is > 0 and < 19)
+                Task.Run(AutostartService.MigrateLegacy);
+
+            if (Services.Config.Current.StartWithWindows)
+            {
+                var exe = Environment.ProcessPath ?? "";
+                if (!string.IsNullOrWhiteSpace(exe) && !AutostartService.SetEnabled(true, exe))
+                    AppLog.Warn("Start with Windows could not be enabled.");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Autostart setup failed: " + ex.Message);
         }
     }
 
@@ -357,12 +426,19 @@ public partial class App : System.Windows.Application
         }
     }
 
+
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
-    private static extern bool AllocConsole();
+    private static extern bool AttachConsole(int dwProcessId);
+
+    private const int AttachParentProcess = -1;
 
     /// <summary>
     /// Handles headless CLI invocations (--list / --apply-profile "Name" / --emergency).
     /// Returns true if the app should exit immediately after processing (no UI shown).
+    /// Output goes to the parent console when there is one (never a new console window) and
+    /// always to the app log. Exit code: 0 = success, 1 = failure.
+    /// While the Visor UI is running, only --list is allowed — display changes would fight
+    /// the running session.
     /// </summary>
     private bool TryHandleCliArgs(string[] args)
     {
@@ -384,30 +460,62 @@ public partial class App : System.Windows.Application
         if (!wantsList && !wantsEmergency && applyProfileName == null)
             return false;
 
-        try { AllocConsole(); } catch { }
+        bool hasConsole = AttachConsole(AttachParentProcess);
+        void Say(string line)
+        {
+            AppLog.Info("CLI: " + line);
+            if (hasConsole) Console.WriteLine(line);
+        }
 
+        int exitCode = 0;
+        Mutex? mutex = null;
+        bool ownsMutex = false;
         ConfigService? config = null;
         DisplayEngine? engine = null;
+        ProfileMonitor? monitor = null;
         try
         {
+            mutex = new Mutex(true, SingleInstanceMutexName, out ownsMutex);
+            bool guiRunning = !ownsMutex;
+
             config = new ConfigService();
+            AppLog.Configure(config.LogPath);
             config.LoadOrCreate();
 
-            if (wantsList)
+            if (wantsList && hasConsole)
             {
-                Console.WriteLine("Display Profile Manager - profiles:");
+                Console.WriteLine("Visor - profiles:");
                 if (config.Current.Profiles.Count == 0)
                     Console.WriteLine("  (none configured)");
                 foreach (var p in config.Current.Profiles)
                     Console.WriteLine($"  [{(p.Enabled ? "enabled " : "disabled")}] {p.Name}  ({p.ProcessName})");
             }
 
-            if (wantsEmergency)
+            if ((wantsEmergency || applyProfileName != null) && guiRunning)
             {
-                engine = new DisplayEngine();
-                engine.CaptureFactoryGammaRamp(captureRamp: false);
-                engine.RestoreFactory(config.Current.FactoryDefaults ?? config.Current.Defaults);
-                Console.WriteLine("Emergency restore applied.");
+                Say("Visor is running — use Emergency Restore / Profiles in its tray menu instead.");
+                exitCode = 1;
+            }
+            else if (wantsEmergency)
+            {
+                // Restores %AppData%\Visor\active-session.json (display snapshot + session extras + FPS cap).
+                engine = new DisplayEngine(config.ConfigDirectory);
+                monitor = new ProfileMonitor(config, engine, new ProcessWatcher(), new CompanionService());
+                if (monitor.HasLeftoverSession && monitor.RestoreLeftoverSession(out bool ok))
+                {
+                    Say(ok
+                        ? "Emergency restore: game session snapshot restored."
+                        : "Emergency restore: session snapshot restored with errors (see log).");
+                    exitCode = ok ? 0 : 1;
+                }
+                else if (engine.InitializeBaseline(useSavedBaseline: true))
+                {
+                    Say("Emergency restore: saved display baseline re-applied.");
+                }
+                else
+                {
+                    Say("Emergency restore: nothing to restore (no session snapshot or saved baseline).");
+                }
             }
             else if (applyProfileName != null)
             {
@@ -415,30 +523,83 @@ public partial class App : System.Windows.Application
                     string.Equals(p.Name, applyProfileName, StringComparison.OrdinalIgnoreCase));
                 if (profile == null)
                 {
-                    Console.WriteLine($"Profile not found: {applyProfileName}");
+                    Say($"Profile not found: {applyProfileName}");
+                    exitCode = 1;
                 }
                 else
                 {
-                    engine = new DisplayEngine();
-                    engine.CaptureFactoryGammaRamp(captureRamp: true);
+                    engine = new DisplayEngine(config.ConfigDirectory);
                     engine.ApplyProfile(profile, config.Current.Defaults);
-                    Console.WriteLine($"Applied profile: {profile.Name}");
+                    Say($"Applied profile: {profile.Name}");
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine("CLI error: " + ex.Message);
+            exitCode = 1;
+            AppLog.Error(ex, "CLI");
+            if (hasConsole) Console.WriteLine("CLI error: " + ex.Message);
         }
         finally
         {
-            try { engine?.DisposeDriverColor(); } catch { }
-            try { config?.Dispose(); } catch { }
+            try { monitor?.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "CLI monitor dispose"); }
+            try { engine?.DisposeDriverColor(); } catch (Exception ex) { AppLog.Warn(ex, "CLI driver dispose"); }
+            try { config?.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "CLI config dispose"); }
+            if (ownsMutex)
+            {
+                try { mutex?.ReleaseMutex(); } catch (ApplicationException) { }
+            }
+            mutex?.Dispose();
         }
 
-        Shutdown();
+        Shutdown(exitCode);
         return true;
     }
+
+    /// <summary>
+    /// Named event the installer / uninstaller signals to ask a running Visor to exit cleanly
+    /// (same path as tray Exit: restore the active session, mark clean exit, remove tray icon).
+    /// </summary>
+    private void StartExitRequestListener()
+    {
+        try
+        {
+            _exitRequestEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ExitRequestEventName);
+            _exitRequestWait = ThreadPool.RegisterWaitForSingleObject(_exitRequestEvent, (_, timedOut) =>
+            {
+                if (timedOut) return;
+                AppLog.Info("Exit requested by another process (installer).");
+                Dispatcher.BeginInvoke(ExitFromExternalRequest);
+            }, null, Timeout.Infinite, executeOnlyOnce: true);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Exit request listener");
+        }
+    }
+
+    /// <summary>Tray Exit without showing the window (autosave is flushed, session restored).</summary>
+    private void ExitFromExternalRequest()
+    {
+        if (_cleanedUp) return;
+        _exitRequested = true;
+        try { _main?.PromptUnsavedBeforeExit(); }
+        catch (Exception ex) { AppLog.Warn(ex, "Autosave flush on external exit"); }
+        try { _overlay?.HideOverlay(); }
+        catch (Exception ex) { AppLog.Warn(ex, "Overlay hide on exit"); }
+        CleanupForExit(stopCompanions: true);
+        Shutdown();
+    }
+
+    private void StopExitRequestListener()
+    {
+        try { _exitRequestWait?.Unregister(null); }
+        catch (Exception ex) { AppLog.Warn(ex, "Exit request unregister"); }
+        _exitRequestWait = null;
+        _exitRequestEvent?.Dispose();
+        _exitRequestEvent = null;
+    }
+
 
     private void NotifyHotkeyFailures()
     {
@@ -482,13 +643,42 @@ public partial class App : System.Windows.Application
             AppLog.Warn(ex, "Tray icon load");
         }
 
+        // Created once and reused by every menu rebuild (GDI handles; disposed on exit).
+        _trayFont = new System.Drawing.Font("Segoe UI", 9.25f, System.Drawing.FontStyle.Regular);
+        _trayFontBold = new System.Drawing.Font(_trayFont, System.Drawing.FontStyle.Bold);
+
         _tray = new System.Windows.Forms.NotifyIcon
         {
             Text = Loc.T("app.name"),
             Visible = true,
             Icon = trayIcon ?? System.Drawing.SystemIcons.Application
         };
+        _trayIcon = trayIcon;
         _tray.DoubleClick += (_, _) => ShowMain();
+    }
+
+    private void DisposeTray()
+    {
+        if (_tray != null)
+        {
+            try
+            {
+                _tray.Visible = false;
+                _tray.ContextMenuStrip?.Dispose();
+                _tray.Dispose();
+                _trayIcon?.Dispose();
+                _trayIcon = null;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn(ex, "Tray dispose");
+            }
+            _tray = null;
+        }
+        _trayFontBold?.Dispose();
+        _trayFontBold = null;
+        _trayFont?.Dispose();
+        _trayFont = null;
     }
 
     public void RebuildTrayMenu()
@@ -500,7 +690,7 @@ public partial class App : System.Windows.Application
             Renderer = new SlateMenuRenderer(),
             BackColor = System.Drawing.Color.FromArgb(0x16, 0x1B, 0x22),
             ForeColor = System.Drawing.Color.FromArgb(0xE8, 0xEE, 0xF4),
-            Font = new System.Drawing.Font("Segoe UI", 9.25f, System.Drawing.FontStyle.Regular),
+            Font = _trayFont,
             ShowImageMargin = false,
             ShowCheckMargin = false,
             Padding = new System.Windows.Forms.Padding(0, 6, 0, 6),
@@ -552,20 +742,32 @@ public partial class App : System.Windows.Application
         }));
 
         // Profiles submenu — activate any enabled profile on demand, regardless of running state.
+        // Clicking the profile that is currently forced from here ends it (restores the PC).
         var profilesMenu = MakeSubmenu(Loc.T("tray.profiles"));
         var enabledProfiles = Services.Config.Current.Profiles.Where(p => p.Enabled).ToList();
         if (enabledProfiles.Count > 0)
         {
+            bool forced = Services.Monitor.IsForcedActivation;
             foreach (var profile in enabledProfiles)
             {
                 var pr = profile;
-                var item = MakeItem(pr.Name, (_, _) =>
+                bool isCurrent = Services.Monitor.CurrentProfile?.Id == pr.Id;
+                bool stopsForced = isCurrent && forced;
+                var item = MakeItem(stopsForced ? Loc.Tf("tray.profiles.stop", pr.Name) : pr.Name, (_, _) =>
                 {
-                    Services.Monitor.ForceApplyProfile(pr);
-                    _main?.Dispatcher.Invoke(() => _main.ShowToast($"{Loc.T("btn.apply")}: {pr.Name}"));
+                    if (stopsForced)
+                    {
+                        Services.Monitor.EndForcedProfile();
+                        _main?.ShowToast(Loc.Tf("toast.forced.ended", pr.Name));
+                    }
+                    else
+                    {
+                        Services.Monitor.ForceApplyProfile(pr);
+                        _main?.ShowToast($"{Loc.T("btn.apply")}: {pr.Name}");
+                    }
                 }, width: 200);
-                if (Services.Monitor.CurrentProfile?.Id == pr.Id)
-                    item.Font = new System.Drawing.Font(menu.Font, System.Drawing.FontStyle.Bold);
+                if (isCurrent)
+                    item.Font = _trayFontBold;
                 profilesMenu.DropDownItems.Add(item);
             }
         }
@@ -661,7 +863,8 @@ public partial class App : System.Windows.Application
 
     private static void CopyHotkeyToClipboard(string gesture)
     {
-        try { System.Windows.Clipboard.SetText(gesture); } catch { }
+        try { System.Windows.Clipboard.SetText(gesture); }
+        catch (Exception ex) { AppLog.Warn(ex, "Copy hotkey to clipboard"); }
     }
 
     /// <summary>Keeps the tray icon tooltip in sync with the active profile/preset.</summary>
@@ -677,8 +880,8 @@ public partial class App : System.Windows.Application
                 var presetId = Services.Monitor.ActivePresetId;
                 var preset = presetId == null ? null : profile.Presets?.FirstOrDefault(p => p.Id == presetId);
                 text = preset != null
-                    ? $"DPM — {profile.Name} · {preset.Name}"
-                    : $"DPM — {profile.Name}";
+                    ? $"Visor — {profile.Name} · {preset.Name}"
+                    : $"Visor — {profile.Name}";
             }
             else
             {
@@ -687,13 +890,17 @@ public partial class App : System.Windows.Application
             // NotifyIcon.Text is limited to 63 chars on classic shells.
             _tray.Text = text.Length > 63 ? text[..63] : text;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Tray tooltip");
+        }
     }
 
     public void ShowMain()
     {
         if (_main == null) return;
         _mainHiddenForOverlay = false;
+        _main.ShowInTaskbar = true; // cleared by tray start / overlay hide
         _main.ShowWithFade();
     }
 
@@ -750,6 +957,7 @@ public partial class App : System.Windows.Application
         _mainHiddenForOverlay = false;
         try
         {
+            _main.ShowInTaskbar = true;
             _main.ShowWithFade();
         }
         catch (Exception ex)
@@ -771,39 +979,12 @@ public partial class App : System.Windows.Application
 
         _exitRequested = true;
 
-        try { _overlay?.HideOverlay(); } catch { }
+        try { _overlay?.HideOverlay(); }
+        catch (Exception ex) { AppLog.Warn(ex, "Overlay hide on exit"); }
 
         void FinishExit()
         {
-            try { Services.Zoom.Off(); } catch (Exception ex) { AppLog.Warn(ex, "Zoom.Off on exit"); }
-            try
-            {
-                // Snapshot / factory restore already set the intended gamma.
-                Services.Monitor.EmergencyRestore();
-            }
-            catch (Exception ex)
-            {
-                AppLog.Error(ex, "EmergencyRestore on exit");
-            }
-            try
-            {
-                Services.Dispose();
-                SessionGuard.MarkCleanExit();
-            }
-            catch (Exception ex)
-            {
-                AppLog.Warn(ex, "Services.Dispose on exit");
-            }
-
-            if (_tray != null)
-            {
-                _tray.Visible = false;
-                _tray.Dispose();
-            }
-
-            try { _mutex?.ReleaseMutex(); } catch { }
-            try { _mutex?.Dispose(); } catch { }
-            _mutex = null;
+            CleanupForExit(stopCompanions: true);
             Shutdown();
         }
 
@@ -811,6 +992,43 @@ public partial class App : System.Windows.Application
             UiMotion.FadeTo(_main, 0, FinishExit, ms: 160);
         else
             FinishExit();
+    }
+
+    /// <summary>
+    /// Synchronous restore of an active game session, service disposal (marks the clean exit),
+    /// tray + mutex release. Idempotent — tray Exit, logoff and OnExit all end up here.
+    /// </summary>
+    private void CleanupForExit(bool stopCompanions)
+    {
+        if (_cleanedUp) return;
+        _cleanedUp = true;
+
+        var services = Services;
+        if (services != null)
+        {
+            try { services.Zoom.Off(); }
+            catch (Exception ex) { AppLog.Warn(ex, "Zoom.Off on exit"); }
+
+            try { services.Monitor.ShutdownRestore(stopCompanions); }
+            catch (Exception ex) { AppLog.Error(ex, "Session restore on exit"); }
+
+            try { services.Dispose(); }
+            catch (Exception ex) { AppLog.Warn(ex, "Services.Dispose on exit"); }
+        }
+
+        DisposeTray();
+        StopExitRequestListener();
+        ReleaseMutex();
+    }
+
+    private void ReleaseMutex()
+    {
+        var m = _mutex;
+        _mutex = null;
+        if (m == null) return;
+        try { m.ReleaseMutex(); }
+        catch (ApplicationException) { /* not owned by this thread */ }
+        m.Dispose();
     }
 
     public bool IsExitRequested => _exitRequested;

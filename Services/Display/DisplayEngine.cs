@@ -1,150 +1,240 @@
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using DisplayProfileManager.Models;
+using System.Text.Json;
+using Visor.Models;
+using static Visor.Services.DisplayNative;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
-/// System display / power APIs only (ChangeDisplaySettings, gamma ramp, powercfg).
+/// System display / power APIs only (ChangeDisplaySettingsEx, per-monitor gamma ramp, power schemes).
 /// Never opens game process handles.
 /// </summary>
 public sealed class DisplayEngine
 {
     private const string PowerHighPerf = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
     private const string PowerBalanced = "381b4222-f694-41f0-9685-ff5bb260df2e";
-    private static string ResolveQResPath()
+    private const string PowerSaver = "a1841308-3541-4fab-bc81-f71556f20b4a";
+    private const string PowerUltimate = "e9a42b02-d5df-448d-aa00-03f14749eb61";
+    private const string BaselineFileName = "display-baseline.json";
+
+    [DllImport("powrprof.dll")]
+    private static extern uint PowerSetActiveScheme(IntPtr userRootPowerKey, ref Guid schemeGuid);
+
+    [DllImport("powrprof.dll")]
+    private static extern uint PowerGetActiveScheme(IntPtr userRootPowerKey, out IntPtr activePolicyGuid);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr hMem);
+
+    private static readonly JsonSerializerOptions BaselineJson = new()
     {
-        var beside = Path.Combine(AppContext.BaseDirectory, "QRes.exe");
-        if (File.Exists(beside)) return beside;
-        var tools = @"C:\Tools\QRes\QRes.exe";
-        if (File.Exists(tools)) return tools;
-        return beside;
-    }
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetDC(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool SetDeviceGammaRamp(IntPtr hDC, ref RAMP ramp);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool GetDeviceGammaRamp(IntPtr hDC, ref RAMP ramp);
-
-    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr CreateDC(string lpszDriver, string? lpszDevice, string? lpszOutput, IntPtr lpInitData);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteDC(IntPtr hdc);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool EnumDisplaySettings(string? deviceName, int modeNum, ref DEVMODE devMode);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int ChangeDisplaySettingsEx(string? lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, int dwflags, IntPtr lParam);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
-
-    private const int ENUM_CURRENT_SETTINGS = -1;
-    private const int CDS_UPDATEREGISTRY = 0x01;
-    private const int DISP_CHANGE_SUCCESSFUL = 0;
-    private const int DM_PELSWIDTH = 0x80000;
-    private const int DM_PELSHEIGHT = 0x100000;
-    private const int DM_DISPLAYFREQUENCY = 0x400000;
-    private const int DM_BITSPERPEL = 0x40000;
-    private const int DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x1;
-    private const int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct DISPLAY_DEVICE
-    {
-        public int cb;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string DeviceName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceString;
-        public int StateFlags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceID;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceKey;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct DEVMODE
-    {
-        private const int CCHDEVICENAME = 32;
-        private const int CCHFORMNAME = 32;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
-        public string dmDeviceName;
-        public short dmSpecVersion;
-        public short dmDriverVersion;
-        public short dmSize;
-        public short dmDriverExtra;
-        public int dmFields;
-        public int dmPositionX;
-        public int dmPositionY;
-        public int dmDisplayOrientation;
-        public int dmDisplayFixedOutput;
-        public short dmColor;
-        public short dmDuplex;
-        public short dmYResolution;
-        public short dmTTOption;
-        public short dmCollate;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
-        public string dmFormName;
-        public short dmLogPixels;
-        public int dmBitsPerPel;
-        public int dmPelsWidth;
-        public int dmPelsHeight;
-        public int dmDisplayFlags;
-        public int dmDisplayFrequency;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RAMP
-    {
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-        public ushort[] Red;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-        public ushort[] Green;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-        public ushort[] Blue;
-    }
-
-    private ColorSettings _liveColor = new();
-    private RAMP? _factoryRamp;
-    private bool _hasFactoryRamp;
+    private readonly string? _stateDirectory;
     private readonly DriverColorService _driverColor = new();
+    /// <summary>Pre-Visor gamma ramp per display device (calibration LUT) — the "factory" color state.</summary>
+    private readonly Dictionary<string, RAMP> _baselineRamps = new(StringComparer.OrdinalIgnoreCase);
+    private ColorSettings _liveColor = new();
+    private ColorSettings? _abPreview;
+    private bool _abShowingFactory;
+    private string? _colorTargetDevice;
+    /// <summary>True once Visor wrote a non-baseline ramp / driver color since the last baseline reset.</summary>
+    private bool _colorChanged;
+
+    /// <param name="stateDirectory">Config folder for display-baseline.json (null = not persisted).</param>
+    public DisplayEngine(string? stateDirectory = null)
+    {
+        _stateDirectory = stateDirectory;
+    }
 
     public ColorSettings LiveColor => _liveColor.Clone();
 
-    private ColorSettings? _abPreview;
-    private bool _abShowingFactory;
+    public bool IsAbShowingFactory => _abShowingFactory;
 
-    /// <summary>Identity gamma + driver reset after a dirty shutdown (do not capture bad ramp as factory).</summary>
-    public void RestoreCrashSafe()
+    /// <summary>
+    /// Display that color (gamma + driver) is applied to. Set by ProfileMonitor to the active
+    /// profile's device; null = preferred display from settings, else primary.
+    /// </summary>
+    public string? ColorTargetDevice
     {
-        try { _driverColor.ResetDriverToNeutral(); }
-        catch (Exception ex) { AppLog.Error("Crash-safe driver reset: " + ex.Message); }
-
-        var ramp = new RAMP
+        get => _colorTargetDevice;
+        set
         {
-            Red = new ushort[256],
-            Green = new ushort[256],
-            Blue = new ushort[256]
-        };
-        LowLevelColorRamp.FillIdentity(ramp.Red, ramp.Green, ramp.Blue);
-        ApplyRamp(ramp);
+            _colorTargetDevice = NullIfEmpty(value);
+            _driverColor.SetTargetDevice(ResolveDeviceName(_colorTargetDevice));
+        }
+    }
+
+    /// <summary>Explicit device, else the user's preferred display, else the primary display.</summary>
+    public static string? ResolveDeviceName(string? device)
+    {
+        var d = NullIfEmpty(device) ?? NullIfEmpty(AppConfigPreferredDevice());
+        return d ?? PrimaryDeviceName();
+    }
+
+    private static string? AppConfigPreferredDevice()
+    {
+        try
+        {
+            return Visor.App.Services?.Config?.Current?.Ui?.PreferredDisplayDevice;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------------ baseline (calibration) state
+
+    /// <summary>
+    /// Call once at startup before any color apply. Captures each display's gamma ramp and the driver
+    /// vibrance as the baseline, and saves it to display-baseline.json.
+    /// </summary>
+    /// <param name="useSavedBaseline">
+    /// After a dirty exit with no session snapshot the live ramp may still be a Visor curve: re-apply
+    /// the baseline saved by the last clean start instead (if there is none, gamma is left alone).
+    /// </param>
+    /// <returns>True when the saved baseline was re-applied.</returns>
+    public bool InitializeBaseline(bool useSavedBaseline)
+    {
+        bool restored = false;
+        if (useSavedBaseline && TryLoadBaselineFile(out var saved))
+        {
+            var attached = new HashSet<string>(EnumerateDisplays().Select(d => d.DeviceName), StringComparer.OrdinalIgnoreCase);
+            foreach (var (device, channels) in saved.Ramps)
+            {
+                if (!attached.Contains(device) || channels is not { Length: 3 }) continue;
+                if (!TryDecodeRamp(channels[0], channels[1], channels[2], out var ramp)) continue;
+                if (TrySetGammaRamp(device, ramp, out var err))
+                {
+                    _baselineRamps[device] = ramp;
+                    restored = true;
+                }
+                else
+                {
+                    AppLog.Warn($"Saved baseline ramp for {device} rejected: {err}");
+                }
+            }
+
+            foreach (var drv in saved.Drivers ?? new List<DriverColorSnapshot>())
+            {
+                if (_driverColor.RestoreFromSnapshot(drv))
+                    restored = true;
+            }
+
+            if (restored)
+                AppLog.Info("Dirty restart without a session snapshot — re-applied the saved display baseline.");
+        }
+        else if (useSavedBaseline)
+        {
+            AppLog.Info("Dirty restart without a session snapshot or saved baseline — gamma left as is.");
+        }
+
+        foreach (var (device, _, _) in EnumerateDisplays())
+            CaptureBaselineRamp(device);
+
+        _driverColor.CaptureBaselineIfNeeded();
+        SaveBaselineFile();
+        return restored;
+    }
+
+    private void CaptureBaselineRamp(string device)
+    {
+        if (_baselineRamps.ContainsKey(device)) return;
+        if (TryGetGammaRamp(device, out var ramp))
+        {
+            _baselineRamps[device] = ramp.Clone();
+            AppLog.Info($"Baseline gamma ramp captured for {device}.");
+        }
+        else
+        {
+            AppLog.Warn($"Could not read gamma ramp for {device}.");
+        }
+    }
+
+    private sealed class BaselineFile
+    {
+        public DateTime CapturedUtc { get; set; } = DateTime.UtcNow;
+        /// <summary>device → [red, green, blue] base64.</summary>
+        public Dictionary<string, string[]> Ramps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<DriverColorSnapshot>? Drivers { get; set; }
+    }
+
+    private string? BaselinePath => _stateDirectory == null ? null : Path.Combine(_stateDirectory, BaselineFileName);
+
+    private void SaveBaselineFile()
+    {
+        var path = BaselinePath;
+        if (path == null) return;
+        try
+        {
+            var file = new BaselineFile { Drivers = _driverColor.Baselines.ToList() };
+            foreach (var (device, ramp) in _baselineRamps)
+                file.Ramps[device] = new[] { EncodeChannel(ramp.Red), EncodeChannel(ramp.Green), EncodeChannel(ramp.Blue) };
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(file, BaselineJson));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Save display baseline: " + ex.Message);
+        }
+    }
+
+    private bool TryLoadBaselineFile(out BaselineFile file)
+    {
+        file = new BaselineFile();
+        var path = BaselinePath;
+        if (path == null || !File.Exists(path)) return false;
+        try
+        {
+            var loaded = JsonSerializer.Deserialize<BaselineFile>(File.ReadAllText(path), BaselineJson);
+            if (loaded == null) return false;
+            loaded.Ramps ??= new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+            file = loaded;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Load display baseline");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Re-apply the captured baseline gamma (every display Visor knows) and driver color.
+    /// Never touches resolution or power plan. Displays without a captured baseline are left alone.
+    /// </summary>
+    /// <param name="onlyIfChanged">Skip when Visor has not changed color since start / the last reset (app exit).</param>
+    public bool RestoreBaselineColor(bool onlyIfChanged = false)
+    {
+        if (onlyIfChanged && !_colorChanged)
+            return true;
+        bool ok = true;
+        try { ok &= _driverColor.RestoreBaseline(); }
+        catch (Exception ex) { ok = false; AppLog.Error("Driver baseline restore: " + ex.Message); }
+
+        foreach (var (device, ramp) in _baselineRamps)
+        {
+            if (!TrySetGammaRamp(device, ramp, out var err))
+            {
+                ok = false;
+                AppLog.Warn($"Baseline ramp restore on {device}: {err}");
+            }
+        }
+
         _liveColor = ColorSettings.Neutral;
         _abPreview = null;
         _abShowingFactory = false;
-        AppLog.Info("Crash-safe restore: identity gamma + driver neutral.");
+        _colorChanged = false;
+        AppLog.Info($"Color reset to baseline ({_baselineRamps.Count} display(s)).");
+        return ok;
     }
+
+    // ------------------------------------------------------------------ color
 
     /// <summary>Apply color for UI live preview (does not touch profiles).</summary>
     public void PreviewColor(ColorSettings color)
@@ -154,7 +244,7 @@ public sealed class DisplayEngine
         ApplyColor(color);
     }
 
-    /// <summary>Toggle between last preview and factory/identity ramp. Returns false if no preview yet.</summary>
+    /// <summary>Toggle between last preview and the baseline ramp. Returns false if no preview yet.</summary>
     public bool ToggleAbCompare()
     {
         if (_abPreview == null) return false;
@@ -165,216 +255,10 @@ public sealed class DisplayEngine
         }
         else
         {
-            ApplyNeutralOrFactoryRamp();
+            ApplyBaselineRampToTarget();
             _abShowingFactory = true;
         }
         return true;
-    }
-
-    public bool IsAbShowingFactory => _abShowingFactory;
-
-    /// <summary>Call once at startup before any ApplyColor — stores OS gamma for RestoreFactory.</summary>
-    /// <param name="captureRamp">
-    /// When false (dirty restart after crash-safe identity), skip overwriting factory with identity;
-    /// still refresh driver vibrance baseline.
-    /// </param>
-    public void CaptureFactoryGammaRamp(bool captureRamp = true)
-    {
-        if (captureRamp)
-        {
-            var ramp = new RAMP
-            {
-                Red = new ushort[256],
-                Green = new ushort[256],
-                Blue = new ushort[256]
-            };
-            var hdc = GetDC(IntPtr.Zero);
-            try
-            {
-                if (GetDeviceGammaRamp(hdc, ref ramp))
-                {
-                    _factoryRamp = CloneRamp(ramp);
-                    _hasFactoryRamp = true;
-                    AppLog.Info("Factory gamma ramp captured.");
-                }
-            }
-            finally
-            {
-                ReleaseDC(IntPtr.Zero, hdc);
-            }
-        }
-        else
-        {
-            AppLog.Info("Factory gamma capture skipped (post crash-safe — avoid storing identity).");
-        }
-
-        // Baseline for vibrance restore — only at startup / after crash-safe, not on Low Level applies.
-        _driverColor.CaptureBaselineIfNeeded();
-    }
-
-    public void ApplyProfile(GameProfile profile, DefaultSettings defaults)
-    {
-        if (profile.ApplyPowerPlan && !string.IsNullOrWhiteSpace(profile.PowerPlan))
-            SetPowerPlan(profile.PowerPlan);
-
-        if (profile.ApplyResolution && !string.IsNullOrWhiteSpace(profile.Resolution))
-        {
-            var device = profile.DisplayDevice
-                         ?? AppConfigPreferredDevice();
-            SetResolution(profile.Resolution!, profile.RefreshRate, device);
-        }
-
-        // Color is applied only via presets / overlay — never from the profile baseline.
-    }
-
-    private static string? AppConfigPreferredDevice()
-    {
-        try
-        {
-            return DisplayProfileManager.App.Services?.Config?.Current?.Ui?.PreferredDisplayDevice;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public void RestoreDefaults(DefaultSettings defaults)
-    {
-        if (!string.IsNullOrWhiteSpace(defaults.PowerPlan))
-            SetPowerPlan(defaults.PowerPlan!);
-
-        if (!string.IsNullOrWhiteSpace(defaults.Resolution))
-            SetResolution(defaults.Resolution!, defaults.RefreshRate);
-
-        _driverColor.RestoreBaseline();
-        _liveColor = defaults.Color.Clone();
-        _liveColor.Clamp();
-        ApplyColor(_liveColor);
-        AppLog.Info($"Restored defaults: res={defaults.Resolution}, power={defaults.PowerPlan}");
-    }
-
-    public void ApplyColor(ColorSettings color)
-    {
-        color.Clamp();
-        _liveColor = color.Clone();
-
-        bool lowLevel = color.Backend is ColorBackend.LowLevel or ColorBackend.Gdi;
-
-        if (lowLevel)
-        {
-            // Restore NVIDIA/AMD only if a previous Driver session left tweaks active — no NvAPI init.
-            try { _driverColor.ClearDriverTweaksIfActive(); }
-            catch (Exception ex) { AppLog.Error("Driver restore on LowLevel: " + ex.Message); }
-
-            var ramp = BuildRamp(color);
-            if (!ApplyRamp(ramp))
-                AppLog.Error("SetDeviceGammaRamp rejected or failed (Windows may clip extreme curves).");
-
-            var (b, c, g) = color.ToRivaTunerUnits();
-            AppLog.Info($"Color applied (Low Level): B={b} C={c} G={g:F2}");
-        }
-        else
-        {
-            // NVIDIA Control Panel–style B/C/G via SetDeviceGammaRamp + Digital Vibrance / ADL sat.
-            var ramp = new RAMP
-            {
-                Red = new ushort[256],
-                Green = new ushort[256],
-                Blue = new ushort[256]
-            };
-            NvidiaControlPanelRamp.Fill(ramp.Red, ramp.Green, ramp.Blue, color);
-            if (!ApplyRamp(ramp))
-                AppLog.Error("NVIDIA CP-style gamma ramp rejected.");
-
-            try { _driverColor.Apply(color); }
-            catch (Exception ex) { AppLog.Error("Driver color apply: " + ex.Message); }
-            AppLog.Info($"Color applied (Driver): V={color.Vibrance} {_driverColor.ActiveVendor}");
-        }
-    }
-
-    /// <summary>Identity or captured factory ramp — clears any previous Low Level curve.</summary>
-    public void ApplyNeutralOrFactoryRamp()
-    {
-        _driverColor.ClearDriverTweaksIfActive();
-        if (_hasFactoryRamp && _factoryRamp.HasValue)
-        {
-            ApplyRamp(_factoryRamp.Value);
-            return;
-        }
-
-        var ramp = new RAMP
-        {
-            Red = new ushort[256],
-            Green = new ushort[256],
-            Blue = new ushort[256]
-        };
-        LowLevelColorRamp.FillIdentity(ramp.Red, ramp.Green, ramp.Blue);
-        ApplyRamp(ramp);
-    }
-
-    /// <summary>Re-apply live ramp only (lock timer). Driver backends re-push vibrance lightly.</summary>
-    public void ReapplyLiveColor()
-    {
-        if (_liveColor.Backend is ColorBackend.LowLevel or ColorBackend.Gdi)
-        {
-            var ramp = BuildRamp(_liveColor);
-            ApplyRamp(ramp);
-        }
-        else
-        {
-            var ramp = new RAMP
-            {
-                Red = new ushort[256],
-                Green = new ushort[256],
-                Blue = new ushort[256]
-            };
-            NvidiaControlPanelRamp.Fill(ramp.Red, ramp.Green, ramp.Blue, _liveColor);
-            ApplyRamp(ramp);
-            try { _driverColor.Apply(_liveColor); }
-            catch (Exception ex) { AppLog.Error("Driver lock reapply: " + ex.Message); }
-        }
-    }
-
-    public DriverColorSnapshot? CaptureDriverColorCurrent() => _driverColor.CaptureCurrent();
-
-    public void RestoreDriverColorSnapshot(DriverColorSnapshot snap) =>
-        _driverColor.RestoreFromSnapshot(snap);
-
-    public void ClearDriverTweaksIfActive() => _driverColor.ClearDriverTweaksIfActive();
-
-    public void AdjustBrightness(double delta)
-    {
-        var c = _liveColor.Clone();
-        c.Brightness += delta;
-        c.Clamp();
-        ApplyColor(c);
-    }
-
-    public void AdjustContrast(double delta)
-    {
-        var c = _liveColor.Clone();
-        c.Contrast += delta;
-        c.Clamp();
-        ApplyColor(c);
-    }
-
-    public void AdjustGamma(double delta)
-    {
-        var c = _liveColor.Clone();
-        c.Gamma += delta;
-        c.Clamp();
-        ApplyColor(c);
-    }
-
-    /// <summary>Adjust ShadowLift (0..0.4). Delta is in ShadowLift units, not 0..100 UI.</summary>
-    public void AdjustShadowLift(double delta)
-    {
-        var c = _liveColor.Clone();
-        if (c.Backend is not ColorBackend.LowLevel and not ColorBackend.Gdi)
-            return;
-        c.ShadowLift = Math.Clamp(c.ShadowLift + delta, 0.0, 0.4);
-        ApplyColor(c);
     }
 
     public void ClearAbCompare()
@@ -383,120 +267,93 @@ public sealed class DisplayEngine
         _abShowingFactory = false;
     }
 
-    public void ResetColor(ColorSettings defaults)
+    public void ApplyColor(ColorSettings color)
     {
-        var c = defaults?.Clone() ?? ColorSettings.Neutral;
-        if (c.Brightness < 0.05 || c.Brightness > 0.95)
-            c = ColorSettings.Neutral;
-        ApplyColor(c);
-    }
+        color.Clamp();
+        _liveColor = color.Clone();
+        _colorChanged = true;
+        var device = ResolveDeviceName(_colorTargetDevice);
+        if (device != null) CaptureBaselineRamp(device);
 
-    public void ResetColorToFactoryOrNeutral(ColorSettings? configured)
-    {
-        _driverColor.RestoreBaseline();
-        if (_hasFactoryRamp && _factoryRamp.HasValue)
+        if (color.Backend is ColorBackend.LowLevel or ColorBackend.Gdi)
         {
-            ApplyRamp(_factoryRamp.Value);
-            _liveColor = ColorSettings.Neutral;
-            AppLog.Info("Color reset to captured factory ramp.");
-            return;
-        }
-        ResetColor(configured ?? ColorSettings.Neutral);
-    }
+            // Restore NVIDIA/AMD only if a previous Driver session left tweaks active — no NvAPI init.
+            try { _driverColor.ClearDriverTweaksIfActive(); }
+            catch (Exception ex) { AppLog.Error("Driver restore on LowLevel: " + ex.Message); }
 
-    public void ApplyIdentityColor() => ApplyColor(ColorSettings.Neutral);
-
-    public void RestoreFactory(DefaultSettings factory)
-    {
-        var f = factory ?? new DefaultSettings();
-        if (string.IsNullOrWhiteSpace(f.Resolution))
-            f.Resolution = GetCurrentResolution();
-
-        if (!string.IsNullOrWhiteSpace(f.PowerPlan))
-            SetPowerPlan(f.PowerPlan!);
-        if (!string.IsNullOrWhiteSpace(f.Resolution))
-            SetResolution(f.Resolution!, f.RefreshRate);
-
-        _driverColor.RestoreBaseline();
-        if (_hasFactoryRamp && _factoryRamp.HasValue)
-        {
-            ApplyRamp(_factoryRamp.Value);
-            _liveColor = ColorSettings.Neutral;
+            ApplyRamp(device, BuildRamp(color));
+            var (b, c, g) = color.ToRivaTunerUnits();
+            AppLog.Info($"Color applied (Low Level): B={b} C={c} G={g:F2}" + (device != null ? $" on {device}" : ""));
         }
         else
         {
-            var c = f.Color ?? ColorSettings.Neutral;
-            if (c.Brightness < 0.05 || c.Brightness > 0.95)
-                c = ColorSettings.Neutral;
-            ApplyColor(c);
-        }
-
-        AppLog.Info($"Factory restored: res={f.Resolution}");
-    }
-
-    private bool ApplyRamp(RAMP ramp)
-    {
-        // Prefer CreateDC("DISPLAY") — same path many gamma tools / RT GDI mode use.
-        IntPtr hdc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
-        bool created = hdc != IntPtr.Zero;
-        if (!created)
-            hdc = GetDC(IntPtr.Zero);
-        if (hdc == IntPtr.Zero)
-        {
-            AppLog.Error("No HDC for gamma ramp.");
-            return false;
-        }
-
-        try
-        {
-            bool ok = SetDeviceGammaRamp(hdc, ref ramp);
-            if (!ok)
+            // NVIDIA Control Panel–style B/C/G via SetDeviceGammaRamp + Digital Vibrance / ADL sat.
+            ApplyRamp(device, BuildRamp(color));
+            try
             {
-                AppLog.Error("SetDeviceGammaRamp returned false.");
-                return false;
+                _driverColor.SetTargetDevice(device);
+                _driverColor.Apply(color);
             }
-
-            // Detect silent reject: Windows can return TRUE but leave identity in place.
-            var check = new RAMP
-            {
-                Red = new ushort[256],
-                Green = new ushort[256],
-                Blue = new ushort[256]
-            };
-            if (GetDeviceGammaRamp(hdc, ref check))
-            {
-                int expect = LowLevelColorRamp.UnpackRampByte(ramp.Red[128]);
-                int actual = LowLevelColorRamp.UnpackRampByte(check.Red[128]);
-                if (Math.Abs(expect - actual) > 8)
-                {
-                    AppLog.Error($"Gamma ramp mismatch at mid: set≈{expect} got≈{actual} (driver may have clamped).");
-                    return false;
-                }
-            }
-            return true;
-        }
-        finally
-        {
-            if (created) DeleteDC(hdc);
-            else ReleaseDC(IntPtr.Zero, hdc);
+            catch (Exception ex) { AppLog.Error("Driver color apply: " + ex.Message); }
+            AppLog.Info($"Color applied (Driver): V={color.Vibrance} {_driverColor.ActiveVendor}" + (device != null ? $" on {device}" : ""));
         }
     }
 
-    private static RAMP CloneRamp(RAMP src) => new()
+    /// <summary>Re-apply live ramp only (lock timer). Driver backends re-push vibrance lightly.</summary>
+    public void ReapplyLiveColor()
     {
-        Red = (ushort[])src.Red.Clone(),
-        Green = (ushort[])src.Green.Clone(),
-        Blue = (ushort[])src.Blue.Clone()
-    };
+        var device = ResolveDeviceName(_colorTargetDevice);
+        TrySetGammaRamp(device, BuildRamp(_liveColor), out _);
+        if (_liveColor.Backend is not (ColorBackend.LowLevel or ColorBackend.Gdi))
+        {
+            try { _driverColor.Apply(_liveColor); }
+            catch (Exception ex) { AppLog.Error("Driver lock reapply: " + ex.Message); }
+        }
+    }
+
+    /// <summary>
+    /// Puts the color target back to its baseline (calibration) ramp and undoes driver tweaks —
+    /// e.g. when a desktop preview ends. Identity only if no baseline was ever captured.
+    /// </summary>
+    public void ApplyNeutralOrFactoryRamp()
+    {
+        ApplyBaselineRampToTarget();
+        _liveColor = ColorSettings.Neutral;
+    }
+
+    /// <summary>Baseline ramp of the color target (A/B "factory" side). Identity only if nothing was captured.</summary>
+    private void ApplyBaselineRampToTarget()
+    {
+        _driverColor.ClearDriverTweaksIfActive();
+        var device = ResolveDeviceName(_colorTargetDevice);
+        if (device != null && _baselineRamps.TryGetValue(device, out var baseline))
+        {
+            ApplyRamp(device, baseline);
+            return;
+        }
+
+        var ramp = RAMP.Create();
+        LowLevelColorRamp.FillIdentity(ramp.Red, ramp.Green, ramp.Blue);
+        ApplyRamp(device, ramp);
+    }
+
+    public DriverColorSnapshot? CaptureDriverColorCurrent() => _driverColor.CaptureCurrent();
+
+    public bool RestoreDriverColorSnapshot(DriverColorSnapshot snap) =>
+        _driverColor.RestoreFromSnapshot(snap);
+
+    public void ClearDriverTweaksIfActive() => _driverColor.ClearDriverTweaksIfActive();
+
+    private static bool ApplyRamp(string? device, RAMP ramp)
+    {
+        if (TrySetGammaRamp(device, ramp, out var err)) return true;
+        AppLog.Error((device != null ? $"[{device}] " : "") + err + " (Windows may clip extreme curves)");
+        return false;
+    }
 
     private static RAMP BuildRamp(ColorSettings color)
     {
-        var ramp = new RAMP
-        {
-            Red = new ushort[256],
-            Green = new ushort[256],
-            Blue = new ushort[256]
-        };
+        var ramp = RAMP.Create();
 
         if (color.Backend == ColorBackend.LowLevel)
         {
@@ -541,163 +398,145 @@ public sealed class DisplayEngine
         return ramp;
     }
 
+    /// <summary>Capture a display's current gamma ramp as three 256-entry arrays.</summary>
+    public bool TryCaptureGammaRamp(string? device, out ushort[] red, out ushort[] green, out ushort[] blue)
+    {
+        red = green = blue = Array.Empty<ushort>();
+        if (!TryGetGammaRamp(ResolveDeviceName(device), out var ramp)) return false;
+        red = ramp.Red;
+        green = ramp.Green;
+        blue = ramp.Blue;
+        return true;
+    }
+
+    public bool ApplyCapturedGammaRamp(string? device, ushort[] red, ushort[] green, ushort[] blue)
+    {
+        if (red.Length != 256 || green.Length != 256 || blue.Length != 256) return false;
+        var ramp = new RAMP
+        {
+            Red = (ushort[])red.Clone(),
+            Green = (ushort[])green.Clone(),
+            Blue = (ushort[])blue.Clone()
+        };
+        return ApplyRamp(ResolveDeviceName(device), ramp);
+    }
+
+    // ------------------------------------------------------------------ profile / defaults
+
+    /// <summary>Manual (non-session) apply of a profile's power plan + resolution. Color is presets-only.</summary>
+    public void ApplyProfile(GameProfile profile, DefaultSettings defaults)
+    {
+        if (profile.ApplyPowerPlan && !string.IsNullOrWhiteSpace(profile.PowerPlan))
+            SetPowerPlan(profile.PowerPlan);
+
+        if (profile.ApplyResolution && !string.IsNullOrWhiteSpace(profile.Resolution))
+            SetResolution(profile.Resolution!, profile.RefreshRate, profile.DisplayDevice ?? AppConfigPreferredDevice());
+    }
+
+    /// <summary>Global defaults: power plan / resolution when set, then color (neutral = baseline ramp, never identity).</summary>
+    public void RestoreDefaults(DefaultSettings defaults)
+    {
+        if (!string.IsNullOrWhiteSpace(defaults.PowerPlan))
+            SetPowerPlan(defaults.PowerPlan!);
+
+        if (!string.IsNullOrWhiteSpace(defaults.Resolution))
+            SetResolution(defaults.Resolution!, defaults.RefreshRate, AppConfigPreferredDevice());
+
+        var color = (defaults.Color ?? ColorSettings.Neutral).Clone();
+        color.Clamp();
+        if (IsNeutral(color))
+        {
+            RestoreBaselineColor();
+        }
+        else
+        {
+            _driverColor.RestoreBaseline();
+            ApplyColor(color);
+        }
+        AppLog.Info($"Restored defaults: res={defaults.Resolution}, power={defaults.PowerPlan ?? "(unchanged)"}");
+    }
+
+    private static bool IsNeutral(ColorSettings c) =>
+        Math.Abs(c.Brightness - 0.5) < 0.005 && Math.Abs(c.Contrast - 1.0) < 0.005
+        && Math.Abs(c.Gamma - 1.0) < 0.005 && c.ShadowLift < 0.0001 && c.Vibrance == 50 && c.Hue == 0;
+
+    // ------------------------------------------------------------------ resolution
+
+    /// <summary>
+    /// Dynamic mode change (not written to the registry, so a power loss mid-game boots back to the
+    /// desktop mode). No-op when the display already runs the requested mode.
+    /// </summary>
     public bool SetResolution(string resolution, int refreshRate = 0, string? deviceName = null)
     {
-        var parts = resolution.ToLowerInvariant().Split('x');
-        if (parts.Length != 2 ||
-            !int.TryParse(parts[0], out int width) ||
-            !int.TryParse(parts[1], out int height))
+        if (!TryParseRes(resolution, out int width, out int height) || width > 7680 || height > 4320)
         {
             AppLog.Error($"Invalid resolution: {resolution}");
             return false;
         }
 
-        if (width < 640 || height < 480 || width > 7680 || height > 4320)
+        string? device = NullIfEmpty(deviceName);
+        if (!TryGetCurrentMode(device, out var mode))
         {
-            AppLog.Error($"Resolution out of range: {resolution}");
+            AppLog.Error($"EnumDisplaySettings failed for {device ?? "primary display"}.");
             return false;
         }
 
-        string? device = string.IsNullOrWhiteSpace(deviceName) ? null : deviceName.Trim();
-
-        var mode = new DEVMODE();
-        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
-        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref mode))
-            return SetResolutionViaQRes(width, height);
+        if (mode.dmPelsWidth == width && mode.dmPelsHeight == height
+            && (refreshRate <= 0 || mode.dmDisplayFrequency == refreshRate))
+        {
+            AppLog.Info($"Resolution already {width}x{height}" + (refreshRate > 0 ? $"@{refreshRate}" : "")
+                        + (device != null ? $" on {device}" : "") + " — skipped.");
+            return true;
+        }
 
         mode.dmPelsWidth = width;
         mode.dmPelsHeight = height;
         mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
         if (mode.dmBitsPerPel == 0) mode.dmBitsPerPel = 32;
-
         if (refreshRate > 0)
         {
             mode.dmDisplayFrequency = refreshRate;
             mode.dmFields |= DM_DISPLAYFREQUENCY;
         }
 
-        int result = ChangeDisplaySettingsEx(device, ref mode, IntPtr.Zero, CDS_UPDATEREGISTRY, IntPtr.Zero);
-        if (result != DISP_CHANGE_SUCCESSFUL)
+        int result = ChangeDisplaySettingsEx(device, ref mode, IntPtr.Zero, CDS_DYNAMIC, IntPtr.Zero);
+        if (result != DISP_CHANGE_SUCCESSFUL && refreshRate > 0)
         {
-            AppLog.Error($"ChangeDisplaySettingsEx failed ({result}), trying QRes.");
-            return SetResolutionViaQRes(width, height);
+            AppLog.Warn($"ChangeDisplaySettingsEx {width}x{height}@{refreshRate} failed ({result}) — retrying without refresh rate.");
+            mode.dmFields &= ~DM_DISPLAYFREQUENCY;
+            result = ChangeDisplaySettingsEx(device, ref mode, IntPtr.Zero, CDS_DYNAMIC, IntPtr.Zero);
         }
 
-        AppLog.Info($"Resolution → {resolution}" + (refreshRate > 0 ? $"@{refreshRate}" : "")
+        if (result != DISP_CHANGE_SUCCESSFUL)
+        {
+            AppLog.Error($"ChangeDisplaySettingsEx failed ({result}) for {width}x{height}" + (device != null ? $" on {device}" : ""));
+            return false;
+        }
+
+        AppLog.Info($"Resolution → {width}x{height}" + (refreshRate > 0 ? $"@{refreshRate}" : "")
                     + (device != null ? $" on {device}" : ""));
         return true;
     }
 
-    public static List<(string DeviceName, string Friendly, bool Primary)> GetDisplays()
-    {
-        var list = new List<(string, string, bool)>();
-        uint i = 0;
-        while (true)
-        {
-            var dd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
-            if (!EnumDisplayDevices(null, i, ref dd, 0)) break;
-            i++;
-            if ((dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) == 0) continue;
-            bool primary = (dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
-            string friendly = string.IsNullOrWhiteSpace(dd.DeviceString) ? dd.DeviceName : dd.DeviceString;
-            list.Add((dd.DeviceName, friendly, primary));
-        }
-        return list;
-    }
+    public static List<(string DeviceName, string Friendly, bool Primary)> GetDisplays() => EnumerateDisplays();
 
-    private static bool SetResolutionViaQRes(int width, int height)
-    {
-        var qres = ResolveQResPath();
-        if (!File.Exists(qres))
-        {
-            AppLog.Error("QRes.exe not found.");
-            return false;
-        }
-
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = qres,
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            psi.ArgumentList.Add($"/x:{width}");
-            psi.ArgumentList.Add($"/y:{height}");
-
-            using var p = Process.Start(psi);
-            if (p == null) return false;
-            if (!p.WaitForExit(5000))
-            {
-                try { p.Kill(); } catch { }
-                AppLog.Error("QRes timed out.");
-                return false;
-            }
-
-            if (p.ExitCode != 0)
-            {
-                AppLog.Error($"QRes exit code {p.ExitCode}");
-                return false;
-            }
-
-            AppLog.Info($"Resolution via QRes → {width}x{height}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error($"QRes failed: {ex.Message}");
-            return false;
-        }
-    }
-
-    public void SetPowerPlan(string plan)
-    {
-        string guid = plan.ToLowerInvariant() switch
-        {
-            "highperformance" or "high" or "high_performance" => PowerHighPerf,
-            "balanced" => PowerBalanced,
-            _ when Guid.TryParse(plan, out _) => plan,
-            _ => PowerBalanced
-        };
-
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powercfg.exe",
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            psi.ArgumentList.Add("/setactive");
-            psi.ArgumentList.Add(guid);
-
-            using var p = Process.Start(psi);
-            p?.WaitForExit(5000);
-            AppLog.Info($"Power plan → {plan}");
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error($"powercfg failed: {ex.Message}");
-        }
-    }
-
+    /// <summary>Distinct WxH modes (32-bit, ≥800 wide), largest first (numeric, not string order).</summary>
     public static List<string> GetAvailableResolutions()
     {
-        var set = new SortedSet<string>(StringComparer.Ordinal);
-        var mode = new DEVMODE();
-        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        var set = new HashSet<(int W, int H)>();
+        var mode = NewDevMode();
         int i = 0;
         while (EnumDisplaySettings(null, i, ref mode))
         {
             if (mode.dmPelsWidth >= 800 && mode.dmBitsPerPel >= 32)
-                set.Add($"{mode.dmPelsWidth}x{mode.dmPelsHeight}");
+                set.Add((mode.dmPelsWidth, mode.dmPelsHeight));
             i++;
         }
-        return set.ToList();
+        return set
+            .OrderByDescending(r => r.W)
+            .ThenByDescending(r => r.H)
+            .Select(r => $"{r.W}x{r.H}")
+            .ToList();
     }
 
     /// <summary>Refresh rates available for a WxH mode (descending).</summary>
@@ -707,9 +546,8 @@ public sealed class DisplayEngine
         if (!TryParseRes(resolution, out int w, out int h))
             return set.ToList();
 
-        string? device = string.IsNullOrWhiteSpace(deviceName) ? null : deviceName.Trim();
-        var mode = new DEVMODE();
-        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        string? device = NullIfEmpty(deviceName);
+        var mode = NewDevMode();
         int i = 0;
         while (EnumDisplaySettings(device, i, ref mode))
         {
@@ -731,89 +569,99 @@ public sealed class DisplayEngine
                && width >= 640 && height >= 480;
     }
 
-    public static bool IsCustomResolution(string? resolution)
-        => TryParseRes(resolution, out _, out _);
-
     public static string GetCurrentResolution()
     {
-        var mode = new DEVMODE();
-        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
-        if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref mode))
+        if (TryGetCurrentMode(null, out var mode))
             return $"{mode.dmPelsWidth}x{mode.dmPelsHeight}";
         return "1920x1080";
     }
 
     public static (string Resolution, int RefreshRate, string? Device) GetCurrentMode(string? deviceName = null)
     {
-        string? device = string.IsNullOrWhiteSpace(deviceName) ? null : deviceName.Trim();
-        var mode = new DEVMODE();
-        mode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
-        if (!EnumDisplaySettings(device, ENUM_CURRENT_SETTINGS, ref mode))
+        string? device = NullIfEmpty(deviceName);
+        if (!TryGetCurrentMode(device, out var mode))
             return (GetCurrentResolution(), 0, device);
         return ($"{mode.dmPelsWidth}x{mode.dmPelsHeight}", mode.dmDisplayFrequency, device);
     }
 
-    /// <summary>Capture current gamma ramp as three 256-entry ushort arrays.</summary>
-    public bool TryCaptureGammaRamp(out ushort[] red, out ushort[] green, out ushort[] blue)
+    // ------------------------------------------------------------------ power plan
+
+    /// <summary>Plan alias (highPerformance / balanced / powerSaver / ultimate) or GUID → scheme GUID; null if unknown.</summary>
+    public static string? ResolvePowerPlanGuid(string? plan)
     {
-        red = new ushort[256];
-        green = new ushort[256];
-        blue = new ushort[256];
-        var ramp = new RAMP { Red = red, Green = green, Blue = blue };
-        IntPtr hdc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
-        bool created = hdc != IntPtr.Zero;
-        if (!created) hdc = GetDC(IntPtr.Zero);
-        if (hdc == IntPtr.Zero) return false;
-        try
+        if (string.IsNullOrWhiteSpace(plan)) return null;
+        var p = plan.Trim();
+        if (Guid.TryParse(p, out var g)) return g.ToString("D");
+        return p.ToLowerInvariant() switch
         {
-            if (!GetDeviceGammaRamp(hdc, ref ramp)) return false;
-            red = (ushort[])ramp.Red.Clone();
-            green = (ushort[])ramp.Green.Clone();
-            blue = (ushort[])ramp.Blue.Clone();
+            "highperformance" or "high" or "high_performance" => PowerHighPerf,
+            "balanced" => PowerBalanced,
+            "powersaver" or "power_saver" or "saver" => PowerSaver,
+            "ultimate" or "ultimateperformance" or "ultimate_performance" => PowerUltimate,
+            _ => null
+        };
+    }
+
+    /// <summary>UI alias for a stock scheme GUID ("balanced" / "highPerformance"), else null.</summary>
+    public static string? PowerPlanAlias(string guid) => guid.ToLowerInvariant() switch
+    {
+        PowerBalanced => "balanced",
+        PowerHighPerf => "highPerformance",
+        _ => null
+    };
+
+    /// <summary>Activates a power scheme via PowerSetActiveScheme (no powercfg child process).</summary>
+    /// <returns>True when the scheme is active afterwards. Unknown plan names are rejected, never mapped to Balanced.</returns>
+    public bool SetPowerPlan(string plan)
+    {
+        var guidText = ResolvePowerPlanGuid(plan);
+        if (guidText == null)
+        {
+            AppLog.Error($"Unknown power plan '{plan}' — left unchanged.");
+            return false;
+        }
+
+        if (string.Equals(GetActivePowerPlanGuid(), guidText, StringComparison.OrdinalIgnoreCase))
+        {
+            AppLog.Info($"Power plan already {plan}.");
             return true;
         }
-        finally
+
+        try
         {
-            if (created) DeleteDC(hdc);
-            else ReleaseDC(IntPtr.Zero, hdc);
+            var guid = Guid.Parse(guidText);
+            uint rc = PowerSetActiveScheme(IntPtr.Zero, ref guid);
+            if (rc != 0)
+            {
+                AppLog.Error($"Power plan {plan} not applied (PowerSetActiveScheme error {rc}" +
+                             (rc == 2 ? " — scheme not installed" : "") + ").");
+                return false;
+            }
+            AppLog.Info($"Power plan → {plan}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Power plan change failed: {ex.Message}");
+            return false;
         }
     }
 
-    public bool ApplyCapturedGammaRamp(ushort[] red, ushort[] green, ushort[] blue)
-    {
-        if (red.Length != 256 || green.Length != 256 || blue.Length != 256) return false;
-        var ramp = new RAMP
-        {
-            Red = (ushort[])red.Clone(),
-            Green = (ushort[])green.Clone(),
-            Blue = (ushort[])blue.Clone()
-        };
-        return ApplyRamp(ramp);
-    }
-
-    /// <summary>Active power scheme GUID via powercfg /getactivescheme (best-effort).</summary>
+    /// <summary>Active power scheme GUID (lower-case "D" format) or null.</summary>
     public static string? GetActivePowerPlanGuid()
     {
         try
         {
-            var psi = new ProcessStartInfo
+            if (PowerGetActiveScheme(IntPtr.Zero, out var ptr) != 0 || ptr == IntPtr.Zero)
+                return null;
+            try
             {
-                FileName = "powercfg.exe",
-                Arguments = "/getactivescheme",
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            using var p = Process.Start(psi);
-            if (p == null) return null;
-            string output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(4000);
-            // GUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-            var m = System.Text.RegularExpressions.Regex.Match(
-                output,
-                @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
-            return m.Success ? m.Value : null;
+                return Marshal.PtrToStructure<Guid>(ptr).ToString("D");
+            }
+            finally
+            {
+                LocalFree(ptr);
+            }
         }
         catch (Exception ex)
         {
@@ -822,11 +670,11 @@ public sealed class DisplayEngine
         }
     }
 
+    /// <summary>App shutdown: undo driver tweaks still active, then release NvAPI (once).</summary>
     public void DisposeDriverColor()
     {
-        // Restore driver vibrance baseline only — do not force factory gamma here.
-        // Exit / EmergencyRestore already restored the intended display state.
-        try { _driverColor.RestoreBaseline(); } catch { }
-        try { _driverColor.Dispose(); } catch { }
+        try { _driverColor.Dispose(); }
+        catch (Exception ex) { AppLog.Warn(ex, "Driver color dispose"); }
+        NvApiHost.Shutdown();
     }
 }

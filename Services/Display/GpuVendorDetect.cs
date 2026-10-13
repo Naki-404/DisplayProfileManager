@@ -1,7 +1,7 @@
 using System.Management;
-using DisplayProfileManager.Models;
+using Visor.Models;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>Detect discrete GPU vendor for the Driver backend auto-switch (WMI only — never touches NvAPI).</summary>
 public static class GpuVendorDetect
@@ -10,7 +10,7 @@ public static class GpuVendorDetect
     private static ColorBackend? _cachedDriverBackend;
     private static bool _hasNvidia;
     private static bool _hasAmd;
-    private static bool _done;
+    private static volatile bool _done;
 
     public static string DriverLabel
     {
@@ -30,23 +30,24 @@ public static class GpuVendorDetect
         }
     }
 
-    public static bool HasNvidia
-    {
-        get { Ensure(); return _hasNvidia; }
-    }
-
-    public static bool HasAmd
-    {
-        get { Ensure(); return _hasAmd; }
-    }
-
     public static bool IsDriverSide(ColorBackend backend) =>
         backend is ColorBackend.Driver or ColorBackend.Nvidia or ColorBackend.Amd;
+
+    private static readonly object Gate = new();
 
     private static void Ensure()
     {
         if (_done) return;
-        _done = true;
+        lock (Gate)
+        {
+            if (_done) return;
+            Detect();
+            _done = true;
+        }
+    }
+
+    private static void Detect()
+    {
         try
         {
             using var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");

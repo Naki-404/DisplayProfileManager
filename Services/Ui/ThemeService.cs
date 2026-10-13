@@ -1,13 +1,34 @@
 using System.Windows;
 using System.Windows.Media;
-using DisplayProfileManager.Models;
+using Visor.Models;
 using Color = System.Windows.Media.Color;
 using WpfApp = System.Windows.Application;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 public static class ThemeService
 {
+    /// <summary>Visor brand accents (icon gradient).</summary>
+    public const string BrandCyan = "#22D3EE";
+    public const string BrandVioletDark = "#8B5CF6";
+    public const string BrandVioletLight = "#7C3AED";
+    public const string BrandBackground = "#0B0F14";
+
+    /// <summary>True when the effective theme has a dark background (used by tray menu / DWM caption).</summary>
+    public static bool IsDarkTheme(UiPreferences? ui) => IsDark(Hex(Resolve(ui ?? new UiPreferences()).Bg));
+
+    /// <summary>Reads a themed color from the live application resources (falls back to the dark palette).</summary>
+    public static Color CurrentColor(string brushKey, string fallbackHex)
+    {
+        try
+        {
+            if (WpfApp.Current?.Resources[brushKey] is SolidColorBrush b)
+                return b.Color;
+        }
+        catch { }
+        return Hex(fallbackHex);
+    }
+
     public static ThemePalette Resolve(UiPreferences ui)
     {
         ui ??= new UiPreferences();
@@ -48,6 +69,20 @@ public static class ThemeService
         Set("ToastBgBrush", Hex(p.ToastBg));
         Set("ToastBorderBrush", Hex(p.ToastBorder));
 
+        // Derived brand brushes (not part of the persisted palette).
+        var bg = Hex(p.Bg);
+        bool dark = IsDark(bg);
+        var accent = Hex(p.Accent);
+        var accentAlt = dark ? Hex(BrandVioletDark) : Hex(BrandVioletLight);
+        var muted = Hex(p.Muted);
+        Set("AccentAltBrush", accentAlt);
+        Set("ScrimBrush", Color.FromArgb(0xCC, bg.R, bg.G, bg.B));
+        Set("ScrollThumbBrush", Color.FromArgb(0x66, muted.R, muted.G, muted.B));
+        Set("ScrollThumbHoverBrush", Color.FromArgb(0xCC, muted.R, muted.G, muted.B));
+        var gradient = new LinearGradientBrush(accent, accentAlt, new System.Windows.Point(0, 0), new System.Windows.Point(1, 1));
+        gradient.Freeze();
+        WpfApp.Current.Resources["BrandGradientBrush"] = gradient;
+
         SetSystem(System.Windows.SystemColors.WindowBrushKey, Hex(p.Bg));
         SetSystem(System.Windows.SystemColors.ControlBrushKey, Hex(p.Panel));
         SetSystem(System.Windows.SystemColors.WindowTextBrushKey, Hex(p.Text));
@@ -56,64 +91,68 @@ public static class ThemeService
 
     public static ThemePalette DarkPalette() => new()
     {
-        Bg = "#0F1216",
-        Panel = "#161B22",
-        Border = "#2A3340",
-        Text = "#E8EEF4",
-        Muted = "#8B9AAB",
-        Accent = "#7EB8D4",
-        AccentHover = "#93C7DF",
-        Danger = "#C1554F",
-        Field = "#1B212B",
-        Track = "#232B37",
-        GhostBg = "#1A212B",
-        GhostBorder = "#2A3340",
-        GhostHover = "#212938",
-        AccentButtonText = "#0F1216",
-        CheckCheckedBg = "#1E2732",
-        ComboHighlight = "#1E2733",
-        ComboSelected = "#24303D",
-        TabSelected = "#1C2430",
-        TabHover = "#171E27",
-        CaptionHover = "#1E2732",
-        TitleBar = "#10141A",
-        PillBg = "#1C2430",
-        ToastBg = "#161B22",
-        ToastBorder = "#2A3340"
+        Bg = "#0B0F14",
+        Panel = "#121821",
+        Border = "#243041",
+        Text = "#E6EDF5",
+        Muted = "#8A98AB",
+        Accent = BrandCyan,
+        AccentHover = "#67E8F9",
+        Danger = "#E05252",
+        Field = "#161D28",
+        Track = "#1F2835",
+        GhostBg = "#151C26",
+        GhostBorder = "#243041",
+        GhostHover = "#1B2431",
+        AccentButtonText = "#06121A",
+        CheckCheckedBg = "#0E2A33",
+        ComboHighlight = "#1A2330",
+        ComboSelected = "#1C2C3A",
+        TabSelected = "#162230",
+        TabHover = "#131A24",
+        CaptionHover = "#1B2431",
+        TitleBar = "#0D1218",
+        PillBg = "#10242E",
+        ToastBg = "#151C26",
+        ToastBorder = "#2A3A4F"
     };
 
     public static ThemePalette LightPalette() => new()
     {
-        Bg = "#F1F4F7",
+        // Cyan-700 accent keeps >= 4.5:1 contrast for white button text on a light background.
+        Bg = "#F3F6FA",
         Panel = "#FFFFFF",
-        Border = "#D7DEE6",
-        Text = "#1B232C",
-        Muted = "#667180",
-        Accent = "#3B7E9D",
-        AccentHover = "#4C93B4",
-        Danger = "#B3453F",
+        Border = "#D5DDE7",
+        Text = "#111827",
+        Muted = "#5B6676",
+        Accent = "#0E7490",
+        AccentHover = "#0891B2",
+        Danger = "#C0392B",
         Field = "#FFFFFF",
-        Track = "#E1E7ED",
-        GhostBg = "#F5F7FA",
-        GhostBorder = "#D7DEE6",
-        GhostHover = "#EAEFF3",
+        Track = "#E2E8F0",
+        GhostBg = "#F6F8FB",
+        GhostBorder = "#D5DDE7",
+        GhostHover = "#EAF6F9",
         AccentButtonText = "#FFFFFF",
-        CheckCheckedBg = "#E4EEF3",
-        ComboHighlight = "#EAF1F5",
-        ComboSelected = "#DCE9EF",
-        TabSelected = "#EAF1F5",
-        TabHover = "#F2F6F9",
-        CaptionHover = "#E7EDF1",
-        TitleBar = "#E9EDF1",
-        PillBg = "#E4EEF3",
+        CheckCheckedBg = "#E0F5F9",
+        ComboHighlight = "#EEF6F9",
+        ComboSelected = "#DDF0F5",
+        TabSelected = "#E3F3F7",
+        TabHover = "#EEF3F7",
+        CaptionHover = "#E6ECF2",
+        TitleBar = "#E9EEF4",
+        PillBg = "#E0F2F7",
         ToastBg = "#FFFFFF",
-        ToastBorder = "#D7DEE6"
+        ToastBorder = "#D5DDE7"
     };
+
+    /// <summary>Starting point for a custom palette: the Visor brand colors.</summary>
+    public static ThemePalette DefaultCustom() => SeedCustom(BrandCyan, BrandBackground);
 
     public static ThemePalette SeedCustom(string? accentHex, string? bgHex)
     {
-        var accent = Hex(accentHex, Hex("#7EB8D4"));
-        var bg = Hex(bgHex, Hex("#0F1216"));
+        var accent = Hex(accentHex, Hex(BrandCyan));
+        var bg = Hex(bgHex, Hex(BrandBackground));
         bool dark = IsDark(bg);
         var text = dark ? Hex("#E8EEF4") : Hex("#1B232C");
         var panel = Blend(bg, dark ? Hex("#FFFFFF") : Hex("#000000"), dark ? 0.07 : 0.04);
@@ -131,13 +170,13 @@ public static class ThemeService
             Muted = ToHex(muted),
             Accent = ToHex(accent),
             AccentHover = ToHex(hover),
-            Danger = "#C1554F",
+            Danger = "#E05252",
             Field = ToHex(field),
             Track = ToHex(Blend(bg, accent, 0.22)),
             GhostBg = ToHex(Blend(panel, text, dark ? 0.06 : 0.04)),
             GhostBorder = ToHex(border),
             GhostHover = ToHex(Blend(panel, accent, 0.15)),
-            AccentButtonText = "#FFFFFF",
+            AccentButtonText = IsDark(accent) ? "#FFFFFF" : "#06121A",
             CheckCheckedBg = ToHex(Blend(panel, accent, 0.2)),
             ComboHighlight = ToHex(Blend(panel, accent, 0.18)),
             ComboSelected = ToHex(Blend(panel, accent, 0.28)),
@@ -174,7 +213,7 @@ public static class ThemeService
 
     public static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
 
-    private static bool IsDark(Color c) => (c.R * 0.299 + c.G * 0.587 + c.B * 0.114) < 140;
+    public static bool IsDark(Color c) => (c.R * 0.299 + c.G * 0.587 + c.B * 0.114) < 140;
 
     private static Color Blend(Color a, Color b, double t)
     {

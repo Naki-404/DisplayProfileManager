@@ -3,16 +3,26 @@ using System.Text;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
-using DisplayProfileManager.Models;
+using System.Windows.Threading;
+using Visor.Models;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
+/// <summary>
+/// Global hotkeys. Each binding is delivered by exactly one path: RegisterHotKey (WM_HOTKEY) when
+/// Windows grants it, otherwise the low-level keyboard / mouse hook. Hook callbacks only match and
+/// enqueue (Dispatcher.BeginInvoke) — they never run app work, so Windows never times the hook out.
+/// <see cref="HotkeyPressed"/> is raised on the UI thread.
+/// </summary>
 public sealed class HotkeyService : IDisposable
 {
     private const int WmHotkey = 0x0312;
     private const int WhKeyboardLl = 13;
     private const int WmKeydown = 0x0100;
+    private const int WmKeyup = 0x0101;
     private const int WmSyskeydown = 0x0104;
+    private const int WmSyskeyup = 0x0105;
+    private const uint LlkhfUp = 0x80;
 
     private const uint ModAlt = 0x0001;
     private const uint ModCtrl = 0x0002;
@@ -24,6 +34,11 @@ public sealed class HotkeyService : IDisposable
     private const int WmXButtonDown = 0x020B;
     private const uint XButton1Flag = 0x0001;
     private const uint XButton2Flag = 0x0002;
+
+    /// <summary>Same action again within this window (measured on event arrival) is a duplicate.</summary>
+    private const long DebounceMs = 220;
+    /// <summary>Hook event and WM_HOTKEY for the same press carry (nearly) the same input time.</summary>
+    private const long CrossPathWindowMs = 250;
 
     /// <summary>
     /// Pseudo virtual-key codes for mouse side buttons — outside the real VK range (0x01..0xFE),
@@ -40,7 +55,7 @@ public sealed class HotkeyService : IDisposable
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelProc lpfn, IntPtr hMod, uint dwThreadId);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -55,7 +70,7 @@ public sealed class HotkeyService : IDisposable
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
 
-    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+    private delegate IntPtr LowLevelProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct KbdLlHookStruct
@@ -84,22 +99,38 @@ public sealed class HotkeyService : IDisposable
         public IntPtr DwExtraInfo;
     }
 
+    /// <summary>One binding; <see cref="Registered"/> = RegisterHotKey also delivers it (WM_HOTKEY).</summary>
+    private sealed record Binding(uint Mods, uint Vk, string Action, bool Registered);
+
+    /// <summary>Last action actually delivered per path, with its input event time (GetTickCount clock).</summary>
+    private (string Action, uint Time)? _lastFromHook;
+    private (string Action, uint Time)? _lastFromHotkeyMsg;
+
+    [DllImport("user32.dll")]
+    private static extern int GetMessageTime();
+
     private readonly Dictionary<int, string> _idToAction = new();
-    private readonly List<(uint mods, uint vk, string action)> _bindings = new();
-    private readonly object _bindGate = new();
+    /// <summary>Replaced as a whole (copy-on-write) so hook callbacks read it without locking.</summary>
+    private volatile Binding[] _bindings = Array.Empty<Binding>();
     private readonly List<string> _lastFailures = new();
+    /// <summary>Hook-delivered keys currently held down (auto-repeat suppression). Hook thread only.</summary>
+    private readonly HashSet<uint> _heldVks = new();
     private IntPtr _hwnd;
     private int _nextId = 1;
     private HwndSourceHook? _hook;
     private HwndSource? _source;
+    private Dispatcher? _dispatcher;
+    private Thread? _hookThread;
+    private Dispatcher? _hookDispatcher;
+    private readonly object _debounceGate = new();
     private IntPtr _llHook = IntPtr.Zero;
-    private LowLevelKeyboardProc? _llProc;
+    private LowLevelProc? _llProc;
     private IntPtr _mouseHook = IntPtr.Zero;
-    private LowLevelKeyboardProc? _mouseProc;
-    private string? _lastAction;
-    private long _lastActionTicks;
+    private LowLevelProc? _mouseProc;
     private volatile bool _uiTextInputFocused;
+    private bool _focusTrackingHooked;
 
+    /// <summary>Raised on the UI thread, once per physical press.</summary>
     public event Action<string>? HotkeyPressed;
 
     /// <summary>Gestures that failed to register on the last RegisterFromConfig call.</summary>
@@ -109,46 +140,34 @@ public sealed class HotkeyService : IDisposable
     {
         Detach();
         _hwnd = hwnd;
+        _dispatcher = Dispatcher.CurrentDispatcher;
         _source = HwndSource.FromHwnd(hwnd);
         if (_source == null) return;
         _hook = WndProc;
         _source.AddHook(_hook);
-        InstallLlHook();
-        InstallMouseHook();
+        StartHookThread();
         HookUiFocusTracking();
     }
 
-    /// <summary>UI-thread flag so the LL hook never touches FocusedElement off-thread.</summary>
-    public void SetUiTextInputFocused(bool focused) => _uiTextInputFocused = focused;
-
     private void HookUiFocusTracking()
     {
+        // Class handlers are process-wide and cannot be removed — register once.
+        if (_focusTrackingHooked) return;
+        _focusTrackingHooked = true;
         try
         {
-            EventManager.RegisterClassHandler(
-                typeof(System.Windows.Controls.TextBox),
-                UIElement.GotKeyboardFocusEvent,
-                new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = true));
-            EventManager.RegisterClassHandler(
-                typeof(System.Windows.Controls.TextBox),
-                UIElement.LostKeyboardFocusEvent,
-                new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = false));
-            EventManager.RegisterClassHandler(
-                typeof(System.Windows.Controls.PasswordBox),
-                UIElement.GotKeyboardFocusEvent,
-                new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = true));
-            EventManager.RegisterClassHandler(
-                typeof(System.Windows.Controls.PasswordBox),
-                UIElement.LostKeyboardFocusEvent,
-                new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = false));
-            EventManager.RegisterClassHandler(
-                typeof(System.Windows.Controls.ComboBox),
-                UIElement.GotKeyboardFocusEvent,
-                new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = true));
-            EventManager.RegisterClassHandler(
-                typeof(System.Windows.Controls.ComboBox),
-                UIElement.LostKeyboardFocusEvent,
-                new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = false));
+            foreach (var type in new[]
+                     {
+                         typeof(System.Windows.Controls.TextBox),
+                         typeof(System.Windows.Controls.PasswordBox),
+                         typeof(System.Windows.Controls.ComboBox)
+                     })
+            {
+                EventManager.RegisterClassHandler(type, UIElement.GotKeyboardFocusEvent,
+                    new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = true));
+                EventManager.RegisterClassHandler(type, UIElement.LostKeyboardFocusEvent,
+                    new KeyboardFocusChangedEventHandler((_, _) => _uiTextInputFocused = false));
+            }
         }
         catch (Exception ex)
         {
@@ -159,8 +178,7 @@ public sealed class HotkeyService : IDisposable
     public void Detach()
     {
         UnregisterAll();
-        RemoveLlHook();
-        RemoveMouseHook();
+        StopHookThread();
         if (_source != null && _hook != null)
             _source.RemoveHook(_hook);
         _source = null;
@@ -201,26 +219,6 @@ public sealed class HotkeyService : IDisposable
             AppLog.Error($"Hotkey register failed for {_lastFailures.Count} binding(s): {string.Join(", ", _lastFailures)}");
         else if (source != null)
             AppLog.Info($"Preset hotkeys scoped to: {source.Name} ({source.Presets?.Count(p => !string.IsNullOrWhiteSpace(p.Hotkey)) ?? 0} bound)");
-    }
-
-    /// <summary>Check gesture against currently registered bindings. Returns a short conflict label or null.</summary>
-    public string? FindConflict(string gesture, string? ignoreAction = null)
-    {
-        if (string.IsNullOrWhiteSpace(gesture)) return null;
-        if (!TryParseGesture(gesture, out uint mods, out uint vk)) return null;
-
-        lock (_bindGate)
-        {
-            foreach (var b in _bindings)
-            {
-                if (b.mods != mods || b.vk != vk) continue;
-                if (!string.IsNullOrWhiteSpace(ignoreAction)
-                    && string.Equals(b.action, ignoreAction, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                return $"Conflicts with {DescribeAction(b.action)}";
-            }
-        }
-        return null;
     }
 
     /// <summary>
@@ -302,30 +300,43 @@ public sealed class HotkeyService : IDisposable
             return;
         }
 
-        // Always track for LL hook (works in exclusive fullscreen where RegisterHotKey often fails).
-        // NumPad is registered as NumPad VK only — no Insert/arrow aliases (those stole unrelated keys).
-        lock (_bindGate)
-            _bindings.Add((mods, vk, action));
-
-        // Mouse side buttons have no RegisterHotKey equivalent — hook-only.
-        if (vk is VkMouseXButton1 or VkMouseXButton2)
+        // The same gesture twice (e.g. an imported preset): RegisterHotKey would refuse the second
+        // one and a single press would fire both actions. Keep the first binding, report the rest.
+        var clash = _bindings.FirstOrDefault(b => b.Mods == mods && b.Vk == vk);
+        if (clash != null)
         {
-            AppLog.Info($"Hotkey registered (mouse hook only): {action} = {gesture}");
+            AppLog.Warn($"Hotkey '{gesture}' for {action} conflicts with {DescribeAction(clash.Action)} — not registered.");
+            _lastFailures.Add($"{gesture} ({DescribeAction(action)} / {DescribeAction(clash.Action)})");
             return;
         }
 
-        int id = _nextId++;
-        if (RegisterHotKey(_hwnd, id, mods | ModNoRepeat, vk))
+        bool registered = false;
+        if (vk is VkMouseXButton1 or VkMouseXButton2)
         {
-            _idToAction[id] = action;
-            AppLog.Info($"Hotkey registered: {action} = {gesture}");
+            // Mouse side buttons have no RegisterHotKey equivalent — hook-only.
+            AppLog.Info($"Hotkey registered (mouse hook): {action} = {gesture}");
         }
         else
         {
-            // LL hook can still deliver; don't treat as hard failure.
-            AppLog.Info($"RegisterHotKey busy for '{gesture}' ({action}) — using keyboard hook fallback.");
+            int id = _nextId++;
+            if (RegisterHotKey(_hwnd, id, mods | ModNoRepeat, vk))
+            {
+                _idToAction[id] = action;
+                registered = true;
+                AppLog.Info($"Hotkey registered: {action} = {gesture}");
+            }
+            else
+            {
+                // Another app owns the combo — the LL hook still sees it (exclusive fullscreen too).
+                AppLog.Info($"RegisterHotKey busy for '{gesture}' ({action}) — keyboard hook only.");
+            }
         }
+
+        // The LL hook matches every binding (games using raw input with RIDEV_NOHOTKEYS swallow
+        // WM_HOTKEY); a press seen by both paths is de-duplicated by input event time in Enqueue.
+        _bindings = _bindings.Append(new Binding(mods, vk, action, registered)).ToArray();
     }
+
 
     public void UnregisterAll()
     {
@@ -335,7 +346,7 @@ public sealed class HotkeyService : IDisposable
                 UnregisterHotKey(_hwnd, id);
         }
         _idToAction.Clear();
-        lock (_bindGate) _bindings.Clear();
+        _bindings = Array.Empty<Binding>();
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -345,11 +356,59 @@ public sealed class HotkeyService : IDisposable
             int id = wParam.ToInt32();
             if (_idToAction.TryGetValue(id, out var action))
             {
-                Raise(action);
+                Enqueue(action, unchecked((uint)GetMessageTime()), fromHook: false);
                 handled = true;
             }
         }
         return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// LL hooks run on the thread that installed them; a dedicated message-pumping thread keeps
+    /// them responsive even while the UI thread is busy (mode change, dialog), so Windows never
+    /// drops the hook for timing out.
+    /// </summary>
+    private void StartHookThread()
+    {
+        if (_hookThread != null) return;
+        using var ready = new ManualResetEventSlim();
+        _hookThread = new Thread(() =>
+        {
+            _hookDispatcher = Dispatcher.CurrentDispatcher;
+            InstallLlHook();
+            InstallMouseHook();
+            try { ready.Set(); }
+            catch (ObjectDisposedException) { /* caller stopped waiting */ }
+            Dispatcher.Run();
+            RemoveLlHook();
+            RemoveMouseHook();
+        })
+        {
+            IsBackground = true,
+            Name = "Visor hotkey hook"
+        };
+        _hookThread.Start();
+        if (!ready.Wait(TimeSpan.FromSeconds(3)))
+            AppLog.Error("Hotkey hook thread did not start in time.");
+    }
+
+    private void StopHookThread()
+    {
+        var dispatcher = _hookDispatcher;
+        var thread = _hookThread;
+        _hookDispatcher = null;
+        _hookThread = null;
+        if (dispatcher == null || thread == null) return;
+        try
+        {
+            dispatcher.InvokeShutdown();
+            if (!thread.Join(TimeSpan.FromSeconds(2)))
+                AppLog.Warn("Hotkey hook thread did not stop in time.");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Hotkey hook thread stop");
+        }
     }
 
     private void InstallLlHook()
@@ -398,6 +457,7 @@ public sealed class HotkeyService : IDisposable
         _mouseProc = null;
     }
 
+    /// <summary>Hook callback: match + enqueue only. Must return fast.</summary>
     private IntPtr MouseLlCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         try
@@ -405,31 +465,14 @@ public sealed class HotkeyService : IDisposable
             if (nCode >= 0 && wParam == (IntPtr)WmXButtonDown && !_uiTextInputFocused)
             {
                 var info = Marshal.PtrToStructure<MsLlHookStruct>(lParam);
-                uint xButton = (info.MouseData >> 16) & 0xFFFF;
-                uint vk = xButton switch
+                uint vk = ((info.MouseData >> 16) & 0xFFFF) switch
                 {
                     XButton1Flag => VkMouseXButton1,
                     XButton2Flag => VkMouseXButton2,
                     _ => 0
                 };
-                if (vk != 0)
-                {
-                    uint mods = ReadModifiers(0);
-                    string? action = null;
-                    lock (_bindGate)
-                    {
-                        foreach (var b in _bindings)
-                        {
-                            if (b.vk == vk && b.mods == mods)
-                            {
-                                action = b.action;
-                                break;
-                            }
-                        }
-                    }
-                    if (action != null)
-                        Raise(action);
-                }
+                if (vk != 0 && MatchHookBinding(vk, ReadModifiers(0)) is { } action)
+                    Enqueue(action, info.Time, fromHook: true);
             }
         }
         catch { /* never break the hook chain */ }
@@ -437,40 +480,41 @@ public sealed class HotkeyService : IDisposable
         return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
     }
 
+    /// <summary>Hook callback: match + enqueue only. Must return fast.</summary>
     private IntPtr LlCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         try
         {
-            if (nCode >= 0 && (wParam == (IntPtr)WmKeydown || wParam == (IntPtr)WmSyskeydown))
+            if (nCode >= 0)
             {
-                // Don't steal keys while typing in our own fields (flag set on UI thread).
-                if (_uiTextInputFocused)
-                    return CallNextHookEx(_llHook, nCode, wParam, lParam);
-
+                int msg = (int)wParam;
                 var info = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
-                if ((info.Flags & 0x80) == 0)
+                if (msg is WmKeyup or WmSyskeyup || (info.Flags & LlkhfUp) != 0)
                 {
-                    uint mods = ReadModifiers(info.VkCode);
-                    string? action = null;
-                    lock (_bindGate)
-                    {
-                        foreach (var b in _bindings)
-                        {
-                            if (b.vk == info.VkCode && b.mods == mods)
-                            {
-                                action = b.action;
-                                break;
-                            }
-                        }
-                    }
-                    if (action != null)
-                        Raise(action);
+                    _heldVks.Remove(info.VkCode);
+                }
+                else if (msg is WmKeydown or WmSyskeydown && !_uiTextInputFocused)
+                {
+                    // Don't steal keys while typing in our own fields (flag set on UI thread).
+                    if (MatchHookBinding(info.VkCode, ReadModifiers(info.VkCode)) is { } action
+                        && _heldVks.Add(info.VkCode)) // auto-repeat while held → ignored
+                        Enqueue(action, info.Time, fromHook: true);
                 }
             }
         }
         catch { /* never break the hook chain */ }
 
         return CallNextHookEx(_llHook, nCode, wParam, lParam);
+    }
+
+    private string? MatchHookBinding(uint vk, uint mods)
+    {
+        foreach (var b in _bindings)
+        {
+            if (b.Vk == vk && b.Mods == mods)
+                return b.Action;
+        }
+        return null;
     }
 
     private static uint ReadModifiers(uint pressedVk)
@@ -485,15 +529,39 @@ public sealed class HotkeyService : IDisposable
         return mods;
     }
 
-    private void Raise(string action)
+    /// <summary>
+    /// De-duplicates by input event time (not arrival time — the UI thread may be busy), then hands
+    /// the action to the UI thread asynchronously. One physical press seen by both the LL hook and
+    /// WM_HOTKEY (event times within <see cref="CrossPathWindowMs"/>) is delivered once.
+    /// </summary>
+    private void Enqueue(string action, uint eventTime, bool fromHook)
     {
-        long now = Environment.TickCount64;
-        if (action == _lastAction && now - _lastActionTicks < 220)
-            return;
-        _lastAction = action;
-        _lastActionTicks = now;
-        try { HotkeyPressed?.Invoke(action); }
-        catch (Exception ex) { AppLog.Error("Hotkey handler: " + ex.Message); }
+        lock (_debounceGate)
+        {
+            var other = fromHook ? _lastFromHotkeyMsg : _lastFromHook;
+            if (other is { } o && o.Action == action && TickDistance(o.Time, eventTime) <= CrossPathWindowMs)
+                return;
+            var same = fromHook ? _lastFromHook : _lastFromHotkeyMsg;
+            if (same is { } s && s.Action == action && TickDistance(s.Time, eventTime) < DebounceMs)
+                return;
+            if (fromHook) _lastFromHook = (action, eventTime);
+            else _lastFromHotkeyMsg = (action, eventTime);
+        }
+
+        var dispatcher = _dispatcher;
+        if (dispatcher == null) return;
+        dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            try { HotkeyPressed?.Invoke(action); }
+            catch (Exception ex) { AppLog.Error("Hotkey handler: " + ex.Message); }
+        });
+    }
+
+    /// <summary>|a − b| on the 32-bit GetTickCount clock (wrap-safe).</summary>
+    private static uint TickDistance(uint a, uint b)
+    {
+        int d = unchecked((int)(a - b));
+        return (uint)Math.Abs((long)d);
     }
 
     public static bool TryParseGesture(string gesture, out uint modifiers, out uint virtualKey)

@@ -2,9 +2,9 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
-using DisplayProfileManager.Models;
+using Visor.Models;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 public enum UiWorkResult
 {
@@ -67,15 +67,8 @@ internal static class UiSound
     private static bool MutedForGame()
     {
         if (!_muteInGame) return false;
-        try { return DisplayProfileManager.App.Services?.Monitor?.CurrentProfile != null; }
+        try { return Visor.App.Services?.Monitor?.CurrentProfile != null; }
         catch { return false; }
-    }
-
-    public static void SetEnabled(bool enabled)
-    {
-        _enabled = enabled;
-        if (!enabled)
-            EndWork(UiWorkResult.Cancel);
     }
 
     public static void PlayWelcome(int delayMs = 280)
@@ -212,23 +205,8 @@ internal static class UiSound
         return Path.Combine(_dir, file);
     }
 
-    private static string FindSoundsDir()
-    {
-        var baseDir = AppContext.BaseDirectory;
-        var nextToExe = Path.Combine(baseDir, "Assets", "Sounds");
-        if (File.Exists(Path.Combine(nextToExe, "ui_open.wav")))
-            return nextToExe;
-
-        var dir = new DirectoryInfo(baseDir);
-        for (int i = 0; i < 6 && dir != null; i++, dir = dir.Parent)
-        {
-            var candidate = Path.Combine(dir.FullName, "Assets", "Sounds");
-            if (File.Exists(Path.Combine(candidate, "ui_open.wav")))
-                return candidate;
-        }
-
-        return nextToExe;
-    }
+    /// <summary>Sounds ship next to the exe (Assets\Sounds). Missing files just mean silence.</summary>
+    private static string FindSoundsDir() => Path.Combine(AppContext.BaseDirectory, "Assets", "Sounds");
 
     /// <summary>gain scales the master volume for this one-shot (e.g. 0.68 for a quieter chime).
     /// speedRatio applies subtle pitch/tempo variation (e.g. 0.97..1.03 for click wobble).</summary>

@@ -1,17 +1,21 @@
+﻿# Build output (any project)
 bin/
 obj/
-dist/
-release/
-Installer/bin/
-Installer/obj/
-Installer/payload/
-Installer/_payload-stage/
-Installer/payload.zip
-_shot/
-_IconGen/
 *.user
 *.suo
-.vs/
 *.pdb
+
+# IDEs
+.vs/
+.idea/
+
+# Release pipeline (build-release.ps1)
+release/
+_payload-stage/
+Installer/payload.zip
+Installer/redist/
+
+# Local tools / scratch
+_shot/
 _shot*.ps1
 _tmp_sfx/

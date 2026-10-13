@@ -1,22 +1,24 @@
-<Window x:Class="DisplayProfileManager.Setup.SetupWindow"
+<Window x:Class="Visor.Setup.SetupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Display Profile Manager Setup"
-        Width="560" Height="500"
+        xmlns:local="clr-namespace:Visor.Setup"
+        Title="{x:Static local:L.SetupTitle}"
+        Width="560" SizeToContent="Height" MinHeight="460"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         FontFamily="Segoe UI" FontSize="13"
+        TextOptions.TextFormattingMode="Display"
         Icon="pack://application:,,,/Assets/app.ico"
         Loaded="Window_Loaded">
-  <Border x:Name="Chrome" CornerRadius="16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+  <Border x:Name="Chrome" Margin="16" CornerRadius="16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
           Background="{StaticResource BgBrush}" Opacity="0"
           RenderTransformOrigin="0.5,0.5">
     <Border.RenderTransform>
       <ScaleTransform x:Name="ChromeScale" ScaleX="0.94" ScaleY="0.94"/>
     </Border.RenderTransform>
     <Border.Effect>
-      <DropShadowEffect BlurRadius="32" ShadowDepth="6" Opacity="0.5" Color="#000000"/>
+      <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.5" Color="#000000"/>
     </Border.Effect>
     <Grid>
       <Grid.RowDefinitions>
@@ -31,11 +33,11 @@
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <Image Width="18" Height="18" Margin="0,0,8,0" Stretch="Uniform"
                    Source="pack://application:,,,/Assets/app.ico"/>
-            <TextBlock Text="Setup" VerticalAlignment="Center"
+            <TextBlock Text="{x:Static local:L.SetupTitle}" VerticalAlignment="Center"
                        Foreground="{StaticResource TextBrush}" FontWeight="SemiBold"/>
           </StackPanel>
-          <Button DockPanel.Dock="Right" Width="36" Height="28" Click="Close_Click"
-                  Style="{StaticResource CaptionCloseButton}"
+          <Button x:Name="BtnClose" DockPanel.Dock="Right" Width="36" Height="28" Click="Close_Click"
+                  Style="{StaticResource CaptionCloseButton}" IsCancel="True"
                   HorizontalAlignment="Right" VerticalAlignment="Center">
             <Path Width="9" Height="9" Stretch="Uniform" Stroke="{StaticResource MutedBrush}" StrokeThickness="1.3"
                   Data="M0,0 L1,1 M1,0 L0,1"/>
@@ -43,44 +45,45 @@
         </DockPanel>
       </Border>
 
-      <Grid x:Name="ContentRoot" Grid.Row="1" Margin="24,18,24,10" Opacity="0">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-
-        <StackPanel Grid.Row="0" Margin="0,0,0,18">
-          <TextBlock Text="Display Profile Manager" FontSize="24" FontWeight="SemiBold"
-                     Foreground="{StaticResource TextBrush}"/>
-          <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MutedBrush}"
-                     Text="Version 1.8.0  ·  Nakidev"/>
-          <TextBlock Margin="0,8,0,0" Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap"
-                     Text="Installs into its own folder, registers in Apps &amp; Features, and keeps your profiles in AppData."/>
+      <StackPanel x:Name="ContentRoot" Grid.Row="1" Margin="24,18,24,14" Opacity="0">
+        <StackPanel Margin="0,0,0,18">
+          <StackPanel Orientation="Horizontal">
+            <Image Width="40" Height="40" Margin="0,0,12,0" Stretch="Uniform" VerticalAlignment="Center"
+                   Source="pack://application:,,,/Assets/app.ico"/>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="Visor" FontSize="26" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"/>
+              <TextBlock Text="{x:Static local:L.Tagline}" Foreground="{StaticResource MutedBrush}"/>
+            </StackPanel>
+          </StackPanel>
+          <TextBlock x:Name="TxtVersion" Margin="0,10,0,0" Foreground="{StaticResource AccentHoverBrush}" FontSize="12"/>
+          <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap"
+                     Text="{x:Static local:L.SetupBlurb}"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="1" Margin="0,0,0,14">
-          <TextBlock Text="Install location" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+        <StackPanel Margin="0,0,0,14">
+          <TextBlock Text="{x:Static local:L.InstallLocation}" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
           <DockPanel>
             <Button DockPanel.Dock="Right" Content="…" Style="{StaticResource GhostButton}"
-                    Width="44" Margin="8,0,0,0" Padding="0,6" Click="Browse_Click"/>
+                    Width="44" MinWidth="44" Margin="8,0,0,0" Padding="0,6" Click="Browse_Click"/>
             <TextBox x:Name="TxtPath"/>
           </DockPanel>
           <TextBlock x:Name="TxtResolved" Margin="0,8,0,0" FontSize="11"
                      Foreground="{StaticResource AccentHoverBrush}" TextWrapping="Wrap"/>
         </StackPanel>
 
-        <Border Grid.Row="2" Background="{StaticResource PanelBrush}" CornerRadius="12" Padding="14" Margin="0,0,0,12"
+        <Border Background="{StaticResource PanelBrush}" CornerRadius="12" Padding="14" Margin="0,0,0,12"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
           <StackPanel>
-            <CheckBox x:Name="ChkStartMenu" Content="Start Menu shortcut" IsChecked="True"/>
-            <CheckBox x:Name="ChkDesktop" Content="Desktop shortcut" IsChecked="False"/>
-            <CheckBox x:Name="ChkLaunch" Content="Launch after install" IsChecked="True" Margin="0"/>
+            <CheckBox x:Name="ChkStartMenu" Content="{x:Static local:L.StartMenuShortcut}" IsChecked="True"/>
+            <CheckBox x:Name="ChkDesktop" Content="{x:Static local:L.DesktopShortcut}" IsChecked="False"/>
+            <CheckBox x:Name="ChkLegacy" Visibility="Collapsed" IsChecked="True">
+              <TextBlock x:Name="TxtLegacy" TextWrapping="Wrap"/>
+            </CheckBox>
+            <CheckBox x:Name="ChkLaunch" Content="{x:Static local:L.LaunchAfter}" IsChecked="True" Margin="0"/>
           </StackPanel>
         </Border>
 
-        <Border x:Name="ProgressPanel" Grid.Row="3" Visibility="Collapsed" VerticalAlignment="Bottom"
+        <Border x:Name="ProgressPanel" Visibility="Collapsed"
                 Background="{StaticResource PanelBrush}" CornerRadius="12" Padding="14"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
           <StackPanel>
@@ -90,16 +93,16 @@
                 <Grid.RenderTransform>
                   <RotateTransform x:Name="SpinRotate"/>
                 </Grid.RenderTransform>
-                <Ellipse Width="22" Height="22" Stroke="#337EB8D4" StrokeThickness="2.4"/>
+                <Ellipse Width="22" Height="22" Stroke="{StaticResource AccentTrackBrush}" StrokeThickness="2.4"/>
                 <Path Stroke="{StaticResource AccentBrush}" StrokeThickness="2.4"
                       StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                       Data="M 11,2 A 9,9 0 1 1 2,11"/>
               </Grid>
-              <TextBlock x:Name="TxtStatus" Text="Installing…" VerticalAlignment="Center"
+              <TextBlock x:Name="TxtStatus" Text="{x:Static local:L.Installing}" VerticalAlignment="Center"
                          Foreground="{StaticResource TextBrush}"/>
             </DockPanel>
             <Border Height="5" CornerRadius="3" Background="{StaticResource TrackBrush}" ClipToBounds="True">
-              <Border x:Name="ProgressFill" Width="96" HorizontalAlignment="Left" CornerRadius="3"
+              <Border Width="96" HorizontalAlignment="Left" CornerRadius="3"
                       Background="{StaticResource AccentBrush}">
                 <Border.RenderTransform>
                   <TranslateTransform x:Name="ProgressSlide" X="-100"/>
@@ -109,17 +112,19 @@
           </StackPanel>
         </Border>
 
-        <TextBlock x:Name="TxtRuntime" Grid.Row="3" VerticalAlignment="Bottom"
-                   Text="" Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap"/>
-      </Grid>
+        <TextBlock x:Name="TxtError" Visibility="Collapsed" Margin="0,4,0,0"
+                   Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap"/>
+      </StackPanel>
 
       <Border Grid.Row="2" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="24,14">
         <DockPanel>
-          <TextBlock DockPanel.Dock="Left" Text="made by Nakidev" VerticalAlignment="Center"
+          <TextBlock DockPanel.Dock="Left" Text="{x:Static local:L.MadeBy}" VerticalAlignment="Center"
                      Foreground="{StaticResource AccentHoverBrush}" FontSize="11" Opacity="0.9"/>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button x:Name="BtnCancel" Content="Cancel" Style="{StaticResource GhostButton}" Margin="0,0,8,0" Click="Close_Click"/>
-            <Button x:Name="BtnInstall" Content="Install" Style="{StaticResource AccentButton}" Click="Install_Click"/>
+            <Button x:Name="BtnCancel" Content="{x:Static local:L.Cancel}" Style="{StaticResource GhostButton}"
+                    Margin="0,0,8,0" Click="Close_Click"/>
+            <Button x:Name="BtnInstall" Content="{x:Static local:L.Install}" Style="{StaticResource AccentButton}"
+                    IsDefault="True" Click="Install_Click"/>
           </StackPanel>
         </DockPanel>
       </Border>
@@ -137,11 +142,15 @@
                   StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
                   Data="M0,6 L4,10 L12,1" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
-          <TextBlock x:Name="TxtSuccessTitle" Text="Installed successfully" FontSize="20" FontWeight="SemiBold"
+          <TextBlock x:Name="TxtSuccessTitle" FontSize="20" FontWeight="SemiBold"
                      HorizontalAlignment="Center" Foreground="{StaticResource TextBrush}"/>
-          <TextBlock x:Name="TxtSuccessBody" Margin="0,10,0,0" TextAlignment="Center" HorizontalAlignment="Center"
-                     Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" MaxWidth="360"
-                     Text="Thank you for installing Display Profile Manager.&#10;Enjoy — made by Nakidev"/>
+          <TextBlock Margin="0,10,0,0" TextAlignment="Center" HorizontalAlignment="Center"
+                     Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" MaxWidth="380"
+                     Text="{x:Static local:L.ThankYou}"/>
+          <TextBlock x:Name="TxtWarnings" Visibility="Collapsed" Margin="0,14,0,0" MaxWidth="440"
+                     Foreground="{StaticResource WarnBrush}" FontSize="12" TextWrapping="Wrap"/>
+          <Button x:Name="BtnDone" Visibility="Collapsed" Margin="0,18,0,0" HorizontalAlignment="Center"
+                  Content="{x:Static local:L.Close}" Style="{StaticResource GhostButton}" Click="Close_Click"/>
         </StackPanel>
       </Border>
     </Grid>

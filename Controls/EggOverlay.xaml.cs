@@ -2,7 +2,7 @@ using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
 /// <summary>Centered easter-egg banner. Trigger: 5× Library/Profiles clicks.</summary>
 public partial class EggOverlay : System.Windows.Controls.UserControl
@@ -46,6 +46,8 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
         if (FindResource("EggIn") is Storyboard innOld) innOld.Stop(this);
         if (FindResource("EggOut") is Storyboard outOld) outOld.Stop(this);
 
+        TitleText.Text = Visor.Services.Loc.T("egg.title");
+        SubText.Text = Visor.Services.Loc.T("egg.sub");
         Root.Opacity = 1;
         Visibility = Visibility.Visible;
         IsHitTestVisible = false;

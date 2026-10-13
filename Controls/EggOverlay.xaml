@@ -1,4 +1,4 @@
-<UserControl x:Class="DisplayProfileManager.EggOverlay"
+<UserControl x:Class="Visor.EggOverlay"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="Transparent"
@@ -54,7 +54,7 @@
     </UserControl.Resources>
 
     <Grid x:Name="Root" Opacity="1" IsHitTestVisible="False">
-        <Border Background="#990F1216" IsHitTestVisible="False"/>
+        <Border Background="{DynamicResource ScrimBrush}" Opacity="0.75" IsHitTestVisible="False"/>
         <Border x:Name="Card"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 MinWidth="260" Padding="28,24"
@@ -81,7 +81,7 @@
                 </Grid>
                 <TextBlock x:Name="TitleText" Text="Nice." FontWeight="SemiBold" FontSize="16"
                            Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center"/>
-                <TextBlock Text="Keep tuning." Foreground="{DynamicResource MutedBrush}" FontSize="12"
+                <TextBlock x:Name="SubText" Text="Keep tuning." Foreground="{DynamicResource MutedBrush}" FontSize="12"
                            HorizontalAlignment="Center" Margin="0,4,0,0"/>
             </StackPanel>
         </Border>

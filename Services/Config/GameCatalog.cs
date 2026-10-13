@@ -1,7 +1,7 @@
-using DisplayProfileManager.Models;
+using Visor.Models;
 using System.IO;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>Known game executables used only for discovery — never auto-added as dead profiles.</summary>
 public static class GameCatalog
@@ -39,9 +39,12 @@ public static class GameCatalog
         ["ModernWarfare.exe"] = "Modern Warfare",
     };
 
+    /// <summary>
+    /// Starter profiles for a brand-new config. Nothing personal is enabled: no forced resolutions,
+    /// no companion tools — only the high-performance power plan while the game runs.
+    /// </summary>
     public static List<GameProfile> CreateCoreProfiles()
     {
-        var riva = @"C:\Program Files (x86)\RivaTuner v2.24 MSI Master Overclocking Arena 2009 edition\RivaTuner.exe";
         return new List<GameProfile>
         {
             new()
@@ -49,8 +52,7 @@ public static class GameCatalog
                 Id = "valorant",
                 Name = "Valorant",
                 ProcessName = "VALORANT-Win64-Shipping.exe",
-                Resolution = "1568x1080",
-                ApplyResolution = true,
+                ApplyResolution = false,
                 ApplyColor = false,
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
@@ -62,8 +64,7 @@ public static class GameCatalog
                 Id = "pubg",
                 Name = "PUBG",
                 ProcessName = "TslGame.exe",
-                Resolution = "2560x1440",
-                ApplyResolution = true,
+                ApplyResolution = false,
                 ApplyColor = false,
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
@@ -75,8 +76,7 @@ public static class GameCatalog
                 Id = "warthunder",
                 Name = "War Thunder",
                 ProcessName = "aces.exe",
-                Resolution = "2560x1440",
-                ApplyResolution = true,
+                ApplyResolution = false,
                 ApplyColor = false,
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
@@ -92,21 +92,6 @@ public static class GameCatalog
                 ApplyPowerPlan = true,
                 PowerPlan = "highPerformance",
                 Color = ColorSettings.Neutral,
-                Companions = File.Exists(riva)
-                    ? new List<CompanionApp>
-                    {
-                        new()
-                        {
-                            Path = riva,
-                            LaunchMode = "scheduledTask",
-                            TaskName = "GameResolution-RivaTuner",
-                            OnStop = "closeThenKill",
-                            StopHotkey = null,
-                            DismissDialogs = true,
-                            MinimizeToTray = true
-                        }
-                    }
-                    : new List<CompanionApp>(),
                 Presets = CreateTarkovRivaPresets()
             },
         };
@@ -119,8 +104,6 @@ public static class GameCatalog
     }
 
     public static bool IsKnown(string processName) => Map.ContainsKey(Normalize(processName));
-
-    public static IReadOnlyDictionary<string, string> All => Map;
 
     public static List<(string Process, string Name)> FindRunningKnown()
     {
@@ -135,7 +118,6 @@ public static class GameCatalog
 
     public static GameProfile CreateProfileSkeleton(string process, string? name = null, string? exePath = null)
     {
-        var riva = @"C:\Program Files (x86)\RivaTuner v2.24 MSI Master Overclocking Arena 2009 edition\RivaTuner.exe";
         var friendly = name ?? GetFriendlyName(process) ?? Path.GetFileNameWithoutExtension(process);
 
         var profile = new GameProfile
@@ -151,32 +133,15 @@ public static class GameCatalog
             Color = ColorSettings.Neutral
         };
 
-        if (string.Equals(profile.ProcessName, "EscapeFromTarkov.exe", StringComparison.OrdinalIgnoreCase))
-        {
-            profile.ApplyColor = false;
-            profile.Color = ColorSettings.Neutral;
+        if (ProcessNames.Same(profile.ProcessName, "EscapeFromTarkov.exe"))
             profile.Presets = CreateTarkovRivaPresets();
-            if (File.Exists(riva))
-            {
-                profile.Companions.Add(new CompanionApp
-                {
-                    Path = riva,
-                    LaunchMode = "scheduledTask",
-                    TaskName = "GameResolution-RivaTuner",
-                    OnStop = "closeThenKill",
-                    StopHotkey = null,
-                    DismissDialogs = true,
-                    MinimizeToTray = true
-                });
-            }
-        }
 
         return profile;
     }
 
     /// <summary>
-    /// Color schemes from the user's RivaTuner (gamma-1 / gamma-2 / Night),
-    /// converted B/C/G → DPM and applied via Low Level backend.
+    /// Classic RivaTuner color schemes (gamma-1 / gamma-2 / Night) converted B/C/G → Visor,
+    /// applied via the Low Level backend. Hotkeys: Ctrl+Alt+digit (no NumPad).
     /// </summary>
     public static List<QuickPreset> CreateTarkovRivaPresets() => new()
     {
@@ -184,7 +149,7 @@ public static class GameCatalog
         {
             Id = "tarkov_gamma1",
             Name = "gamma-1",
-            Hotkey = "Ctrl+Alt+NumPad1",
+            Hotkey = "Ctrl+Alt+1",
             ApplyColor = true,
             Color = ColorSettings.FromRivaTuner(0, 10, 1.5),
             ApplyResolution = false
@@ -193,7 +158,7 @@ public static class GameCatalog
         {
             Id = "tarkov_gamma2",
             Name = "gamma-2",
-            Hotkey = "Ctrl+Alt+NumPad2",
+            Hotkey = "Ctrl+Alt+2",
             ApplyColor = true,
             Color = ColorSettings.FromRivaTuner(-35, 5, 3.0),
             ApplyResolution = false
@@ -202,7 +167,7 @@ public static class GameCatalog
         {
             Id = "tarkov_night",
             Name = "Night",
-            Hotkey = "Ctrl+Alt+NumPad3",
+            Hotkey = "Ctrl+Alt+3",
             ApplyColor = true,
             Color = ColorSettings.FromRivaTuner(-16, 5, 3.0),
             ApplyResolution = false
@@ -211,7 +176,7 @@ public static class GameCatalog
         {
             Id = "tarkov_neutral",
             Name = "Neutral",
-            Hotkey = "Ctrl+Alt+NumPad0",
+            Hotkey = "Ctrl+Alt+4",
             ApplyColor = true,
             Color = new ColorSettings
             {
@@ -260,11 +225,6 @@ public static class GameCatalog
         Color = ColorSettings.Neutral
     };
 
-    public static string Normalize(string processName)
-    {
-        processName = processName.Trim();
-        if (!processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            processName += ".exe";
-        return processName;
-    }
+    /// <summary>Display / storage form of an exe name (keeps case, ensures ".exe").</summary>
+    public static string Normalize(string processName) => ProcessNames.ToExeName(processName);
 }

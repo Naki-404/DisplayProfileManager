@@ -1,8 +1,9 @@
 using System.Windows;
-using DisplayProfileManager.Models;
-using DisplayProfileManager.Services;
+using System.Windows.Controls;
+using Visor.Models;
+using Visor.Services;
 
-namespace DisplayProfileManager;
+namespace Visor;
 
 public partial class CompanionEditWindow : Window
 {
@@ -14,6 +15,8 @@ public partial class CompanionEditWindow : Window
         Opacity = 0;
         Loaded += (_, _) => UiMotion.PopIn(this);
         _model = model;
+        ApplyLabels();
+
         TxtPath.Text = model.Path;
         TxtArgs.Text = model.Arguments ?? "";
         CmbLaunch.SelectedIndex = string.Equals(model.LaunchMode, "scheduledTask", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
@@ -27,11 +30,56 @@ public partial class CompanionEditWindow : Window
         };
         ChkDismiss.IsChecked = model.DismissDialogs;
         ChkTray.IsChecked = model.MinimizeToTray;
+        UpdateModePanels();
+    }
+
+    private void ApplyLabels()
+    {
+        Title = Loc.T("companion.title");
+        TxtTitle.Text = Loc.T("companion.title");
+        BtnClose.ToolTip = Loc.T("btn.close");
+        LblLaunch.Text = Loc.T("companion.launch");
+        ItmDirect.Content = Loc.T("companion.launch.direct");
+        ItmTask.Content = Loc.T("companion.launch.task");
+        LblPath.Text = Loc.T("companion.path");
+        BtnBrowse.Content = Loc.T("btn.browse");
+        LblArgs.Text = Loc.T("companion.args");
+        LblArgsHint.Text = Loc.T("companion.args.hint");
+        TxtArgs.Tag = "-launchapp …";
+        LblTask.Text = Loc.T("companion.task");
+        LblTaskHint.Text = Loc.T("companion.task.hint");
+        LblOnStop.Text = Loc.T("companion.onStop");
+        ItmCloseKill.Content = Loc.T("companion.stop.closeThenKill");
+        ItmClose.Content = Loc.T("companion.stop.close");
+        ItmKill.Content = Loc.T("companion.stop.kill");
+        ItmNone.Content = Loc.T("companion.stop.none");
+        ChkDismiss.Content = Loc.T("companion.dismiss");
+        ChkTray.Content = Loc.T("companion.tray");
+        LblSafety.Text = Loc.T("companion.safety");
+        BtnCancel.Content = Loc.T("btn.cancel");
+        BtnOk.Content = Loc.T("btn.save");
+    }
+
+    private void CmbLaunch_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsInitialized) return;
+        UpdateModePanels();
+    }
+
+    private void UpdateModePanels()
+    {
+        bool scheduled = CmbLaunch.SelectedIndex == 1;
+        PanelDirect.Visibility = scheduled ? Visibility.Collapsed : Visibility.Visible;
+        PanelTask.Visibility = scheduled ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Browse_Click(object sender, RoutedEventArgs e)
     {
-        var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "Executable (*.exe)|*.exe" };
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = Loc.T("filter.exe"),
+            Title = Loc.T("companion.path")
+        };
         if (dlg.ShowDialog() == true)
             TxtPath.Text = dlg.FileName;
     }
@@ -54,7 +102,7 @@ public partial class CompanionEditWindow : Window
         {
             if (!PathSecurity.IsSafeScheduledTaskName(task))
             {
-                ThemedDialog.Show(this, "Scheduled task name is missing or unsafe.");
+                ThemedDialog.Show(this, Loc.T("companion.err.task"), Loc.T("companion.title"));
                 return;
             }
         }
@@ -62,14 +110,14 @@ public partial class CompanionEditWindow : Window
         {
             if (!PathSecurity.IsPlausibleExecutablePath(path))
             {
-                ThemedDialog.Show(this, "Companion must be a plain .exe path (no scripts or shell characters).");
+                ThemedDialog.Show(this, Loc.T("companion.err.path"), Loc.T("companion.title"));
                 return;
             }
         }
 
         if (!PathSecurity.IsSafeArguments(args))
         {
-            ThemedDialog.Show(this, "Arguments contain unsafe characters (& | > < ^ ;).");
+            ThemedDialog.Show(this, Loc.T("companion.err.args"), Loc.T("companion.title"));
             return;
         }
 
@@ -122,5 +170,22 @@ public partial class CompanionEditWindow : Window
     {
         DialogResult = false;
         Close();
+    }
+
+    /// <summary>Friendly one-line label for the companion list (instead of raw enum values).</summary>
+    public static string Describe(CompanionApp c)
+    {
+        string name = string.Equals(c.LaunchMode, "scheduledTask", StringComparison.OrdinalIgnoreCase)
+            ? Loc.Tf("companion.list.task", c.TaskName ?? "?")
+            : System.IO.Path.GetFileName(c.Path ?? "");
+        if (string.IsNullOrWhiteSpace(name)) name = Loc.T("companion.list.unnamed");
+        string stop = (c.OnStop ?? "").ToLowerInvariant() switch
+        {
+            "close" => Loc.T("companion.stop.close.short"),
+            "kill" => Loc.T("companion.stop.kill.short"),
+            "none" => Loc.T("companion.stop.none.short"),
+            _ => Loc.T("companion.stop.closeThenKill.short")
+        };
+        return $"{name}  ·  {stop}";
     }
 }

@@ -1,10 +1,10 @@
 using System.IO;
 using System.Text.Json;
-using DisplayProfileManager.Models;
+using Visor.Models;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
-/// <summary>Export / import color preset packs (JSON) â€” share between PCs.</summary>
+/// <summary>Export / import color preset packs (JSON) — share between PCs.</summary>
 public static class PresetPackService
 {
     private static readonly JsonSerializerOptions Json = new()
@@ -179,13 +179,17 @@ public static class PresetPackService
         {
             Name = profile.Name + " presets",
             GameProcess = profile.ProcessName,
-            Presets = profile.Presets.Select(QuickPreset.CloneOf).ToList()
+            Presets = (profile.Presets ?? new List<QuickPreset>())
+                .Where(p => p != null)
+                .Select(QuickPreset.CloneOf)
+                .ToList()
         };
         File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(pack, Json));
         AppLog.Info("Exported preset pack: " + dlg.FileName);
         return true;
     }
 
+    /// <summary>Import presets into <paramref name="profile"/>. Returns the number added (0 on cancel / invalid file).</summary>
     public static int Import(GameProfile profile)
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
@@ -195,23 +199,58 @@ public static class PresetPackService
         };
         if (dlg.ShowDialog() != true) return 0;
 
-        var pack = JsonSerializer.Deserialize<Pack>(File.ReadAllText(dlg.FileName), Json);
+        Pack? pack;
+        try
+        {
+            pack = JsonSerializer.Deserialize<Pack>(File.ReadAllText(dlg.FileName), Json);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Preset pack import (unreadable file)");
+            return 0;
+        }
         if (pack?.Presets == null || pack.Presets.Count == 0) return 0;
 
         profile.Presets ??= new List<QuickPreset>();
         int added = 0;
         foreach (var p in pack.Presets)
         {
+            if (p == null) continue;
+            p.Name ??= "Preset";
+            p.Color ??= ColorSettings.Neutral;
             var c = QuickPreset.CloneOf(p);
+            c.Color.Clamp();
             c.EnsureDualColorSlots();
             c.Id = profile.Id + "_" + Guid.NewGuid().ToString("N")[..8];
             if (profile.Presets.Any(x => string.Equals(x.Name, c.Name, StringComparison.OrdinalIgnoreCase)))
                 c.Name += " (import)";
+            if (!string.IsNullOrWhiteSpace(c.Hotkey) && !HotkeyIsFree(c.Hotkey!, profile))
+            {
+                AppLog.Info($"Imported preset '{c.Name}': hotkey {c.Hotkey} cleared (invalid or already in use).");
+                c.Hotkey = null;
+            }
             profile.Presets.Add(c);
             added++;
         }
         AppLog.Info($"Imported {added} presets into {profile.Name}");
         return added;
+    }
+
+    /// <summary>Valid gesture not used by a global hotkey or another preset of this game.</summary>
+    private static bool HotkeyIsFree(string gesture, GameProfile profile)
+    {
+        if (!HotkeyService.TryParseGesture(gesture, out uint mods, out uint vk)) return false;
+
+        bool Same(string? other) =>
+            !string.IsNullOrWhiteSpace(other)
+            && HotkeyService.TryParseGesture(other!, out uint m, out uint v)
+            && m == mods && v == vk;
+
+        var g = Visor.App.Services?.Config?.Current?.GlobalHotkeys;
+        if (g != null && (Same(g.ToggleOverlay) || Same(g.EmergencyRestore) || Same(g.NextPreset)
+                          || Same(g.PreviousPreset) || Same(g.CompareAb) || Same(g.ToggleZoom)))
+            return false;
+        return !(profile.Presets ?? new List<QuickPreset>()).Any(p => Same(p.Hotkey));
     }
 
     private static string Sanitize(string name)
@@ -222,7 +261,12 @@ public static class PresetPackService
     }
 }
 
-/// <summary>Export / import full game profiles (JSON) â€” share between PCs.</summary>
+/// <summary>Export / import full game profiles (JSON) — share between PCs.</summary>
+/// <remarks>
+/// Packs are untrusted input: import keeps only display / preset / session settings. Companion
+/// apps (paths, arguments, scheduled tasks) and the exe path are stripped, and the watched
+/// process names must be plain exe names that are not core Windows processes.
+/// </remarks>
 public static class ProfilePackService
 {
     private static readonly JsonSerializerOptions Json = new()
@@ -247,17 +291,24 @@ public static class ProfilePackService
         };
         if (dlg.ShowDialog() != true) return false;
 
+        var copy = profile.Clone();
+        // Machine-local details are never imported anyway — don't leak them into shared files.
+        copy.Companions = new List<CompanionApp>();
+        copy.ExePath = null;
+        copy.DisplayDevice = null;
+        copy.Session.AudioDeviceId = null;
+
         var pack = new Pack
         {
             Name = profile.Name + " profile",
-            Profile = CloneProfile(profile)
+            Profile = copy
         };
         File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(pack, Json));
         AppLog.Info("Exported profile pack: " + dlg.FileName);
         return true;
     }
 
-    /// <summary>Import a profile pack and return a cloned GameProfile for MainWindow to add. Null if cancelled/empty.</summary>
+    /// <summary>Import a profile pack and return a sanitized GameProfile for MainWindow to add. Null if cancelled/invalid.</summary>
     public static GameProfile? Import()
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
@@ -267,90 +318,113 @@ public static class ProfilePackService
         };
         if (dlg.ShowDialog() != true) return null;
 
-        var pack = JsonSerializer.Deserialize<Pack>(File.ReadAllText(dlg.FileName), Json);
-        if (pack?.Profile == null || string.IsNullOrWhiteSpace(pack.Profile.ProcessName))
+        try
         {
-            // Allow bare GameProfile JSON as well
-            var bare = JsonSerializer.Deserialize<GameProfile>(File.ReadAllText(dlg.FileName), Json);
-            if (bare == null || string.IsNullOrWhiteSpace(bare.ProcessName))
-                return null;
-            return PrepareImported(bare);
+            var text = File.ReadAllText(dlg.FileName);
+            var pack = JsonSerializer.Deserialize<Pack>(text, Json);
+            var src = pack?.Profile;
+            if (src == null || string.IsNullOrWhiteSpace(src.ProcessName))
+            {
+                // Allow bare GameProfile JSON as well
+                src = JsonSerializer.Deserialize<GameProfile>(text, Json);
+                if (src == null || string.IsNullOrWhiteSpace(src.ProcessName))
+                    return null;
+            }
+            return PrepareImported(src);
         }
-
-        return PrepareImported(pack.Profile);
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Profile pack import (unreadable file)");
+            return null;
+        }
     }
 
-    /// <summary>Import and merge into cfg.Profiles. Returns number of profiles added (0 or 1).</summary>
-    public static int ImportMerge(AppConfig cfg)
+    private static GameProfile? PrepareImported(GameProfile src)
     {
-        var imported = Import();
-        if (imported == null) return 0;
-
-        if (cfg.Profiles.Any(p =>
-                string.Equals(p.ProcessName, imported.ProcessName, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(p.Name, imported.Name, StringComparison.OrdinalIgnoreCase)))
+        // Untrusted JSON may contain nulls anywhere — make Clone() safe first.
+        src.Name ??= "Imported profile";
+        src.ProcessAliases ??= new List<string>();
+        src.Companions ??= new List<CompanionApp>();
+        src.Presets ??= new List<QuickPreset>();
+        src.Presets.RemoveAll(p => p == null);
+        foreach (var p in src.Presets)
         {
-            imported.Name += " (import)";
+            p.Name ??= "Preset";
+            p.Color ??= ColorSettings.Neutral;
+        }
+        src.Session ??= new SessionExtras();
+        src.Color ??= ColorSettings.Neutral;
+
+        if (!IsAcceptableProcessName(src.ProcessName, out var why))
+        {
+            AppLog.Warn($"Profile pack rejected: process name {why}.");
+            return null;
         }
 
-        cfg.Profiles.Add(imported);
-        AppLog.Info($"Imported profile '{imported.Name}' ({imported.ProcessName})");
-        return 1;
-    }
+        var stripped = new List<string>();
+        int companions = src.Companions.Count(c => c != null);
+        if (companions > 0) stripped.Add($"{companions} companion app(s)");
+        if (!string.IsNullOrWhiteSpace(src.ExePath)) stripped.Add("exe path");
+        src.Companions = new List<CompanionApp>();
+        src.ExePath = null;
 
-    private static GameProfile PrepareImported(GameProfile src)
-    {
-        var c = CloneProfile(src);
+        var aliases = new List<string>();
+        foreach (var a in src.ProcessAliases)
+        {
+            if (string.IsNullOrWhiteSpace(a)) continue;
+            if (IsAcceptableProcessName(a, out var aliasWhy))
+                aliases.Add(ProcessNames.ToExeName(a));
+            else
+                stripped.Add($"alias ({aliasWhy})");
+        }
+        src.ProcessAliases = aliases;
+
+        var c = src.Clone();
         c.Id = Guid.NewGuid().ToString("N");
-        c.ProcessAliases ??= new List<string>();
-        c.Companions ??= new List<CompanionApp>();
-        c.Presets ??= new List<QuickPreset>();
-        c.Session ??= new SessionExtras();
+        c.ProcessName = ProcessNames.ToExeName(c.ProcessName);
+
+        var idMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var usedGestures = new HashSet<(uint, uint)>();
         foreach (var pr in c.Presets)
         {
-            pr.Id = c.Id + "_" + Guid.NewGuid().ToString("N")[..8];
+            if (!string.IsNullOrWhiteSpace(pr.Hotkey)
+                && (!HotkeyService.TryParseGesture(pr.Hotkey!, out uint m, out uint v) || !usedGestures.Add((m, v))))
+            {
+                stripped.Add($"hotkey {pr.Hotkey} of '{pr.Name}' (invalid or duplicate)");
+                pr.Hotkey = null;
+            }
+            var newId = c.Id + "_" + Guid.NewGuid().ToString("N")[..8];
+            if (!string.IsNullOrEmpty(pr.Id)) idMap[pr.Id] = newId;
+            pr.Id = newId;
+            pr.Color.Clamp();
             pr.EnsureDualColorSlots();
         }
+        c.StartupPresetId = c.StartupPresetId != null && idMap.TryGetValue(c.StartupPresetId, out var mapped)
+            ? mapped
+            : null;
         c.EnsureDualColorSlots();
+
+        AppLog.Info(stripped.Count == 0
+            ? $"Imported profile pack '{c.Name}' ({c.ProcessName})."
+            : $"Imported profile pack '{c.Name}' ({c.ProcessName}); stripped: {string.Join(", ", stripped)}.");
         return c;
     }
 
-    public static GameProfile CloneProfile(GameProfile p) => new()
+    private static bool IsAcceptableProcessName(string? name, out string why)
     {
-        Id = p.Id,
-        Name = p.Name,
-        Enabled = p.Enabled,
-        ProcessName = p.ProcessName,
-        ProcessAliases = (p.ProcessAliases ?? new List<string>()).ToList(),
-        ExePath = p.ExePath,
-        Resolution = p.Resolution,
-        RefreshRate = p.RefreshRate,
-        StartupPresetId = p.StartupPresetId,
-        ApplyDelaySeconds = p.ApplyDelaySeconds,
-        ApplyOnFocus = p.ApplyOnFocus,
-        DisplayDevice = p.DisplayDevice,
-        PowerPlan = p.PowerPlan,
-        ApplyColor = p.ApplyColor,
-        ApplyResolution = p.ApplyResolution,
-        ApplyPowerPlan = p.ApplyPowerPlan,
-        RestoreMode = p.RestoreMode,
-        Color = p.Color.Clone(),
-        ColorLowLevel = p.ColorLowLevel?.Clone(),
-        ColorDriver = p.ColorDriver?.Clone(),
-        Session = (p.Session ?? new SessionExtras()).Clone(),
-        Companions = (p.Companions ?? new List<CompanionApp>()).Select(c => new CompanionApp
+        why = "";
+        if (!ProcessNames.IsPlainExeName(name))
         {
-            Path = c.Path,
-            Arguments = c.Arguments,
-            LaunchMode = c.LaunchMode,
-            TaskName = c.TaskName,
-            OnStop = c.OnStop,
-            StopHotkey = c.StopHotkey,
-            DismissDialogs = c.DismissDialogs,
-            MinimizeToTray = c.MinimizeToTray
-        }).ToList(),
-        Presets = (p.Presets ?? new List<QuickPreset>()).Select(QuickPreset.CloneOf).ToList()
-    };
+            why = "is not a plain exe file name";
+            return false;
+        }
+        if (ProcessNames.IsProtectedSystemProcess(name))
+        {
+            why = $"'{name}' is a Windows system process";
+            return false;
+        }
+        return true;
+    }
 
     private static string Sanitize(string name)
     {

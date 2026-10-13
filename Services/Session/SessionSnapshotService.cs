@@ -1,12 +1,13 @@
 using System.IO;
 using System.Text.Json;
-using DisplayProfileManager.Models;
+using Visor.Models;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
-/// Captures PC display/power/color state before a game profile applies,
-/// persists to active-session.json, and restores on exit / emergency / crash.
+/// Captures PC display/power/color state before a game session changes it, persists it to
+/// active-session.json, and restores it on exit / emergency / crash restart.
+/// One snapshot per session: switching profiles keeps the original pre-game state.
 /// </summary>
 public sealed class SessionSnapshotService
 {
@@ -18,39 +19,49 @@ public sealed class SessionSnapshotService
 
     private readonly DisplayEngine _engine;
     private readonly string _path;
+    private readonly object _io = new();
     private ActiveSessionSnapshot? _memory;
+    private const int MaxRestoreAttempts = 3;
 
     public SessionSnapshotService(DisplayEngine engine, string configDirectory)
     {
         _engine = engine;
-        _path = System.IO.Path.Combine(configDirectory, "active-session.json");
+        _path = Path.Combine(configDirectory, "active-session.json");
     }
 
     public string SnapshotPath => _path;
-    public bool HasSnapshot => _memory != null || File.Exists(_path);
-    public ActiveSessionSnapshot? Current => _memory ?? TryLoadFromDisk();
 
-    public ActiveSessionSnapshot Capture(GameProfile? profile, SessionExtrasService session)
+    public bool HasSnapshot
     {
-        var (res, hz, device) = DisplayEngine.GetCurrentMode(profile?.DisplayDevice);
+        get { lock (_io) return _memory != null || File.Exists(_path); }
+    }
+
+    public ActiveSessionSnapshot? Current
+    {
+        get { lock (_io) return _memory ?? LoadFromDiskLocked(); }
+    }
+
+    /// <summary>
+    /// Starts the session snapshot (power plan + driver color) unless one already exists —
+    /// a profile switch or re-activation keeps the original pre-game state.
+    /// </summary>
+    public ActiveSessionSnapshot BeginIfNone(GameProfile profile, out bool created)
+    {
+        var existing = Current;
+        if (existing != null)
+        {
+            created = false;
+            return existing;
+        }
+
         var snap = new ActiveSessionSnapshot
         {
+            Version = ActiveSessionSnapshot.CurrentVersion,
             CapturedUtc = DateTime.UtcNow,
-            ProfileId = profile?.Id,
-            ProfileName = profile?.Name,
-            Resolution = res,
-            RefreshRate = hz,
-            DisplayDevice = device,
+            ProfileId = profile.Id,
+            ProfileName = profile.Name,
             PowerPlanGuid = DisplayEngine.GetActivePowerPlanGuid()
         };
-
-        if (_engine.TryCaptureGammaRamp(out var r, out var g, out var b))
-        {
-            snap.HasGammaRamp = true;
-            snap.GammaRedB64 = EncodeRamp(r);
-            snap.GammaGreenB64 = EncodeRamp(g);
-            snap.GammaBlueB64 = EncodeRamp(b);
-        }
 
         try
         {
@@ -59,8 +70,10 @@ public sealed class SessionSnapshotService
             {
                 snap.HasDriverColor = true;
                 snap.DriverVendor = drv.Vendor;
+                snap.DriverDisplayName = drv.DisplayName;
                 snap.DriverVibranceLevel = drv.VibranceLevel;
                 snap.DriverNormalizedVibrance = drv.NormalizedVibrance;
+                snap.DriverHueAngle = drv.HueAngle;
                 snap.DriverBrightness = drv.Brightness;
                 snap.DriverContrast = drv.Contrast;
                 snap.DriverSaturation = drv.Saturation;
@@ -71,122 +84,352 @@ public sealed class SessionSnapshotService
             AppLog.Error("Snapshot driver color: " + ex.Message);
         }
 
-        session.FillSnapshotExtras(snap);
-        _memory = snap;
-        SaveToDisk(snap);
-        AppLog.Info($"Session snapshot saved ({res}@{hz}, power={snap.PowerPlanGuid ?? "?"}).");
+        Persist(snap);
+        created = true;
+        AppLog.Info($"Session snapshot started for {profile.Name} (power={snap.PowerPlanGuid ?? "?"}).");
         return snap;
     }
 
-    /// <summary>Restore resolution / power / gamma from snapshot. Session extras restored separately.</summary>
-    public bool RestoreDisplay(DefaultSettings? fallbackDefaults = null)
+    /// <summary>Records <paramref name="device"/>'s current mode + gamma ramp the first time the session touches it.</summary>
+    public SnapshotDisplay EnsureDisplay(ActiveSessionSnapshot snap, string? device)
     {
-        var snap = _memory ?? TryLoadFromDisk();
-        if (snap == null)
+        var name = DisplayEngine.ResolveDeviceName(device);
+        SnapshotDisplay entry;
+        lock (_io)
         {
-            if (fallbackDefaults != null)
+            var hit = snap.Displays.FirstOrDefault(d => string.Equals(d.Device, name, StringComparison.OrdinalIgnoreCase));
+            if (hit != null) return hit;
+
+            var (res, hz, _) = DisplayEngine.GetCurrentMode(name);
+            entry = new SnapshotDisplay { Device = name, Resolution = res, RefreshRate = hz };
+            if (_engine.TryCaptureGammaRamp(name, out var r, out var g, out var b))
             {
-                _engine.RestoreDefaults(fallbackDefaults);
-                return true;
+                entry.HasGammaRamp = true;
+                entry.GammaRedB64 = DisplayNative.EncodeChannel(r);
+                entry.GammaGreenB64 = DisplayNative.EncodeChannel(g);
+                entry.GammaBlueB64 = DisplayNative.EncodeChannel(b);
             }
-            return false;
+            snap.Displays.Add(entry);
+            AppLog.Info($"Session snapshot: {name ?? "primary"} {res}@{hz}.");
+        }
+        Persist(snap);
+        return entry;
+    }
+
+    /// <summary>
+    /// Restores power plan, display modes, driver color and gamma recorded in the snapshot.
+    /// Session extras are restored separately. The snapshot is kept.
+    /// </summary>
+    /// <param name="skipModeDevice">Display whose mode is about to be set again (profile switch) — not reverted.</param>
+    /// <returns>False if any step failed (details are logged).</returns>
+    /// <param name="clearFlags">
+    /// True for a real restore (session end / profile switch): power / mode flags are cleared for the
+    /// steps that succeeded. False for the Alt+Tab soft restore — the game state comes back later.
+    /// </param>
+    public bool RestoreDisplay(ActiveSessionSnapshot snap, string? skipModeDevice = null, bool clearFlags = true)
+    {
+        bool ok = true;
+
+        if (snap.PowerPlanChanged && !string.IsNullOrWhiteSpace(snap.PowerPlanGuid))
+        {
+            bool done = _engine.SetPowerPlan(snap.PowerPlanGuid!);
+            if (done && clearFlags) snap.PowerPlanChanged = false;
+            ok &= done;
+        }
+
+        foreach (var d in snap.Displays.ToList())
+        {
+            if (!d.ModeChanged || string.IsNullOrWhiteSpace(d.Resolution)) continue;
+            if (skipModeDevice != null && string.Equals(d.Device, skipModeDevice, StringComparison.OrdinalIgnoreCase)) continue;
+            bool done = _engine.SetResolution(d.Resolution!, d.RefreshRate, d.Device);
+            if (done && clearFlags) d.ModeChanged = false;
+            ok &= done;
+        }
+
+        if (snap.HasDriverColor && !string.IsNullOrWhiteSpace(snap.DriverVendor))
+        {
+            try
+            {
+                ok &= _engine.RestoreDriverColorSnapshot(new DriverColorSnapshot
+                {
+                    Vendor = snap.DriverVendor!,
+                    DisplayName = snap.DriverDisplayName,
+                    VibranceLevel = snap.DriverVibranceLevel,
+                    NormalizedVibrance = snap.DriverNormalizedVibrance,
+                    HueAngle = snap.DriverHueAngle,
+                    Brightness = snap.DriverBrightness,
+                    Contrast = snap.DriverContrast,
+                    Saturation = snap.DriverSaturation
+                });
+            }
+            catch (Exception ex)
+            {
+                ok = false;
+                AppLog.Error("Snapshot driver color restore: " + ex.Message);
+            }
+        }
+        else
+        {
+            try { _engine.ClearDriverTweaksIfActive(); }
+            catch (Exception ex) { ok = false; AppLog.Error("Driver tweak clear: " + ex.Message); }
+        }
+
+        // Pre-game ramp of every display the session touched (never a blind identity ramp).
+        foreach (var d in snap.Displays.ToList())
+        {
+            if (!d.HasGammaRamp) continue;
+            if (DisplayNative.TryDecodeChannel(d.GammaRedB64, out var r)
+                && DisplayNative.TryDecodeChannel(d.GammaGreenB64, out var g)
+                && DisplayNative.TryDecodeChannel(d.GammaBlueB64, out var b))
+            {
+                ok &= _engine.ApplyCapturedGammaRamp(d.Device, r, g, b);
+            }
+            else
+            {
+                ok = false;
+                AppLog.Error($"Snapshot gamma ramp for {d.Device} is unreadable — left as is.");
+            }
+        }
+
+        AppLog.Info(ok ? "Session snapshot display restored." : "Session snapshot display restored with errors.");
+        return ok;
+    }
+
+    /// <summary>Full restore: session extras + display, then delete active-session.json.</summary>
+    /// <returns>True only when every step succeeded.</returns>
+    public bool RestoreAll(SessionExtrasService session, ActiveSessionSnapshot snap)
+    {
+        bool ok;
+        try
+        {
+            ok = session.Restore(snap);
+        }
+        catch (Exception ex)
+        {
+            ok = false;
+            AppLog.Error("Session extras restore: " + ex.Message);
         }
 
         try
         {
-            if (!string.IsNullOrWhiteSpace(snap.PowerPlanGuid))
-                _engine.SetPowerPlan(snap.PowerPlanGuid!);
-
-            if (!string.IsNullOrWhiteSpace(snap.Resolution))
-                _engine.SetResolution(snap.Resolution!, snap.RefreshRate, snap.DisplayDevice);
-
-            // Restore pre-game vibrance — never force neutral 50 (that was wiping desktop DV).
-            if (snap.HasDriverColor && !string.IsNullOrWhiteSpace(snap.DriverVendor))
-            {
-                try
-                {
-                    _engine.RestoreDriverColorSnapshot(new DriverColorSnapshot
-                    {
-                        Vendor = snap.DriverVendor!,
-                        VibranceLevel = snap.DriverVibranceLevel,
-                        NormalizedVibrance = snap.DriverNormalizedVibrance,
-                        Brightness = snap.DriverBrightness,
-                        Contrast = snap.DriverContrast,
-                        Saturation = snap.DriverSaturation
-                    });
-                }
-                catch { }
-            }
-            else
-            {
-                try { _engine.ClearDriverTweaksIfActive(); } catch { }
-            }
-
-            if (snap.HasGammaRamp
-                && TryDecodeRamp(snap.GammaRedB64, out var r)
-                && TryDecodeRamp(snap.GammaGreenB64, out var g)
-                && TryDecodeRamp(snap.GammaBlueB64, out var b))
-            {
-                _engine.ApplyCapturedGammaRamp(r, g, b);
-            }
-            else if (fallbackDefaults != null)
-            {
-                _engine.ApplyColor(fallbackDefaults.Color.Clone());
-            }
-            else
-            {
-                _engine.ApplyIdentityColor();
-            }
-
-            AppLog.Info("Session snapshot display restored.");
-            return true;
+            ok &= RestoreDisplay(snap);
         }
         catch (Exception ex)
         {
-            AppLog.Error("Session snapshot restore failed: " + ex.Message);
-            return false;
+            ok = false;
+            AppLog.Error("Session display restore: " + ex.Message);
         }
+
+        return Finish(snap, ok);
     }
 
-    /// <summary>Full restore: session extras + display, then delete active-session.json.</summary>
-    public bool RestoreAll(SessionExtrasService session, DefaultSettings? fallbackDefaults = null)
+    /// <summary>
+    /// End of a restore: delete the snapshot when everything succeeded, otherwise keep it for a retry.
+    /// </summary>
+    public bool Finish(ActiveSessionSnapshot snap, bool ok)
     {
-        var snap = _memory ?? TryLoadFromDisk();
-        // Prefer in-memory SessionExtras restore (has topology/scaling from this run).
-        try { session.Restore(); } catch { }
-        // If SessionExtras had nothing (crash restart), use disk extras.
-        if (snap != null && (snap.TopologySaved || snap.ScalingSaved || !string.IsNullOrWhiteSpace(snap.AudioDeviceId)))
+        if (ok)
         {
-            // Only apply disk extras fields that SessionExtras.Restore may have skipped.
-            try { session.RestoreFromSnapshot(snap); } catch { }
+            Clear();
+            return true;
         }
 
-        bool ok = RestoreDisplay(fallbackDefaults);
-        Clear();
-        return ok || snap != null;
+        // Keep the snapshot (succeeded steps are already un-flagged) so the remaining steps are
+        // retried by Emergency Restore or the next start — but don't retry a broken step forever.
+        snap.RestoreAttempts++;
+        if (snap.RestoreAttempts >= MaxRestoreAttempts)
+        {
+            AppLog.Warn($"Session restore still incomplete after {snap.RestoreAttempts} attempts — giving up and discarding the snapshot.");
+            Clear();
+        }
+        else
+        {
+            AppLog.Warn($"Session restore incomplete (attempt {snap.RestoreAttempts}/{MaxRestoreAttempts}) — snapshot kept for retry.");
+            Persist(snap);
+        }
+        return false;
     }
 
     public void Clear()
     {
-        _memory = null;
-        try
+        lock (_io)
         {
-            if (File.Exists(_path))
-                File.Delete(_path);
-        }
-        catch (Exception ex)
-        {
-            AppLog.Error("Delete active-session.json: " + ex.Message);
+            _memory = null;
+            try
+            {
+                if (File.Exists(_path))
+                    File.Delete(_path);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Delete active-session.json: " + ex.Message);
+            }
         }
     }
 
-    public ActiveSessionSnapshot? TryLoadFromDisk()
+    /// <summary>
+    /// Persist from background work: only while <paramref name="snap"/> is still the live session
+    /// snapshot (a session that already ended must not resurrect active-session.json).
+    /// </summary>
+    public void PersistIfCurrent(ActiveSessionSnapshot snap)
+    {
+        lock (_io)
+        {
+            if (!ReferenceEquals(_memory, snap)) return;
+            Persist(snap);
+        }
+    }
+
+    /// <summary>Writes the snapshot atomically (temp file + replace).</summary>
+    public void Persist(ActiveSessionSnapshot? snap = null)
+    {
+        lock (_io)
+        {
+            snap ??= _memory;
+            if (snap == null) return;
+            _memory = snap;
+            try
+            {
+                var json = JsonSerializer.Serialize(snap, JsonOptions);
+                var tmp = _path + ".tmp";
+                using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var w = new StreamWriter(fs))
+                {
+                    w.Write(json);
+                    w.Flush();
+                    fs.Flush(flushToDisk: true);
+                }
+                File.Move(tmp, _path, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Save active-session.json: " + ex.Message);
+            }
+        }
+    }
+
+    /// <summary>Unreadable snapshot: moved aside (never restored, never blocks the next session).</summary>
+    private void QuarantineCorruptLocked(string reason)
+    {
+        try
+        {
+            var dest = _path + $".corrupt-{DateTime.Now:yyyyMMdd-HHmmss}";
+            File.Move(_path, dest, overwrite: true);
+            AppLog.Warn($"active-session.json is unreadable ({reason}) — moved to {Path.GetFileName(dest)}.");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Quarantine active-session.json: " + ex.Message);
+        }
+    }
+
+    /// <summary>True while <paramref name="snap"/> is the live session snapshot.</summary>
+    public bool IsCurrent(ActiveSessionSnapshot snap)
+    {
+        lock (_io) return ReferenceEquals(_memory, snap);
+    }
+
+    // ------------------------------------------------------------------ pending FPS-cap restore
+
+    /// <summary>
+    /// The FPS cap is restored on a background queue after the session snapshot is already deleted;
+    /// this small file keeps that undo information until it succeeds (retried on next start).
+    /// </summary>
+    private string PendingFpsPath => Path.Combine(Path.GetDirectoryName(_path)!, "pending-fps-restore.json");
+
+    public bool HasPendingFps
+    {
+        get { lock (_io) return File.Exists(PendingFpsPath); }
+    }
+
+    public void SavePendingFps(ActiveSessionSnapshot snap)
+    {
+        if (!snap.FpsLimitChanged) return;
+        var copy = new ActiveSessionSnapshot
+        {
+            Version = ActiveSessionSnapshot.CurrentVersion,
+            ProfileId = snap.ProfileId,
+            ProfileName = snap.ProfileName,
+            FpsLimitChanged = true,
+            FpsLimitTarget = snap.FpsLimitTarget,
+            FpsLimitHadSetting = snap.FpsLimitHadSetting,
+            FpsLimitWasPredefined = snap.FpsLimitWasPredefined,
+            FpsLimitOriginalValue = snap.FpsLimitOriginalValue,
+            FpsLimitCreatedProfile = snap.FpsLimitCreatedProfile
+        };
+        lock (_io)
+        {
+            try
+            {
+                var tmp = PendingFpsPath + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(copy, JsonOptions));
+                File.Move(tmp, PendingFpsPath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Save pending FPS restore: " + ex.Message);
+            }
+        }
+    }
+
+    public ActiveSessionSnapshot? LoadPendingFps()
+    {
+        lock (_io)
+        {
+            try
+            {
+                if (!File.Exists(PendingFpsPath)) return null;
+                var snap = JsonSerializer.Deserialize<ActiveSessionSnapshot>(File.ReadAllText(PendingFpsPath), JsonOptions);
+                if (snap?.FpsLimitChanged == true) return snap;
+                File.Delete(PendingFpsPath);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Load pending FPS restore: " + ex.Message);
+                try { File.Delete(PendingFpsPath); } catch (IOException) { }
+                return null;
+            }
+        }
+    }
+
+    public void ClearPendingFps()
+    {
+        lock (_io)
+        {
+            try
+            {
+                if (File.Exists(PendingFpsPath)) File.Delete(PendingFpsPath);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Delete pending FPS restore: " + ex.Message);
+            }
+        }
+    }
+
+    private ActiveSessionSnapshot? LoadFromDiskLocked()
     {
         try
         {
             if (!File.Exists(_path)) return null;
-            var json = File.ReadAllText(_path);
-            var snap = JsonSerializer.Deserialize<ActiveSessionSnapshot>(json, JsonOptions);
+            var text = File.ReadAllText(_path);
+            ActiveSessionSnapshot? snap;
+            try { snap = JsonSerializer.Deserialize<ActiveSessionSnapshot>(text, JsonOptions); }
+            catch (JsonException ex)
+            {
+                QuarantineCorruptLocked(ex.Message);
+                return null;
+            }
+            if (snap == null)
+            {
+                QuarantineCorruptLocked("empty document");
+                return null;
+            }
+            snap.Displays ??= new List<SnapshotDisplay>();
+            snap.Displays.RemoveAll(d => d == null);
+            if (snap.Version < ActiveSessionSnapshot.CurrentVersion)
+                UpgradeLegacy(snap);
             _memory = snap;
             return snap;
         }
@@ -197,64 +440,53 @@ public sealed class SessionSnapshotService
         }
     }
 
-    public void Persist(ActiveSessionSnapshot snap)
+    /// <summary>
+    /// Display Profile Manager snapshots had no "changed" flags and always restored everything —
+    /// keep that behaviour for a leftover file from the old app.
+    /// </summary>
+    private static void UpgradeLegacy(ActiveSessionSnapshot snap)
     {
-        _memory = snap;
-        SaveToDisk(snap);
-    }
-
-    private void SaveToDisk(ActiveSessionSnapshot snap)
-    {
-        try
+        if (snap.Displays.Count == 0 && !string.IsNullOrWhiteSpace(snap.Resolution))
         {
-            var json = JsonSerializer.Serialize(snap, JsonOptions);
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Copy(tmp, _path, true);
-            try { File.Delete(tmp); } catch { }
+            snap.Displays.Add(new SnapshotDisplay
+            {
+                Device = snap.DisplayDevice,
+                Resolution = snap.Resolution,
+                RefreshRate = snap.RefreshRate,
+                ModeChanged = true,
+                HasGammaRamp = snap.HasGammaRamp,
+                GammaRedB64 = snap.GammaRedB64,
+                GammaGreenB64 = snap.GammaGreenB64,
+                GammaBlueB64 = snap.GammaBlueB64
+            });
         }
-        catch (Exception ex)
+        snap.PowerPlanChanged = !string.IsNullOrWhiteSpace(snap.PowerPlanGuid);
+        snap.ToastOriginal = snap.ToastEnabled ? 1 : 0;
+        snap.ToastChanged = true;
+        snap.AutoHdrOriginal = snap.AutoHdrEnabled ? 1 : 0;
+        snap.AutoHdrChanged = true;
+        if (!string.IsNullOrWhiteSpace(snap.AudioDeviceId))
         {
-            AppLog.Error("Save active-session.json: " + ex.Message);
+            snap.AudioConsoleDeviceId = snap.AudioDeviceId;
+            snap.AudioChanged = true;
         }
-    }
-
-    private static string EncodeRamp(ushort[] data)
-    {
-        var bytes = new byte[data.Length * 2];
-        Buffer.BlockCopy(data, 0, bytes, 0, bytes.Length);
-        return Convert.ToBase64String(bytes);
-    }
-
-    private static bool TryDecodeRamp(string? b64, out ushort[] data)
-    {
-        data = Array.Empty<ushort>();
-        if (string.IsNullOrWhiteSpace(b64)) return false;
-        try
+        if (snap.MonitorBrightness.HasValue)
         {
-            var bytes = Convert.FromBase64String(b64);
-            if (bytes.Length != 512) return false;
-            data = new ushort[256];
-            Buffer.BlockCopy(bytes, 0, data, 0, 512);
-            return true;
+            snap.MonitorBrightnessLevels = new List<int?> { snap.MonitorBrightness };
+            snap.BrightnessChanged = true;
         }
-        catch
-        {
-            return false;
-        }
+        snap.Version = ActiveSessionSnapshot.CurrentVersion;
+        AppLog.Info("Upgraded a Display Profile Manager session snapshot.");
     }
 }
 
 /// <summary>
-/// Dirty-session flag under AppData. If the process dies without a clean exit,
-/// the next launch restores identity gamma + driver vibrance.
+/// Dirty-session flag (session.lock in the config folder). A leftover lock means the previous
+/// run did not exit cleanly; it is cleared on clean exit and on Windows logoff / shutdown.
 /// </summary>
 public static class SessionGuard
 {
-    private static string LockPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "DisplayProfileManager",
-        "session.lock");
+    private static string LockPath => Path.Combine(ConfigService.DefaultConfigDirectory, "session.lock");
 
     public static bool WasDirtyShutdown()
     {

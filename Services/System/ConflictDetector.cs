@@ -1,11 +1,11 @@
 using System.Diagnostics;
 using Microsoft.Win32;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
 /// Best-effort detection of other tools that also touch gamma/color/vibrance, so users
-/// understand why DPM's settings might get fought or overridden. Never throws.
+/// understand why Visor's settings might get fought or overridden. Never throws.
 /// </summary>
 public static class ConflictDetector
 {

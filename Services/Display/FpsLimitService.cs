@@ -1,49 +1,57 @@
-using NvAPIWrapper;
 using NvAPIWrapper.DRS;
+using NvAPIWrapper.Native.DRS;
 
-namespace DisplayProfileManager.Services;
+namespace Visor.Services;
 
 /// <summary>
 /// Best-effort per-application FPS cap via the NVIDIA driver settings (DRS) API.
 /// Uses the public "Frame Rate Limiter" setting (FRL_FPS_ID = 0x10835002, documented in
 /// NVIDIA's NvApiDriverSettings.h) - the same setting NVIDIA Control Panel / Profile
 /// Inspector expose as "Max Frame Rate". AMD/Intel have no equivalent public driver API,
-/// so this is NVIDIA-only; other vendors always get false from TryApply.
+/// so this is NVIDIA-only.
+/// Visor only writes the setting when a profile asks for a cap, remembers what was there
+/// before (<see cref="FpsOriginal"/>) and puts exactly that back.
+/// Calls are slow (DRS load/save) — run them off the UI thread.
 /// </summary>
 public static class FpsLimitService
 {
     private const uint FrlFpsSettingId = 0x10835002;
-    private const uint FrlFpsDisabled = 0x00000000;
     private const uint FrlFpsMax = 0x000003FF; // driver-enforced cap (~1023 fps)
+    private const string ProfileSuffix = "_Visor";
+    private static readonly TimeSpan RetryAfter = TimeSpan.FromSeconds(60);
 
     private static bool? _available;
-    private static bool _nvapiInitialized;
-    private static readonly object Gate = new();
+    private static DateTime _checkedUtc = DateTime.MinValue;
+    /// <summary>Serializes DRS sessions; NvApiHost takes it before unloading NvAPI.</summary>
+    internal static readonly object Gate = new();
 
-    /// <summary>True once NVIDIA NvAPI + a DRS session could be created on this machine.</summary>
+    /// <summary>FRL state of an application profile before Visor changed it.</summary>
+    public sealed record FpsOriginal(bool HadSetting, bool WasPredefined, uint Value, bool CreatedProfile);
+
+    /// <summary>
+    /// True once NvAPI + a DRS session could be created. A failure is re-checked after a minute
+    /// instead of being cached for the whole run.
+    /// </summary>
     public static bool IsNvidiaAvailable
     {
         get
         {
             lock (Gate)
             {
-                if (_available.HasValue) return _available.Value;
-                _available = TryEnsureInitialized();
+                if (_available == true) return true;
+                if (_available == false && DateTime.UtcNow - _checkedUtc < RetryAfter) return false;
+                _available = TryCreateSession();
+                _checkedUtc = DateTime.UtcNow;
                 return _available.Value;
             }
         }
     }
 
-    private static bool TryEnsureInitialized()
+    private static bool TryCreateSession()
     {
+        if (!NvApiHost.TryInitialize()) return false;
         try
         {
-            if (!_nvapiInitialized)
-            {
-                NVIDIA.Initialize();
-                _nvapiInitialized = true;
-            }
-
             using var session = DriverSettingsSession.CreateAndLoad();
             return session.BaseProfile != null;
         }
@@ -55,23 +63,17 @@ public static class FpsLimitService
     }
 
     /// <summary>
-    /// Applies (or clears, when fpsLimit &lt;= 0) a per-application FPS cap.
+    /// Sets a per-application FPS cap (1..1023).
     /// </summary>
-    /// <param name="exePath">Full path or exe file name of the target process; null/empty targets the global (Base) profile.</param>
-    /// <param name="fpsLimit">0 = restore/clear any override; otherwise clamped to 1..1023.</param>
-    /// <returns>True if the driver setting was applied (or cleared) successfully.</returns>
-    public static bool TryApply(string? exePath, int fpsLimit)
+    /// <param name="exePathOrName">Full path or exe file name of the target process.</param>
+    /// <returns>The setting's state before this call, or null when nothing was changed.</returns>
+    public static FpsOriginal? TryApply(string exePathOrName, int fpsLimit)
     {
-        if (fpsLimit <= 0)
-        {
-            Clear(exePath);
-            return true;
-        }
-
+        if (fpsLimit <= 0 || string.IsNullOrWhiteSpace(exePathOrName)) return null;
         if (!IsNvidiaAvailable)
         {
             AppLog.Info("FPS limit not available (no NVIDIA DRS on this system).");
-            return false;
+            return null;
         }
 
         try
@@ -79,73 +81,111 @@ public static class FpsLimitService
             lock (Gate)
             {
                 using var session = DriverSettingsSession.CreateAndLoad();
-                var profile = ResolveProfile(session, exePath, createIfMissing: true);
+                var profile = FindProfile(session, exePathOrName);
+                bool created = false;
                 if (profile == null)
                 {
-                    AppLog.Info($"FPS limit: could not resolve/create a driver profile for {exePath ?? "(global)"}.");
-                    return false;
+                    profile = CreateProfile(session, exePathOrName);
+                    if (profile == null) return null;
+                    created = true;
                 }
 
+                var original = ReadOriginal(profile, created);
                 uint value = (uint)Math.Clamp(fpsLimit, 1, (int)FrlFpsMax);
                 profile.SetSetting(FrlFpsSettingId, value);
                 session.Save();
-                AppLog.Info($"FPS limit -> {value} for {exePath ?? "(global)"} (NVIDIA DRS).");
-                return true;
+                AppLog.Info($"FPS limit -> {value} for {System.IO.Path.GetFileName(exePathOrName)} (NVIDIA DRS).");
+                return original;
             }
         }
         catch (Exception ex)
         {
             AppLog.Error("FPS limit apply failed: " + ex.Message);
-            return false;
+            return null;
         }
     }
 
-    /// <summary>Removes any FPS cap override previously set by TryApply for this target.</summary>
-    public static void Clear(string? exePath)
+    /// <summary>Puts the Frame Rate Limiter back exactly as it was before <see cref="TryApply"/>.</summary>
+    public static bool Restore(string exePathOrName, FpsOriginal original)
     {
-        if (!IsNvidiaAvailable) return;
+        if (string.IsNullOrWhiteSpace(exePathOrName)) return false;
+        if (!IsNvidiaAvailable) return false;
         try
         {
             lock (Gate)
             {
                 using var session = DriverSettingsSession.CreateAndLoad();
-                var profile = ResolveProfile(session, exePath, createIfMissing: false);
-                if (profile == null) return;
+                var profile = FindProfile(session, exePathOrName);
+                if (profile == null) return true; // nothing left to undo
 
-                profile.SetSetting(FrlFpsSettingId, FrlFpsDisabled);
+                if (original.CreatedProfile)
+                    profile.Delete();
+                else if (original.HadSetting && original.WasPredefined)
+                    profile.RestoreSettingToDefault(FrlFpsSettingId);
+                else if (original.HadSetting)
+                    profile.SetSetting(FrlFpsSettingId, original.Value);
+                else
+                    profile.DeleteSetting(FrlFpsSettingId);
+
                 session.Save();
-                AppLog.Info($"FPS limit cleared for {exePath ?? "(global)"}.");
+                AppLog.Info($"FPS limit restored for {System.IO.Path.GetFileName(exePathOrName)}.");
+                return true;
             }
         }
         catch (Exception ex)
         {
-            AppLog.Error("FPS limit clear failed: " + ex.Message);
+            AppLog.Error("FPS limit restore failed: " + ex.Message);
+            return false;
         }
     }
 
-    private static DriverSettingsProfile? ResolveProfile(DriverSettingsSession session, string? exePath, bool createIfMissing)
+    private static FpsOriginal ReadOriginal(DriverSettingsProfile profile, bool created)
     {
-        if (string.IsNullOrWhiteSpace(exePath))
-            return session.BaseProfile;
-
+        if (created) return new FpsOriginal(false, false, 0, true);
         try
         {
-            var existing = session.FindApplicationProfile(exePath);
-            if (existing != null && existing.IsValid)
-                return existing;
+            var setting = profile.GetSetting(FrlFpsSettingId);
+            if (setting == null || setting.SettingLocation != DRSSettingLocation.CurrentProfile)
+                return new FpsOriginal(false, false, 0, false);
+            uint value = setting.CurrentValue is uint u ? u : Convert.ToUInt32(setting.CurrentValue);
+            return new FpsOriginal(true, setting.IsCurrentValuePredefined, value, false);
         }
         catch
         {
-            // FindApplicationProfile throws when nothing matches — fall through to create.
+            // GetSetting throws when the profile has no such setting.
+            return new FpsOriginal(false, false, 0, false);
         }
+    }
 
-        if (!createIfMissing) return null;
+    private static DriverSettingsProfile? FindProfile(DriverSettingsSession session, string exePathOrName)
+    {
+        // FindApplicationProfile throws when nothing matches — each lookup gets its own try.
+        foreach (var name in new[] { exePathOrName, System.IO.Path.GetFileName(exePathOrName) }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var existing = session.FindApplicationProfile(name);
+                if (existing != null && existing.IsValid)
+                    return existing;
+            }
+            catch
+            {
+                // not found under this name
+            }
+        }
+        return null;
+    }
 
+    private static DriverSettingsProfile? CreateProfile(DriverSettingsSession session, string exePathOrName)
+    {
         try
         {
-            string exeName = System.IO.Path.GetFileName(exePath);
-            string profileName = System.IO.Path.GetFileNameWithoutExtension(exePath) + "_DPM";
-            var profile = DriverSettingsProfile.CreateProfile(session, profileName, null);
+            string exeName = System.IO.Path.GetFileName(exePathOrName);
+            string profileName = System.IO.Path.GetFileNameWithoutExtension(exePathOrName) + ProfileSuffix;
+            DriverSettingsProfile? profile = null;
+            try { profile = session.FindProfileByName(profileName); }
+            catch { /* not found */ }
+            profile ??= DriverSettingsProfile.CreateProfile(session, profileName, null);
             ProfileApplication.CreateApplication(profile, exeName, exeName, null, null, false, null);
             return profile;
         }
