@@ -48,6 +48,8 @@ public partial class InfoHint : System.Windows.Controls.UserControl
                 ? null
                 : new System.Windows.Controls.ToolTip { Content = e.NewValue as string };
             System.Windows.Automation.AutomationProperties.SetHelpText(hint, e.NewValue as string ?? "");
+            // The "i" glyph has no text of its own — the tip doubles as its accessible name.
+            System.Windows.Automation.AutomationProperties.SetName(hint, e.NewValue as string ?? "");
         }
     }
 }

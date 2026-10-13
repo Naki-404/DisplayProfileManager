@@ -37,6 +37,8 @@ public sealed class DisplayEngine
     private readonly DriverColorService _driverColor = new();
     /// <summary>Pre-Visor gamma ramp per display device (calibration LUT) — the "factory" color state.</summary>
     private readonly Dictionary<string, RAMP> _baselineRamps = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Guards <see cref="_baselineRamps"/>: the deferred baseline save reads it from a pool thread.</summary>
+    private readonly object _rampLock = new();
     private ColorSettings _liveColor = new();
     private ColorSettings? _abPreview;
     private bool _abShowingFactory;
@@ -97,8 +99,14 @@ public sealed class DisplayEngine
     /// After a dirty exit with no session snapshot the live ramp may still be a Visor curve: re-apply
     /// the baseline saved by the last clean start instead (if there is none, gamma is left alone).
     /// </param>
+    /// <param name="deferDriverBaseline">
+    /// True at app start: only the (fast, GDI) gamma ramps are captured here; the driver color
+    /// baseline (WMI vendor detect + NvAPI / ADL init, slow) and the baseline file save are left to
+    /// <see cref="CompleteBaselineCapture"/>, which the app runs on a background thread once the
+    /// window is up. Safe because a Driver apply captures a missing baseline itself before writing.
+    /// </param>
     /// <returns>True when the saved baseline was re-applied.</returns>
-    public bool InitializeBaseline(bool useSavedBaseline)
+    public bool InitializeBaseline(bool useSavedBaseline, bool deferDriverBaseline = false)
     {
         bool restored = false;
         if (useSavedBaseline && TryLoadBaselineFile(out var saved))
@@ -110,7 +118,7 @@ public sealed class DisplayEngine
                 if (!TryDecodeRamp(channels[0], channels[1], channels[2], out var ramp)) continue;
                 if (TrySetGammaRamp(device, ramp, out var err))
                 {
-                    _baselineRamps[device] = ramp;
+                    lock (_rampLock) _baselineRamps[device] = ramp;
                     restored = true;
                 }
                 else
@@ -136,23 +144,42 @@ public sealed class DisplayEngine
         foreach (var (device, _, _) in EnumerateDisplays())
             CaptureBaselineRamp(device);
 
-        _driverColor.CaptureBaselineIfNeeded();
-        SaveBaselineFile();
+        if (!deferDriverBaseline)
+            CompleteBaselineCapture();
         return restored;
+    }
+
+    /// <summary>
+    /// Second half of <see cref="InitializeBaseline"/>: driver color baseline (may init NvAPI /
+    /// ADL) and the display-baseline.json save. Thread-safe — intended for a background thread.
+    /// </summary>
+    public void CompleteBaselineCapture()
+    {
+        try { _driverColor.CaptureBaselineIfNeeded(); }
+        catch (Exception ex) { AppLog.Error(ex, "Driver color baseline capture"); }
+        SaveBaselineFile();
     }
 
     private void CaptureBaselineRamp(string device)
     {
-        if (_baselineRamps.ContainsKey(device)) return;
+        lock (_rampLock)
+        {
+            if (_baselineRamps.ContainsKey(device)) return;
+        }
         if (TryGetGammaRamp(device, out var ramp))
         {
-            _baselineRamps[device] = ramp.Clone();
+            lock (_rampLock) _baselineRamps.TryAdd(device, ramp.Clone());
             AppLog.Info($"Baseline gamma ramp captured for {device}.");
         }
         else
         {
             AppLog.Warn($"Could not read gamma ramp for {device}.");
         }
+    }
+
+    private KeyValuePair<string, RAMP>[] BaselineRampsSnapshot()
+    {
+        lock (_rampLock) return _baselineRamps.ToArray();
     }
 
     private sealed class BaselineFile
@@ -172,7 +199,7 @@ public sealed class DisplayEngine
         try
         {
             var file = new BaselineFile { Drivers = _driverColor.Baselines.ToList() };
-            foreach (var (device, ramp) in _baselineRamps)
+            foreach (var (device, ramp) in BaselineRampsSnapshot())
                 file.Ramps[device] = new[] { EncodeChannel(ramp.Red), EncodeChannel(ramp.Green), EncodeChannel(ramp.Blue) };
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(file, BaselineJson));
@@ -217,7 +244,8 @@ public sealed class DisplayEngine
         try { ok &= _driverColor.RestoreBaseline(); }
         catch (Exception ex) { ok = false; AppLog.Error("Driver baseline restore: " + ex.Message); }
 
-        foreach (var (device, ramp) in _baselineRamps)
+        var ramps = BaselineRampsSnapshot();
+        foreach (var (device, ramp) in ramps)
         {
             if (!TrySetGammaRamp(device, ramp, out var err))
             {
@@ -230,7 +258,7 @@ public sealed class DisplayEngine
         _abPreview = null;
         _abShowingFactory = false;
         _colorChanged = false;
-        AppLog.Info($"Color reset to baseline ({_baselineRamps.Count} display(s)).");
+        AppLog.Info($"Color reset to baseline ({ramps.Length} display(s)).");
         return ok;
     }
 
@@ -326,7 +354,11 @@ public sealed class DisplayEngine
     {
         _driverColor.ClearDriverTweaksIfActive();
         var device = ResolveDeviceName(_colorTargetDevice);
-        if (device != null && _baselineRamps.TryGetValue(device, out var baseline))
+        bool hasBaseline = false;
+        RAMP baseline = default;
+        if (device != null)
+            lock (_rampLock) hasBaseline = _baselineRamps.TryGetValue(device, out baseline);
+        if (hasBaseline)
         {
             ApplyRamp(device, baseline);
             return;
@@ -532,12 +564,17 @@ public sealed class DisplayEngine
                 set.Add((mode.dmPelsWidth, mode.dmPelsHeight));
             i++;
         }
-        return set
+        return SortResolutions(set);
+    }
+
+    /// <summary>Distinct WxH strings, largest first by width then height (numeric, not string order).</summary>
+    internal static List<string> SortResolutions(IEnumerable<(int W, int H)> modes) =>
+        modes
+            .Distinct()
             .OrderByDescending(r => r.W)
             .ThenByDescending(r => r.H)
             .Select(r => $"{r.W}x{r.H}")
             .ToList();
-    }
 
     /// <summary>Refresh rates available for a WxH mode (descending).</summary>
     public static List<int> GetAvailableRefreshRates(string? resolution, string? deviceName = null)
@@ -602,29 +639,38 @@ public sealed class DisplayEngine
         };
     }
 
-    /// <summary>UI alias for a stock scheme GUID ("balanced" / "highPerformance"), else null.</summary>
+    /// <summary>UI alias for a stock scheme GUID ("balanced" / "highPerformance" / …), else null.</summary>
     public static string? PowerPlanAlias(string guid) => guid.ToLowerInvariant() switch
     {
         PowerBalanced => "balanced",
         PowerHighPerf => "highPerformance",
+        PowerSaver => "powerSaver",
+        PowerUltimate => "ultimate",
         _ => null
     };
 
     /// <summary>Activates a power scheme via PowerSetActiveScheme (no powercfg child process).</summary>
-    /// <returns>True when the scheme is active afterwards. Unknown plan names are rejected, never mapped to Balanced.</returns>
-    public bool SetPowerPlan(string plan)
+    /// <returns>True when the scheme is verified active afterwards. Unknown plan names are rejected, never mapped to Balanced.</returns>
+    public bool SetPowerPlan(string plan) => TrySetPowerPlan(plan) == PowerPlanResult.Applied;
+
+    /// <summary>
+    /// As <see cref="SetPowerPlan"/>, but distinguishes "the API accepted the change, the read-back
+    /// disagreed or failed" (<see cref="PowerPlanResult.AppliedUnverified"/>) from a real failure —
+    /// a session must still record the plan as changed in the first case so it is restored later.
+    /// </summary>
+    public PowerPlanResult TrySetPowerPlan(string plan)
     {
         var guidText = ResolvePowerPlanGuid(plan);
         if (guidText == null)
         {
             AppLog.Error($"Unknown power plan '{plan}' — left unchanged.");
-            return false;
+            return PowerPlanResult.Failed;
         }
 
         if (string.Equals(GetActivePowerPlanGuid(), guidText, StringComparison.OrdinalIgnoreCase))
         {
             AppLog.Info($"Power plan already {plan}.");
-            return true;
+            return PowerPlanResult.Applied;
         }
 
         try
@@ -635,15 +681,21 @@ public sealed class DisplayEngine
             {
                 AppLog.Error($"Power plan {plan} not applied (PowerSetActiveScheme error {rc}" +
                              (rc == 2 ? " — scheme not installed" : "") + ").");
-                return false;
+                return PowerPlanResult.Failed;
+            }
+            var active = GetActivePowerPlanGuid();
+            if (!string.Equals(active, guidText, StringComparison.OrdinalIgnoreCase))
+            {
+                AppLog.Error($"Power plan {plan} reported success but active scheme reads back as {active ?? "(null)"} — treated as changed.");
+                return PowerPlanResult.AppliedUnverified;
             }
             AppLog.Info($"Power plan → {plan}");
-            return true;
+            return PowerPlanResult.Applied;
         }
         catch (Exception ex)
         {
             AppLog.Error($"Power plan change failed: {ex.Message}");
-            return false;
+            return PowerPlanResult.Failed;
         }
     }
 
@@ -671,10 +723,22 @@ public sealed class DisplayEngine
     }
 
     /// <summary>App shutdown: undo driver tweaks still active, then release NvAPI (once).</summary>
-    public void DisposeDriverColor()
+    /// <param name="quick">Logoff: do not wait for a driver-settings call to finish before unloading.</param>
+    public void DisposeDriverColor(bool quick = false)
     {
         try { _driverColor.Dispose(); }
         catch (Exception ex) { AppLog.Warn(ex, "Driver color dispose"); }
-        NvApiHost.Shutdown();
+        NvApiHost.Shutdown(quick ? TimeSpan.FromMilliseconds(500) : TimeSpan.FromSeconds(1));
     }
+}
+
+/// <summary>Outcome of <see cref="DisplayEngine.TrySetPowerPlan"/>.</summary>
+public enum PowerPlanResult
+{
+    /// <summary>Nothing changed (unknown plan, API error, exception).</summary>
+    Failed,
+    /// <summary>PowerSetActiveScheme succeeded and the read-back confirms the scheme (or it was already active).</summary>
+    Applied,
+    /// <summary>PowerSetActiveScheme succeeded but the read-back failed or disagreed — assume the plan changed.</summary>
+    AppliedUnverified
 }

@@ -191,6 +191,32 @@ internal static class OverlayWin32
         return w >= 48 && h >= 24;
     }
 
+    /// <summary>
+    /// Moves (and, if it is larger than the screen, shrinks) a window so it lies fully inside the work area
+    /// (taskbar excluded) of the monitor nearest to it. Everything is in physical pixels, so mixed-DPI
+    /// setups and monitors that no longer exist are handled without DIP conversion. Returns true if moved.
+    /// </summary>
+    public static bool EnsureInsideWorkArea(Window window)
+    {
+        if (window.WindowState != WindowState.Normal) return false;
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var r)) return false;
+        var mon = MonitorFromRect(ref r, MonitorDefaultToNearest);
+        if (!TryGetMonitorRects(mon, out _, out var work) || work.Width <= 0 || work.Height <= 0) return false;
+
+        // SizeToContent windows re-measure to their content: only move those, never shrink them.
+        bool fixedSize = window.SizeToContent == SizeToContent.Manual;
+        int w = fixedSize ? Math.Min(r.Width, work.Width) : r.Width;
+        int h = fixedSize ? Math.Min(r.Height, work.Height) : r.Height;
+        int x = Math.Clamp(r.Left, work.Left, Math.Max(work.Left, work.Right - w));
+        int y = Math.Clamp(r.Top, work.Top, Math.Max(work.Top, work.Bottom - h));
+        if (x == r.Left && y == r.Top && w == r.Width && h == r.Height) return false;
+
+        uint flags = SwpNozorder | SwpNoactivate;
+        if (w == r.Width && h == r.Height) flags |= SwpNosize;
+        return SetWindowPos(hwnd, IntPtr.Zero, x, y, w, h, flags);
+    }
+
     /// <summary>True when the window sits on the same monitor the user is currently playing on.</summary>
     public static bool IsOnTargetMonitor(Window window)
     {

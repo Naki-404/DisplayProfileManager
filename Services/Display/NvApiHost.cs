@@ -43,12 +43,13 @@ internal static class NvApiHost
 
     /// <summary>
     /// Unloads NvAPI — but never while a DRS call (FPS cap) is still running on the background
-    /// queue: unloading under it would crash in native code. If it does not finish in time the
+    /// queue: unloading under it would crash in native code. If it does not finish within
+    /// <paramref name="maxWait"/> (default 1 s; the exit path already drained that queue) the
     /// library is simply left loaded (the process is exiting anyway).
     /// </summary>
-    public static void Shutdown()
+    public static void Shutdown(TimeSpan? maxWait = null)
     {
-        if (!Monitor.TryEnter(FpsLimitService.Gate, TimeSpan.FromSeconds(3)))
+        if (!Monitor.TryEnter(FpsLimitService.Gate, maxWait ?? TimeSpan.FromSeconds(1)))
         {
             AppLog.Warn("NvAPI unload skipped: a driver-settings call is still running.");
             return;

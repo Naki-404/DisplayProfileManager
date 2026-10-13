@@ -12,7 +12,7 @@
         WindowStartupLocation="Manual">
     <Grid>
         <!-- Compact pill -->
-        <Border x:Name="MiniPill" CornerRadius="22" Padding="8,6" Cursor="Hand"
+        <Border x:Name="MiniPill" CornerRadius="22" Padding="8,5" Cursor="Hand"
                 Background="{DynamicResource PanelBrush}"
                 BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1"
                 MouseLeftButtonDown="MiniPill_MouseDown">
@@ -20,11 +20,11 @@
                 <Ellipse Width="8" Height="8" Fill="{DynamicResource BrandGradientBrush}" VerticalAlignment="Center"/>
                 <TextBlock x:Name="TxtMini" Text="Visor" FontWeight="SemiBold" FontSize="11"
                            Foreground="{DynamicResource TextBrush}" Margin="8,0,4,0" VerticalAlignment="Center"/>
-                <Button x:Name="BtnMiniPrev" Content="◀" Width="22" Height="22" FontSize="9" Padding="0"
+                <Button x:Name="BtnMiniPrev" Content="◀" Width="26" Height="26" FontSize="9" Padding="0"
                         Style="{StaticResource CaptionButton}" Click="PrevPreset_Click"/>
-                <Button x:Name="BtnMiniNext" Content="▶" Width="22" Height="22" FontSize="9" Padding="0"
+                <Button x:Name="BtnMiniNext" Content="▶" Width="26" Height="26" FontSize="9" Padding="0"
                         Style="{StaticResource CaptionButton}" Click="NextPreset_Click"/>
-                <Button x:Name="BtnMiniAb" Content="A/B" Width="28" Height="22" FontSize="9" Padding="0" Margin="2,0,0,0"
+                <Button x:Name="BtnMiniAb" Content="A/B" Width="30" Height="26" FontSize="9" Padding="0" Margin="2,0,0,0"
                         Style="{StaticResource CaptionButton}" Click="Ab_Click"/>
             </StackPanel>
         </Border>
@@ -52,9 +52,9 @@
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <Button x:Name="BtnCollapse" Content="—" Style="{StaticResource CaptionButton}"
-                                Width="28" Height="24" FontSize="12" Click="Collapse_Click"/>
+                                Width="28" Height="28" FontSize="12" Click="Collapse_Click"/>
                         <Button x:Name="BtnHide" Content="×" Style="{StaticResource CaptionCloseButton}"
-                                Width="28" Height="24" Margin="4,0,0,0" Click="Hide_Click"/>
+                                Width="28" Height="28" Margin="4,0,0,0" Click="Hide_Click"/>
                     </StackPanel>
                 </Grid>
 

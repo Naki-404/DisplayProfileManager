@@ -60,6 +60,8 @@ public partial class App : System.Windows.Application
             args.SetObserved();
         };
         // Logoff / shutdown is not a crash: restore the game session synchronously and exit cleanly.
+        // Windows allows ~5 s here, so this is the "quick" path: no companion stop, no queue
+        // drains (a pending FPS-cap undo is persisted and retried next start), short NvAPI wait.
         SessionEnding += (_, args) =>
         {
             AppLog.Info($"Windows session ending ({args.ReasonSessionEnding}) — restoring.");
@@ -83,13 +85,16 @@ public partial class App : System.Windows.Application
                 }
                 try { _mutex.Dispose(); } catch (ObjectDisposedException) { }
                 _mutex = null;
-                Shutdown();
+                Shutdown();     // a second instance writes nothing to the shared log
                 return;
             }
 
+            // First line of this run — only once we own the single-instance mutex (the default log
+            // path is the config folder AppServices uses too).
+            AppLog.StartupBanner();
+
             StartExitRequestListener();
             Services = new AppServices();
-            AppLog.StartupBanner();
             var ui = Services.Config.Current.Ui ?? new Models.UiPreferences();
             Loc.SetLocale(ui.Locale);
             ThemeService.Apply(ui);
@@ -156,6 +161,25 @@ public partial class App : System.Windows.Application
 
             InitTray();
             RebuildTrayMenu();
+
+            // GPU vendor detection (WMI) runs in the background since AppServices started it; if
+            // the windows were built before it finished they show "GPU" — relabel them once.
+            bool gpuKnownAtBuild = GpuVendorDetect.IsDetected;
+            GpuVendorDetect.WhenDetected.ContinueWith(_ => Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    AppLog.Info("Startup health: GPU " + GpuVendorDetect.DriverLabel
+                                + (Services.CrashRestored ? ", restored after crash" : ""));
+                    if (gpuKnownAtBuild || _cleanedUp) return;
+                    _main?.ApplyLocalization();
+                    _overlay?.ApplyLocalization();
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Warn(ex, "GPU label refresh");
+                }
+            }), TaskScheduler.Default);
 
             _main.SourceInitialized += (_, _) =>
             {
@@ -277,6 +301,7 @@ public partial class App : System.Windows.Application
                 });
 
             // Start monitoring after the window exists — avoids applying while UI is half-built.
+            // Monitor.Start is cheap now (one process snapshot; WMI watchers connect off-thread).
             _main.Loaded += (_, _) =>
             {
                 try { Services.Monitor.Start(); }
@@ -284,8 +309,6 @@ public partial class App : System.Windows.Application
 
                 try
                 {
-                    AppLog.Info("Startup health: GPU " + GpuVendorDetect.DriverLabel
-                                + (Services.CrashRestored ? ", restored after crash" : ""));
                     if (Services.CrashRestored)
                         _main.ShowToast(Loc.T("toast.crash.restored"));
 
@@ -300,10 +323,14 @@ public partial class App : System.Windows.Application
                     AppLog.Error("Startup notices: " + ex.Message);
                 }
 
-                RunConflictCheckFireAndForget();
+                // Non-critical work waits until the first frame is on screen.
+                _main.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>
+                {
+                    if (_cleanedUp) return;
+                    SetupAutostart();
+                    RunConflictCheckFireAndForget();
+                });
             };
-
-            SetupAutostart();
 
             if (!showWindow)
             {
@@ -382,13 +409,21 @@ public partial class App : System.Windows.Application
         }
     }
 
-    /// <summary>Run key (HKCU) when enabled; one-time removal of the old scheduled task after the rename.</summary>
+    /// <summary>
+    /// Run key (HKCU) when enabled; one-time removal of the old scheduled task after the rename.
+    /// Runs after the first frame (registry write; the schtasks migration is on the thread pool).
+    /// </summary>
     private static void SetupAutostart()
     {
         try
         {
-            if (Services.Config.LoadedConfigVersion is > 0 and < 19)
-                Task.Run(AutostartService.MigrateLegacy);
+            // Once per config folder (marker file) — not on every launch, never blocking, never elevated.
+            var configDir = Services.Config.ConfigDirectory;
+            Task.Run(() =>
+            {
+                try { AutostartService.MigrateLegacyOnce(configDir); }
+                catch (Exception ex) { AppLog.Warn(ex, "Legacy autostart cleanup"); }
+            });
 
             if (Services.Config.Current.StartWithWindows)
             {
@@ -460,6 +495,7 @@ public partial class App : System.Windows.Application
         if (!wantsList && !wantsEmergency && applyProfileName == null)
             return false;
 
+        AppLog.StartupBanner();
         bool hasConsole = AttachConsole(AttachParentProcess);
         void Say(string line)
         {
@@ -550,6 +586,7 @@ public partial class App : System.Windows.Application
                 try { mutex?.ReleaseMutex(); } catch (ApplicationException) { }
             }
             mutex?.Dispose();
+            AppLog.Shutdown();
         }
 
         Shutdown(exitCode);
@@ -982,26 +1019,42 @@ public partial class App : System.Windows.Application
         try { _overlay?.HideOverlay(); }
         catch (Exception ex) { AppLog.Warn(ex, "Overlay hide on exit"); }
 
+        bool finished = false;
         void FinishExit()
         {
+            if (finished) return;
+            finished = true;
             CleanupForExit(stopCompanions: true);
             Shutdown();
         }
 
         if (_main != null && _main.IsVisible)
-            UiMotion.FadeTo(_main, 0, FinishExit, ms: 160);
+        {
+            // Fade the chrome, not the Window: a window without AllowsTransparency ignores Opacity.
+            // Hard cap so the exit never depends on an animation Completed callback.
+            var guard = new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(400) };
+            guard.Tick += (_, _) => { guard.Stop(); FinishExit(); };
+            guard.Start();
+            UiMotion.PopOut(_main.ChromeRoot, () => { guard.Stop(); FinishExit(); }, ms: 150);
+        }
         else
+        {
             FinishExit();
+        }
     }
 
     /// <summary>
     /// Synchronous restore of an active game session, service disposal (marks the clean exit),
     /// tray + mutex release. Idempotent — tray Exit, logoff and OnExit all end up here.
+    /// Time box: tray exit ≤ ~9 s of waits (companions, driver queue) + 1 s NvAPI; logoff
+    /// (<paramref name="stopCompanions"/> = false) restores synchronously and skips every optional wait.
     /// </summary>
     private void CleanupForExit(bool stopCompanions)
     {
         if (_cleanedUp) return;
         _cleanedUp = true;
+        var started = DateTime.UtcNow;
 
         var services = Services;
         if (services != null)
@@ -1012,13 +1065,15 @@ public partial class App : System.Windows.Application
             try { services.Monitor.ShutdownRestore(stopCompanions); }
             catch (Exception ex) { AppLog.Error(ex, "Session restore on exit"); }
 
-            try { services.Dispose(); }
+            try { services.Dispose(quick: !stopCompanions); }
             catch (Exception ex) { AppLog.Warn(ex, "Services.Dispose on exit"); }
         }
 
         DisposeTray();
         StopExitRequestListener();
         ReleaseMutex();
+        AppLog.Info($"Exit cleanup done in {(DateTime.UtcNow - started).TotalMilliseconds:0} ms.");
+        AppLog.Flush(); // logoff may terminate the process right after this returns
     }
 
     private void ReleaseMutex()

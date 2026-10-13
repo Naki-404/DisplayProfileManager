@@ -17,6 +17,9 @@ public sealed class SessionSnapshotService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    /// <summary>The options active-session.json / pending-fps-restore.json are written with (tests round-trip through them).</summary>
+    internal static JsonSerializerOptions SerializerOptions => JsonOptions;
+
     private readonly DisplayEngine _engine;
     private readonly string _path;
     private readonly object _io = new();
@@ -404,6 +407,32 @@ public sealed class SessionSnapshotService
             catch (Exception ex)
             {
                 AppLog.Error("Delete pending FPS restore: " + ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Deletes pending-fps-restore.json only when it holds the undo for <paramref name="snap"/>'s
+    /// FPS target — an earlier session's failed undo (different target) is left for its retry.
+    /// </summary>
+    public void ClearPendingFps(ActiveSessionSnapshot snap)
+    {
+        lock (_io)
+        {
+            try
+            {
+                if (!File.Exists(PendingFpsPath)) return;
+                var pending = JsonSerializer.Deserialize<ActiveSessionSnapshot>(File.ReadAllText(PendingFpsPath), JsonOptions);
+                bool sameTarget = pending == null
+                    || !pending.FpsLimitChanged
+                    || string.Equals(pending.FpsLimitTarget, snap.FpsLimitTarget, StringComparison.OrdinalIgnoreCase);
+                if (sameTarget) File.Delete(PendingFpsPath);
+            }
+            catch (Exception ex)
+            {
+                // Unreadable → it can never be restored anyway.
+                AppLog.Error("Delete pending FPS restore: " + ex.Message);
+                try { File.Delete(PendingFpsPath); } catch (IOException) { }
             }
         }
     }

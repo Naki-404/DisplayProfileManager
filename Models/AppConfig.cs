@@ -28,8 +28,8 @@ public sealed class UiPreferences
     public string Locale { get; set; } = "en";
     /// <summary>dark | light | custom</summary>
     public string Theme { get; set; } = "dark";
-    public string CustomAccent { get; set; } = "#7EB8D4";
-    public string CustomBackground { get; set; } = "#0F1216";
+    public string CustomAccent { get; set; } = "#22D3EE";
+    public string CustomBackground { get; set; } = "#0A0C10";
     /// <summary>Full palette when Theme = custom.</summary>
     public ThemePalette? CustomPalette { get; set; }
     public bool SetupCompleted { get; set; }
@@ -94,35 +94,58 @@ public sealed class UiPreferences
 /// <summary>All UI chrome colors as #RRGGBB hex strings.</summary>
 public sealed class ThemePalette
 {
-    public string Bg { get; set; } = "#0F1216";
-    public string Panel { get; set; } = "#161B22";
-    public string Border { get; set; } = "#2A3340";
+    public string Bg { get; set; } = "#0A0C10";
+    public string Panel { get; set; } = "#12161C";
+    public string Border { get; set; } = "#1E2630";
     public string Text { get; set; } = "#E8EEF4";
     public string Muted { get; set; } = "#8B9AAB";
-    public string Accent { get; set; } = "#7EB8D4";
-    public string AccentHover { get; set; } = "#93C7DF";
-    public string Danger { get; set; } = "#C1554F";
-    public string Field { get; set; } = "#1B212B";
-    public string Track { get; set; } = "#232B37";
-    public string GhostBg { get; set; } = "#1A212B";
-    public string GhostBorder { get; set; } = "#2A3340";
-    public string GhostHover { get; set; } = "#212938";
-    public string AccentButtonText { get; set; } = "#0F1216";
-    public string CheckCheckedBg { get; set; } = "#1E2732";
-    public string ComboHighlight { get; set; } = "#1E2733";
-    public string ComboSelected { get; set; } = "#24303D";
-    public string TabSelected { get; set; } = "#1C2430";
-    public string TabHover { get; set; } = "#171E27";
-    public string CaptionHover { get; set; } = "#1E2732";
-    public string TitleBar { get; set; } = "#10141A";
-    public string PillBg { get; set; } = "#1C2430";
-    public string ToastBg { get; set; } = "#161B22";
-    public string ToastBorder { get; set; } = "#2A3340";
+    public string Accent { get; set; } = "#22D3EE";
+    public string AccentHover { get; set; } = "#67E8F9";
+    public string Danger { get; set; } = "#E05252";
+    /// <summary>Dark-surface status defaults; the light counterparts are chosen by ConfigService on load.</summary>
+    public const string DefaultSuccess = "#22C55E";
+    public const string DefaultWarning = "#F59E0B";
+
+    private string? _success;
+    private string? _warning;
+
+    /// <summary>
+    /// Success / positive status (applied, healthy, online). Stored as nullable: a palette file
+    /// without the field (pre-2.0.x custom themes) reads back as "not set" so the loader can pick
+    /// the light or dark fallback by background; the getter never returns null.
+    /// </summary>
+    public string Success { get => _success ?? DefaultSuccess; set => _success = value; }
+    /// <summary>Warning / attention status (needs review, soft conflict). See <see cref="Success"/>.</summary>
+    public string Warning { get => _warning ?? DefaultWarning; set => _warning = value; }
+
+    /// <summary>True when <see cref="Success"/> was set explicitly (by JSON, the editor or a seed).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasExplicitSuccess => !string.IsNullOrWhiteSpace(_success);
+    /// <summary>True when <see cref="Warning"/> was set explicitly.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasExplicitWarning => !string.IsNullOrWhiteSpace(_warning);
+    public string Field { get; set; } = "#161B22";
+    public string Track { get; set; } = "#1F2835";
+    public string GhostBg { get; set; } = "#151A22";
+    public string GhostBorder { get; set; } = "#1E2630";
+    public string GhostHover { get; set; } = "#1B2431";
+    public string AccentButtonText { get; set; } = "#06121A";
+    public string CheckCheckedBg { get; set; } = "#0E2A33";
+    public string ComboHighlight { get; set; } = "#1A2330";
+    public string ComboSelected { get; set; } = "#1C2C3A";
+    public string TabSelected { get; set; } = "#162230";
+    public string TabHover { get; set; } = "#131A24";
+    public string CaptionHover { get; set; } = "#1B2431";
+    public string TitleBar { get; set; } = "#0D1218";
+    public string PillBg { get; set; } = "#10242E";
+    public string ToastBg { get; set; } = "#151A22";
+    public string ToastBorder { get; set; } = "#2A3A4F";
 
     public ThemePalette Clone() => new()
     {
         Bg = Bg, Panel = Panel, Border = Border, Text = Text, Muted = Muted,
         Accent = Accent, AccentHover = AccentHover, Danger = Danger,
+        Success = Success, Warning = Warning,
         Field = Field, Track = Track, GhostBg = GhostBg, GhostBorder = GhostBorder,
         GhostHover = GhostHover, AccentButtonText = AccentButtonText,
         CheckCheckedBg = CheckCheckedBg, ComboHighlight = ComboHighlight,

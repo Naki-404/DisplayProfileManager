@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests for the installer's safety layer: Installer\Safety.cs (Product, PathGuard, InstallManifest).
+    The installer is a net48 WPF exe, so rather than referencing it the test project compiles Safety.cs
+    directly (linked) and supplies a stub for the one native helper it calls (Native.GetDownloadsFolder,
+    see NativeStub.cs). Keep Safety.cs free of other installer dependencies so this stays possible.
+    Nothing here runs Setup/Uninstall or touches the registry; file I/O is limited to %TEMP%.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Visor.Installer.Tests</RootNamespace>
+    <AssemblyName>Visor.Installer.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\Installer\Safety.cs" Link="Installer\Safety.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

@@ -33,6 +33,18 @@ public sealed class ConfigService : IDisposable
     public string ConfigPath { get; }
     public string LogPath { get; }
 
+    /// <summary>Folder read (never modified) for the one-time legacy migration; null = none.</summary>
+    private readonly string? _legacyConfigDirectory;
+
+    /// <summary>
+    /// Test hook: supplies the "factory" baseline instead of reading the live display / power state.
+    /// Null (the app) = capture from the system.
+    /// </summary>
+    internal static Func<DefaultSettings>? FactoryDefaultsProvider { get; set; }
+
+    /// <summary>False disables the profiles.json FileSystemWatcher (tests call the reload directly).</summary>
+    internal bool EnableFileWatcher { get; set; } = true;
+
     /// <summary>Set when LoadOrCreate recovered from corrupt JSON / backup.</summary>
     public string? LastRecoveryMessage { get; private set; }
 
@@ -59,9 +71,16 @@ public sealed class ConfigService : IDisposable
         get { lock (_gate) return _config; }
     }
 
-    public ConfigService()
+    public ConfigService() : this(DefaultConfigDirectory, LegacyConfigDirectory)
     {
-        ConfigDirectory = DefaultConfigDirectory;
+    }
+
+    /// <param name="configDirectory">Folder for profiles.json, backups and the log.</param>
+    /// <param name="legacyConfigDirectory">Pre-rename folder to migrate from once (null = skip migration).</param>
+    public ConfigService(string configDirectory, string? legacyConfigDirectory = null)
+    {
+        ConfigDirectory = configDirectory;
+        _legacyConfigDirectory = legacyConfigDirectory;
         ConfigPath = Path.Combine(ConfigDirectory, "profiles.json");
         LogPath = Path.Combine(ConfigDirectory, LogFileName);
         Directory.CreateDirectory(ConfigDirectory);
@@ -77,13 +96,14 @@ public sealed class ConfigService : IDisposable
         try
         {
             if (File.Exists(ConfigPath)) return;
-            var oldConfig = Path.Combine(LegacyConfigDirectory, "profiles.json");
+            if (string.IsNullOrEmpty(_legacyConfigDirectory)) return;
+            var oldConfig = Path.Combine(_legacyConfigDirectory, "profiles.json");
             if (!File.Exists(oldConfig)) return;
 
             // Every file on its own; profiles.json goes LAST — it is the "migration done" marker,
             // so an interrupted copy is retried on the next start.
             int copied = 0, failed = 0;
-            foreach (var file in Directory.EnumerateFiles(LegacyConfigDirectory)
+            foreach (var file in Directory.EnumerateFiles(_legacyConfigDirectory)
                          .OrderBy(f => string.Equals(Path.GetFileName(f), "profiles.json", StringComparison.OrdinalIgnoreCase)))
             {
                 var name = Path.GetFileName(file);
@@ -235,8 +255,20 @@ public sealed class ConfigService : IDisposable
         cfg.Ui ??= new UiPreferences();
         cfg.Ui.Locale ??= "en";
         cfg.Ui.Theme ??= "dark";
-        cfg.Ui.CustomAccent ??= "#7EB8D4";
-        cfg.Ui.CustomBackground ??= "#0F1216";
+        cfg.Ui.CustomAccent ??= "#22D3EE";
+        cfg.Ui.CustomBackground ??= "#0A0C10";
+        if (cfg.Ui.CustomPalette != null)
+        {
+            bool darkBg = ThemeService.IsDark(ThemeService.Hex(
+                string.IsNullOrWhiteSpace(cfg.Ui.CustomPalette.Bg) ? cfg.Ui.CustomBackground : cfg.Ui.CustomPalette.Bg,
+                ThemeService.Hex(ThemeService.BrandBackground)));
+            // Fields absent from the file (older custom themes) get the status colors that read
+            // on this background — the getters alone would always answer with the dark defaults.
+            if (!cfg.Ui.CustomPalette.HasExplicitSuccess)
+                cfg.Ui.CustomPalette.Success = darkBg ? ThemePalette.DefaultSuccess : "#15803D";
+            if (!cfg.Ui.CustomPalette.HasExplicitWarning)
+                cfg.Ui.CustomPalette.Warning = darkBg ? ThemePalette.DefaultWarning : "#B45309";
+        }
         cfg.Presets?.RemoveAll(p => p == null);
         cfg.Presets?.ForEach(NormalizePreset);
 
@@ -411,7 +443,7 @@ public sealed class ConfigService : IDisposable
 
     private void EnsureWatcher()
     {
-        if (_watcher != null) return;
+        if (_watcher != null || !EnableFileWatcher) return;
         _watcher = new FileSystemWatcher(ConfigDirectory, "profiles.json")
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime | NotifyFilters.FileName
@@ -440,7 +472,7 @@ public sealed class ConfigService : IDisposable
     /// time window). A file that does not parse (typo while hand-editing) is never replaced —
     /// the in-memory config stays active and a warning is logged.
     /// </summary>
-    private void ReloadIfChangedExternally()
+    internal void ReloadIfChangedExternally()
     {
         bool changed;
         lock (_gate)
@@ -802,7 +834,7 @@ public sealed class ConfigService : IDisposable
             // Visor rename. Older installs stored a hard-coded "balanced" power plan that was never
             // the user's choice. Global defaults: null = leave the plan alone. Factory: the real active
             // plan is captured later (CompleteDeferredMigration), after a leftover game session is restored.
-            cfg.FactoryDefaults ??= new DefaultSettings { Resolution = DisplayEngine.GetCurrentResolution(), Color = ColorSettings.Neutral };
+            cfg.FactoryDefaults ??= new DefaultSettings { Resolution = CaptureCurrentResolution(), Color = ColorSettings.Neutral };
             if (string.Equals(cfg.FactoryDefaults.PowerPlan, "balanced", StringComparison.OrdinalIgnoreCase))
                 cfg.FactoryDefaults.PowerPlan = null;
             if (string.Equals(cfg.Defaults?.PowerPlan, "balanced", StringComparison.OrdinalIgnoreCase))
@@ -848,6 +880,8 @@ public sealed class ConfigService : IDisposable
     /// <summary>Current desktop state as the "factory" baseline (resolution + the user's real power plan).</summary>
     public static DefaultSettings CaptureFactoryDefaults()
     {
+        if (FactoryDefaultsProvider is { } provider)
+            return provider().Clone();
         return new DefaultSettings
         {
             Resolution = DisplayEngine.GetCurrentResolution(),
@@ -856,9 +890,14 @@ public sealed class ConfigService : IDisposable
         };
     }
 
+    private static string CaptureCurrentResolution() =>
+        FactoryDefaultsProvider?.Invoke().Resolution ?? DisplayEngine.GetCurrentResolution();
+
     /// <summary>Active plan as a UI alias when it is a stock plan, otherwise its GUID; null if unreadable.</summary>
     private static string? CaptureActivePowerPlan()
     {
+        if (FactoryDefaultsProvider is { } provider)
+            return provider().PowerPlan;
         var guid = DisplayEngine.GetActivePowerPlanGuid();
         return guid == null ? null : DisplayEngine.PowerPlanAlias(guid) ?? guid;
     }

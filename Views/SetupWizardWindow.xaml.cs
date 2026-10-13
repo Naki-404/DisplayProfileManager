@@ -52,6 +52,11 @@ public partial class SetupWizardWindow : Window
         ApplyLabels();
         ApplyThemePreview();
         ShowStep(1);
+        Loaded += (_, _) =>
+        {
+            OverlayWin32.EnsureInsideWorkArea(this); // 540 DIP default: fits 1366×768 @125% work area (~566 DIP)
+            UiMotion.PopIn(ChromeRoot);
+        };
 
         Closing += (_, _) =>
         {
@@ -76,6 +81,7 @@ public partial class SetupWizardWindow : Window
     {
         Title = Loc.T("setup.window");
         BtnClose.ToolTip = Loc.T("setup.skip");
+        System.Windows.Automation.AutomationProperties.SetName(BtnClose, Loc.T("setup.skip"));
         LblWhatTitle.Text = Loc.T("setup.what.title");
         LblWhat1.Text = Loc.T("setup.what.1");
         LblWhat2.Text = Loc.T("setup.what.2");

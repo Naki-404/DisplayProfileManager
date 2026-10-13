@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Visor.Models;
 using System.Windows.Threading;
@@ -15,12 +14,23 @@ namespace Visor.Services;
 /// Companion start/stop (process waits) and NVIDIA DRS writes (FPS cap) run on ordered
 /// background queues so the UI and tray never freeze.
 /// </remarks>
+/// <summary>What <see cref="ProfileMonitor.RestoreLeftover"/> found on disk from the previous run.</summary>
+public enum LeftoverRestoreResult
+{
+    Nothing,
+    /// <summary>Only pending-fps-restore.json — a queued FPS-cap undo that did not finish; not a crash.</summary>
+    PendingFpsOnly,
+    /// <summary>active-session.json — the previous run ended mid-game (crash / kill / power loss).</summary>
+    SessionRestored
+}
+
 public sealed class ProfileMonitor : IDisposable
 {
     private readonly ConfigService _config;
     private readonly DisplayEngine _engine;
     private readonly ProcessWatcher _watcher;
     private readonly CompanionService _companions;
+    private readonly ActivityHistoryStore? _history;
     private readonly SessionExtrasService _session = new();
     private readonly SessionSnapshotService _snapshots;
     private readonly object _gate = new();
@@ -29,9 +39,18 @@ public sealed class ProfileMonitor : IDisposable
     private readonly SerialQueue _companionQueue = new("Companions");
     private readonly SerialQueue _driverQueue = new("Driver settings");
     private DispatcherTimer? _deferredTimer;
+    /// <summary>Profile the (single, reused) deferred timer is armed for.</summary>
+    private string? _deferredProfileId;
     private CancellationTokenSource? _activationCts;
     private DispatcherTimer? _focusPollTimer;
     private bool _focusPollHasFocus = true;
+    /// <summary>Exe keys of the profile the focus poll watches (built once per activation, not per tick).</summary>
+    private HashSet<string> _focusPollKeys = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Set by <see cref="ShutdownRestore"/>: every wait on the exit path is bounded by it.</summary>
+    private DateTime? _shutdownDeadlineUtc;
+    private static readonly TimeSpan ExitBudget = TimeSpan.FromSeconds(9);
+    /// <summary>Windows gives ~5 s at logoff: restore synchronously, never wait on background queues.</summary>
+    private static readonly TimeSpan LogoffBudget = TimeSpan.FromSeconds(3);
 
     private readonly HashSet<string> _activeProcesses = new(StringComparer.OrdinalIgnoreCase);
     private GameProfile? _currentProfile;
@@ -52,6 +71,8 @@ public sealed class ProfileMonitor : IDisposable
     private bool _colorLockActive;
     private bool _colorLockPaused;
     private ColorSettings? _colorLockSource;
+    /// <summary>True while ActivateProfile applies a startup preset — avoid a second history row.</summary>
+    private bool _suppressPresetHistory;
 
     public event Action<string>? StatusChanged;
     public event Action<GameProfile?>? ActiveProfileChanged;
@@ -86,18 +107,22 @@ public sealed class ProfileMonitor : IDisposable
         get => _watcher.IsPaused;
         set
         {
+            if (_watcher.IsPaused == value) return;
             _watcher.IsPaused = value;
-            StatusChanged?.Invoke(value ? "Paused" : "Monitoring");
+            StatusChanged?.Invoke(value ? "Paused" : "Monitoring"); // App maps these tokens via Loc
+            _history?.Add(value ? "paused" : "resumed");
             AppLog.Info(value ? "Monitoring paused." : "Monitoring resumed.");
         }
     }
 
-    public ProfileMonitor(ConfigService config, DisplayEngine engine, ProcessWatcher watcher, CompanionService companions)
+    public ProfileMonitor(ConfigService config, DisplayEngine engine, ProcessWatcher watcher, CompanionService companions,
+        ActivityHistoryStore? history = null)
     {
         _config = config;
         _engine = engine;
         _watcher = watcher;
         _companions = companions;
+        _history = history;
         _snapshots = new SessionSnapshotService(engine, config.ConfigDirectory);
         _dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
 
@@ -113,33 +138,44 @@ public sealed class ProfileMonitor : IDisposable
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
     }
 
-    /// <summary>True when active-session.json survived the previous run (crash / power loss mid-game).</summary>
+    /// <summary>True when active-session.json or pending-fps-restore.json survived the previous run.</summary>
     public bool HasLeftoverSession => _snapshots.HasSnapshot || _snapshots.HasPendingFps;
 
     /// <summary>
     /// Startup, before baseline capture: restore a session snapshot left by a crashed run.
-    /// Synchronous. Returns true when a leftover session was found and restored (errors are logged).
+    /// Synchronous. Returns true when anything was found and restored (errors are logged).
     /// </summary>
     public bool RestoreLeftoverSession() => RestoreLeftoverSession(out _);
 
     /// <param name="fullySucceeded">False when any restore step failed.</param>
-    public bool RestoreLeftoverSession(out bool fullySucceeded)
+    /// <returns>True when a session snapshot or a pending FPS-cap undo was found (see <see cref="RestoreLeftover"/>).</returns>
+    public bool RestoreLeftoverSession(out bool fullySucceeded) =>
+        RestoreLeftover(out fullySucceeded) != LeftoverRestoreResult.Nothing;
+
+    /// <summary>
+    /// As <see cref="RestoreLeftoverSession(out bool)"/>, but tells a real leftover session
+    /// (active-session.json — the previous run died mid-game) apart from a lone
+    /// pending-fps-restore.json, which a clean exit / logoff can leave behind when the queued
+    /// NVIDIA FPS-cap undo did not finish in its time budget. Only the former is a crash restore.
+    /// </summary>
+    public LeftoverRestoreResult RestoreLeftover(out bool fullySucceeded)
     {
         fullySucceeded = true;
-        bool found = false;
+        var result = LeftoverRestoreResult.Nothing;
 
-        // FPS-cap undo whose background restore never ran (crash right after a session ended).
+        // FPS-cap undo whose background restore never ran (crash right after a session ended, or
+        // a logoff that ran out of time).
         var pending = _snapshots.LoadPendingFps();
         if (pending != null)
         {
-            found = true;
+            result = LeftoverRestoreResult.PendingFpsOnly;
             AppLog.Info("Found a pending FPS-cap restore — applying.");
             fullySucceeded &= RestoreFpsLimit(pending);
         }
 
         // A corrupt file is quarantined by Current and reported as "not found".
         var snap = _snapshots.Current;
-        if (snap == null) return found;
+        if (snap == null) return result;
 
         AppLog.Info($"Found leftover active-session.json ({snap.ProfileName ?? "?"}) — restoring.");
         bool ok = RestoreFpsLimit(snap);
@@ -147,7 +183,7 @@ public sealed class ProfileMonitor : IDisposable
         ok &= _snapshots.RestoreAll(_session, snap);
         AppLog.Info(ok ? "Leftover session restored." : "Leftover session restored with errors (see above).");
         fullySucceeded &= ok;
-        return true;
+        return LeftoverRestoreResult.SessionRestored;
     }
 
     public void Start()
@@ -157,16 +193,21 @@ public sealed class ProfileMonitor : IDisposable
 
         RefreshWatchList();
 
+        // One process-list snapshot for every enabled profile (was one per name per profile).
+        var enabled = _config.Current.Profiles.Where(p => p.Enabled).ToList();
+        var running = ProcessWatcher.RunningKeys(enabled.SelectMany(EnumerateProcessNames));
         GameProfile? pick = null;
-        foreach (var profile in _config.Current.Profiles.Where(p => p.Enabled))
+        foreach (var profile in enabled)
         {
-            if (!AnyProcessRunning(profile)) continue;
+            bool any = false;
             foreach (var n in EnumerateProcessNames(profile))
             {
-                if (ProcessWatcher.IsProcessRunning(n))
-                    lock (_gate) _activeProcesses.Add(ProcessNames.Key(n));
+                var key = ProcessNames.Key(n);
+                if (!running.Contains(key)) continue;
+                any = true;
+                lock (_gate) _activeProcesses.Add(key);
             }
-            pick = profile;
+            if (any) pick = profile;
         }
 
         _watcher.Start();
@@ -182,16 +223,33 @@ public sealed class ProfileMonitor : IDisposable
     /// Ends the active session and restores the pre-game snapshot. Without a session only the
     /// baseline gamma / driver color is reset — resolution and power plan are never touched.
     /// </summary>
-    public void EmergencyRestore()
+    /// <param name="historyKind">
+    /// Activity token written for this restore (<c>emergency</c> by default).
+    /// Pass <c>null</c> to skip history (e.g. reset-defaults / config sync that already has its own meaning).
+    /// </param>
+    public void EmergencyRestore(string? historyKind = "emergency")
     {
         RunOnUi(() =>
         {
+            var ended = CurrentProfile;
             bool hadSnapshot = _snapshots.HasSnapshot;
             bool ok = EndSession(RestoreMode.PreviousSnapshot, stopCompanionsSync: false, explicitColorReset: true);
-            StatusChanged?.Invoke(hadSnapshot
-                ? (ok ? "Emergency Restore: snapshot restored" : "Emergency Restore: restored with errors")
-                : "Emergency Restore: color reset");
+            string status = historyKind switch
+            {
+                null => hadSnapshot
+                    ? (ok ? "Idle" : "Restore completed with errors")
+                    : "Idle",
+                "sessionRestored" => hadSnapshot
+                    ? (ok ? "Idle" : "Restore completed with errors")
+                    : "Idle",
+                _ => hadSnapshot
+                    ? (ok ? "Emergency Restore: snapshot restored" : "Emergency Restore: restored with errors")
+                    : "Emergency Restore: color reset"
+            };
+            StatusChanged?.Invoke(status);
             ActiveProfileChanged?.Invoke(null);
+            if (historyKind != null)
+                _history?.Add(historyKind, ended?.Id, ended?.Name, success: ok);
             UiSound.Warn();
             AppLog.Info("Emergency Restore completed.");
         });
@@ -215,9 +273,8 @@ public sealed class ProfileMonitor : IDisposable
                 return;
             }
             AppLog.Info($"Forced profile ended: {cur.Name}");
-            EndSession(cur.RestoreMode, stopCompanionsSync: false);
-            StatusChanged?.Invoke("Idle");
-            ActiveProfileChanged?.Invoke(null);
+            bool ok = EndSession(cur.RestoreMode, stopCompanionsSync: false);
+            NotifySessionRestored(cur, ok);
         });
     }
 
@@ -225,7 +282,13 @@ public sealed class ProfileMonitor : IDisposable
     /// App exit / Windows logoff: synchronous full restore of an active session (always to the
     /// pre-game snapshot), waiting for queued driver work. Safe to call more than once.
     /// </summary>
-    /// <param name="stopCompanions">False at logoff — Windows closes them anyway and time is short.</param>
+    /// <param name="stopCompanions">
+    /// False at logoff — Windows closes them anyway and time is short: the restore then runs
+    /// synchronously without waiting on the companion queue; the driver queue (the queued
+    /// FPS-cap undo) is still drained with what is left of the 3 s logoff budget, at most 2 s.
+    /// An undo that does not finish in time stays persisted in pending-fps-restore.json and is
+    /// retried on the next start.
+    /// </param>
     public void ShutdownRestore(bool stopCompanions)
     {
         if (!_dispatcher.CheckAccess())
@@ -235,13 +298,26 @@ public sealed class ProfileMonitor : IDisposable
         }
         if (_shutdownDone) return;
         _shutdownDone = true;
+        var started = DateTime.UtcNow;
+        _shutdownDeadlineUtc = started + (stopCompanions ? ExitBudget : LogoffBudget);
 
         try { _watcher.Stop(); }
         catch (Exception ex) { AppLog.Warn(ex, "Watcher stop on shutdown"); }
 
         EndSession(RestoreMode.PreviousSnapshot, stopCompanionsSync: stopCompanions);
-        _driverQueue.Drain(TimeSpan.FromSeconds(4));
-        AppLog.Info("Shutdown restore completed.");
+        bool drained = _driverQueue.Drain(RemainingBudget(stopCompanions ? TimeSpan.FromSeconds(4) : TimeSpan.FromSeconds(2)));
+        AppLog.Info($"Shutdown restore completed in {(DateTime.UtcNow - started).TotalMilliseconds:0} ms"
+                    + (stopCompanions ? "." : " (logoff: companion queue skipped).")
+                    + (drained ? "" : " Driver queue still busy — a pending FPS-cap undo is retried on the next start."));
+    }
+
+    /// <summary>Wait allowance for one exit step: its own cap, but never past the shutdown deadline.</summary>
+    private TimeSpan RemainingBudget(TimeSpan cap)
+    {
+        if (_shutdownDeadlineUtc is not { } deadline) return cap;
+        var left = deadline - DateTime.UtcNow;
+        if (left <= TimeSpan.Zero) return TimeSpan.Zero;
+        return left < cap ? left : cap;
     }
 
     /// <summary>
@@ -271,9 +347,9 @@ public sealed class ProfileMonitor : IDisposable
             if (stopCompanionsSync)
             {
                 Interlocked.Increment(ref _companionGeneration);
-                _companionQueue.Drain(TimeSpan.FromSeconds(6));
+                _companionQueue.Drain(RemainingBudget(TimeSpan.FromSeconds(6)));
                 foreach (var c in cur.Companions)
-                    _companions.Stop(c);
+                    _companions.Stop(c, RemainingBudget(TimeSpan.FromSeconds(6)));
             }
             else
             {
@@ -348,6 +424,11 @@ public sealed class ProfileMonitor : IDisposable
             }
 
             StatusChanged?.Invoke($"Preset: {preset.Name}");
+            if (!_suppressPresetHistory)
+            {
+                var cur = CurrentProfile;
+                _history?.Add("presetApplied", cur?.Id, cur?.Name, detail: preset.Name);
+            }
         });
     }
 
@@ -513,11 +594,20 @@ public sealed class ProfileMonitor : IDisposable
             if (fresh == null || !fresh.Enabled)
             {
                 AppLog.Info($"Active profile {(fresh == null ? "deleted" : "disabled")} — Emergency Restore.");
-                EmergencyRestore();
+                EmergencyRestore(historyKind: "sessionRestored");
                 return;
             }
 
             lock (_gate) _currentProfile = fresh;
+
+            // The Alt+Tab focus poll compares against the profile's exe keys — follow a renamed
+            // process / edited aliases / toggled SoftRestoreOnAltTab instead of polling stale keys.
+            if (!fresh.SoftRestoreOnAltTab)
+                StopFocusPoll();
+            else if (_focusPollTimer?.IsEnabled == true)
+                _focusPollKeys = KeysOf(fresh);
+            else
+                UpdateSoftRestoreMonitoring(fresh);
 
             if (presetId == null) return; // No active preset — color is presets-only.
             var preset = fresh.Presets?.FirstOrDefault(p => p.Id == presetId);
@@ -591,6 +681,7 @@ public sealed class ProfileMonitor : IDisposable
             {
                 AppLog.Info($"Waiting for focus (up to 30s) for {fresh.Name}");
                 var deadline = DateTime.UtcNow.AddSeconds(30);
+                var keys = KeysOf(fresh);
                 while (DateTime.UtcNow < deadline)
                 {
                     cts.Token.ThrowIfCancellationRequested();
@@ -599,7 +690,7 @@ public sealed class ProfileMonitor : IDisposable
                         AppLog.Info($"Focus wait cancelled — process gone ({fresh.Name})");
                         return;
                     }
-                    if (ForegroundProcessHelper.IsForegroundOwnedBy(EnumerateProcessNames(fresh)))
+                    if (ForegroundProcessHelper.IsForegroundOwnedBy(keys))
                         break;
                     await Task.Delay(250, cts.Token).ConfigureAwait(false);
                 }
@@ -664,9 +755,8 @@ public sealed class ProfileMonitor : IDisposable
                 return;
             }
 
-            EndSession(ended.RestoreMode, stopCompanionsSync: false);
-            StatusChanged?.Invoke("Idle");
-            ActiveProfileChanged?.Invoke(null);
+            bool ok = EndSession(ended.RestoreMode, stopCompanionsSync: false);
+            NotifySessionRestored(ended, ok);
         });
     }
 
@@ -694,7 +784,7 @@ public sealed class ProfileMonitor : IDisposable
             // The session snapshot is kept (it holds the pre-game PC state).
             AppLog.Info($"Re-applying active profile: {profile.Name}");
             _engine.ColorTargetDevice = target;
-            ApplyProfileCore(profile);
+            _ = ApplyProfileCore(profile);
             ScheduleDeferredIfNeeded(profile);
 
             if (relaunchCompanions && _currentCompanionsKey != profile.Id)
@@ -711,6 +801,7 @@ public sealed class ProfileMonitor : IDisposable
 
         AppLog.Info($"Activating profile: {profile.Name}" + (forced ? " (forced from tray)" : ""));
         LastApplyToastDetail = null;
+        bool applyOk = true;
         try
         {
             // One snapshot per session — a switch keeps the original pre-game state.
@@ -720,10 +811,11 @@ public sealed class ProfileMonitor : IDisposable
             var display = _snapshots.EnsureDisplay(snap, target);
             if (created)
                 LastApplyToastDetail = $"Snapshot saved · {display.Resolution}";
-            ApplyProfileCore(profile);
+            applyOk = ApplyProfileCore(profile);
         }
         catch (Exception ex)
         {
+            applyOk = false;
             AppLog.Error("Apply profile failed: " + ex);
         }
 
@@ -732,21 +824,39 @@ public sealed class ProfileMonitor : IDisposable
             LaunchCompanionsFor(profile);
 
         // Startup preset only for new game activation (not soft reapply).
+        string? startupPresetName = null;
         if (!string.IsNullOrWhiteSpace(profile.StartupPresetId))
         {
             var preset = profile.Presets?.FirstOrDefault(p => p.Id == profile.StartupPresetId)
                          ?? FindPresetById(profile.StartupPresetId!);
             if (preset != null)
             {
-                ApplyPreset(preset);
-                LastPresetHotkeyName = preset.Name;
+                _suppressPresetHistory = true;
+                try
+                {
+                    ApplyPreset(preset);
+                    LastPresetHotkeyName = preset.Name;
+                    startupPresetName = preset.Name;
+                }
+                finally
+                {
+                    _suppressPresetHistory = false;
+                }
             }
         }
 
         UpdateSoftRestoreMonitoring(profile);
         StatusChanged?.Invoke($"Active: {profile.Name}");
         ActiveProfileChanged?.Invoke(profile);
+        _history?.Add("profileApplied", profile.Id, profile.Name, detail: startupPresetName, success: applyOk);
         RunOnUi(UiSound.Armed);
+    }
+
+    private void NotifySessionRestored(GameProfile? ended, bool success = true)
+    {
+        StatusChanged?.Invoke("Idle");
+        ActiveProfileChanged?.Invoke(null);
+        _history?.Add("sessionRestored", ended?.Id, ended?.Name, success: success);
     }
 
     /// <summary>
@@ -780,7 +890,8 @@ public sealed class ProfileMonitor : IDisposable
     }
 
     /// <summary>Power plan, resolution, FPS cap and session extras of <paramref name="profile"/>, tracked in the snapshot.</summary>
-    private void ApplyProfileCore(GameProfile profile)
+    /// <returns>False when any apply step threw.</returns>
+    private bool ApplyProfileCore(GameProfile profile)
     {
         string? presetId;
         lock (_gate) presetId = _activePresetId;
@@ -792,17 +903,21 @@ public sealed class ProfileMonitor : IDisposable
 
         var snap = _snapshots.BeginIfNone(profile, out _);
         var target = TargetDeviceFor(profile);
+        bool ok = true;
 
         try
         {
             if (profile.ApplyPowerPlan && !string.IsNullOrWhiteSpace(profile.PowerPlan))
             {
-                if (_engine.SetPowerPlan(profile.PowerPlan!))
+                // Tracked whenever the API accepted the change — a failed read-back must not
+                // leave the plan un-restored at session end.
+                if (_engine.TrySetPowerPlan(profile.PowerPlan!) != PowerPlanResult.Failed)
                     snap.PowerPlanChanged = true;
             }
         }
         catch (Exception ex)
         {
+            ok = false;
             AppLog.Error("Power plan apply: " + ex.Message);
         }
 
@@ -813,6 +928,7 @@ public sealed class ProfileMonitor : IDisposable
         }
         catch (Exception ex)
         {
+            ok = false;
             AppLog.Error("Display apply: " + ex.Message);
         }
 
@@ -834,6 +950,7 @@ public sealed class ProfileMonitor : IDisposable
         }
         catch (Exception ex)
         {
+            ok = false;
             AppLog.Error("Session apply: " + ex.Message);
         }
 
@@ -847,11 +964,12 @@ public sealed class ProfileMonitor : IDisposable
                 ApplyPresetColor(keep, "Preset re-apply after profile");
                 AppLog.Info($"Kept active preset after profile apply: {keep.Name}");
             }
-            return;
+            return ok;
         }
 
         // Color is presets-only — do not lock/re-apply profile color.
         StopColorLock();
+        return ok;
     }
 
     /// <summary>Mode change on <paramref name="device"/>, recorded in the session snapshot first.</summary>
@@ -960,33 +1078,39 @@ public sealed class ProfileMonitor : IDisposable
             ScheduleDeferred(profile, delay);
     }
 
+    /// <summary>One-shot re-apply after the game has settled. A single timer instance is reused.</summary>
     private void ScheduleDeferred(GameProfile profile, int seconds)
     {
         StopDeferred();
-        var id = profile.Id;
-        _deferredTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        _deferredProfileId = profile.Id;
+        _deferredTimer ??= CreateDeferredTimer();
+        _deferredTimer.Interval = TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 120));
+        _deferredTimer.Start();
+    }
+
+    private DispatcherTimer CreateDeferredTimer()
+    {
+        var t = new DispatcherTimer(DispatcherPriority.Background, _dispatcher);
+        t.Tick += (_, _) =>
         {
-            Interval = TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 120))
-        };
-        _deferredTimer.Tick += (_, _) =>
-        {
+            var id = _deferredProfileId;
             StopDeferred();
             GameProfile? cur;
             lock (_gate) cur = _currentProfile;
-            if (cur == null || cur.Id != id) return;
+            if (id == null || cur == null || cur.Id != id) return;
             var fresh = _config.Current.Profiles.FirstOrDefault(p => p.Id == id) ?? cur;
             AppLog.Info($"Deferred re-apply for {fresh.Name}");
             ApplyProfileCore(fresh);
             StatusChanged?.Invoke($"Re-applied: {fresh.Name}");
         };
-        _deferredTimer.Start();
+        return t;
     }
 
     private void StopDeferred()
     {
-        if (_deferredTimer == null) return;
-        _deferredTimer.Stop();
-        _deferredTimer = null;
+        _deferredProfileId = null;
+        if (_deferredTimer is { IsEnabled: true })
+            _deferredTimer.Stop();
     }
 
     // ------------------------------------------------------------------ color lock
@@ -1067,7 +1191,7 @@ public sealed class ProfileMonitor : IDisposable
         bool result = true;
         _driverQueue.Enqueue(() => result = RestoreFpsLimit(snap));
         if (!wait) return null;
-        _driverQueue.Drain(TimeSpan.FromSeconds(4));
+        _driverQueue.Drain(RemainingBudget(TimeSpan.FromSeconds(4)));
         return result;
     }
 
@@ -1080,8 +1204,10 @@ public sealed class ProfileMonitor : IDisposable
         {
             snap.FpsLimitChanged = false;
             _snapshots.PersistIfCurrent(snap);
-            if (!_snapshots.IsCurrent(snap))
-                _snapshots.ClearPendingFps();
+            // The undo file written at session end is cleared whether or not the snapshot is
+            // still live (RestoreAll may still be running on the UI thread) — otherwise a clean
+            // exit leaves pending-fps-restore.json behind and the next start reports a restore.
+            _snapshots.ClearPendingFps(snap);
         }
         else if (!_snapshots.IsCurrent(snap))
         {
@@ -1110,6 +1236,7 @@ public sealed class ProfileMonitor : IDisposable
         // Assume the game has focus right after activation (ApplyOnFocus already waited for it
         // when configured); the next tick will correct this if it's wrong.
         _focusPollHasFocus = true;
+        _focusPollKeys = KeysOf(profile);
 
         if (_focusPollTimer == null)
         {
@@ -1139,7 +1266,7 @@ public sealed class ProfileMonitor : IDisposable
         }
 
         bool focused;
-        try { focused = ForegroundProcessHelper.IsForegroundOwnedBy(EnumerateProcessNames(profile)); }
+        try { focused = ForegroundProcessHelper.IsForegroundOwnedBy(_focusPollKeys); }
         catch (Exception ex)
         {
             AppLog.Warn(ex, "Foreground check");
@@ -1282,14 +1409,20 @@ public sealed class ProfileMonitor : IDisposable
         return false;
     }
 
-    private static bool AnyProcessRunning(GameProfile profile)
+    /// <summary>One process-list snapshot for all of the profile's names.</summary>
+    private static bool AnyProcessRunning(GameProfile profile) =>
+        ProcessWatcher.RunningKeys(EnumerateProcessNames(profile)).Count > 0;
+
+    /// <summary>Exe keys (ProcessNames.Key form) of the profile's process name and aliases.</summary>
+    private static HashSet<string> KeysOf(GameProfile profile)
     {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var n in EnumerateProcessNames(profile))
         {
-            if (ProcessWatcher.IsProcessRunning(n))
-                return true;
+            var key = ProcessNames.Key(n);
+            if (key.Length > 0) keys.Add(key);
         }
-        return false;
+        return keys;
     }
 
     private static bool MatchesProcess(GameProfile profile, string processName)
@@ -1348,8 +1481,13 @@ public sealed class ProfileMonitor : IDisposable
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _modeGuardTimer?.Stop();
         _watcher.Dispose();
-        _companionQueue.Drain(TimeSpan.FromSeconds(2));
-        _driverQueue.Drain(TimeSpan.FromSeconds(2));
+        // After ShutdownRestore the queues were already drained within the exit budget (or
+        // deliberately skipped at logoff) — never add a second wait on top of it.
+        if (!_shutdownDone)
+        {
+            _companionQueue.Drain(TimeSpan.FromSeconds(2));
+            _driverQueue.Drain(TimeSpan.FromSeconds(2));
+        }
     }
 
     /// <summary>Runs actions one after another on the thread pool (order preserved, errors logged).</summary>
@@ -1374,24 +1512,32 @@ public sealed class ProfileMonitor : IDisposable
         }
 
         /// <summary>Waits for queued work (bounded). Used on exit / logoff.</summary>
-        public void Drain(TimeSpan timeout)
+        /// <returns>True when every queued action finished within <paramref name="timeout"/>.</returns>
+        public bool Drain(TimeSpan timeout)
         {
             Task tail;
             lock (_lock) tail = _tail;
             try
             {
-                if (!tail.Wait(timeout))
-                    AppLog.Warn($"{_name}: background work still running after {timeout.TotalSeconds:0}s.");
+                if (tail.Wait(timeout)) return true;
+                AppLog.Warn($"{_name}: background work still running after {timeout.TotalSeconds:0.#}s.");
+                return false;
             }
             catch (AggregateException ex)
             {
                 AppLog.Warn(ex, _name + " drain");
+                return true; // finished (with an error that is already logged)
             }
         }
     }
 }
 
-/// <summary>Tiny Win32 helpers for focus-gated profile activation.</summary>
+/// <summary>
+/// Tiny Win32 helpers for focus-gated profile activation. Resolves the foreground PID's exe with
+/// one kernel name query (<see cref="ProcessSnapshot.TryGetExeKey"/>: no handle to the game is
+/// ever opened, no Process objects). The last PID → exe mapping is cached briefly because the
+/// focus poll runs every 750 ms and the foreground process rarely changes between ticks.
+/// </summary>
 internal static class ForegroundProcessHelper
 {
     [DllImport("user32.dll")]
@@ -1399,6 +1545,40 @@ internal static class ForegroundProcessHelper
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(10);
+    private static readonly object CacheGate = new();
+    private static uint _cachedPid;
+    private static string? _cachedKey;
+    private static DateTime _cachedAtUtc;
+
+    /// <param name="keys">Exe keys (ProcessNames.Key form) in an OrdinalIgnoreCase set.</param>
+    public static bool IsForegroundOwnedBy(HashSet<string> keys)
+    {
+        if (keys.Count == 0) return false;
+
+        IntPtr hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return false;
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid == 0) return false;
+
+        var now = DateTime.UtcNow;
+        lock (CacheGate)
+        {
+            if (pid == _cachedPid && _cachedKey != null && now - _cachedAtUtc < CacheTtl)
+                return keys.Contains(_cachedKey);
+        }
+
+        var key = ProcessSnapshot.TryGetExeKey(pid);
+        if (key == null) return false;
+        lock (CacheGate)
+        {
+            _cachedPid = pid;
+            _cachedKey = key;
+            _cachedAtUtc = now;
+        }
+        return keys.Contains(key);
+    }
 
     public static bool IsForegroundOwnedBy(IEnumerable<string> processNames)
     {
@@ -1409,21 +1589,6 @@ internal static class ForegroundProcessHelper
             if (key.Length > 0)
                 targets.Add(key);
         }
-        if (targets.Count == 0) return false;
-
-        IntPtr hwnd = GetForegroundWindow();
-        if (hwnd == IntPtr.Zero) return false;
-        GetWindowThreadProcessId(hwnd, out uint pid);
-        if (pid == 0) return false;
-
-        try
-        {
-            using var p = Process.GetProcessById((int)pid);
-            return targets.Contains(ProcessNames.Key(p.ProcessName));
-        }
-        catch
-        {
-            return false;
-        }
+        return IsForegroundOwnedBy(targets);
     }
 }

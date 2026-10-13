@@ -21,6 +21,8 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
 
     public void NotifyProfilesClick()
     {
+        if (_busy || Visibility == Visibility.Visible) return;
+
         var now = DateTime.UtcNow;
         if (_streakStartUtc == DateTime.MinValue || (now - _streakStartUtc).TotalSeconds > 5)
         {
@@ -33,7 +35,6 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
 
         _profilesClicks = 0;
         _streakStartUtc = DateTime.MinValue;
-        _busy = false;
         ShowRandom();
     }
 
@@ -52,7 +53,13 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
         Visibility = Visibility.Visible;
         IsHitTestVisible = false;
 
-        if (FindResource("EggIn") is Storyboard inn)
+        if (UiMotion.Reduced)
+        {
+            Card.Opacity = 1;
+            CardScale.ScaleX = CardScale.ScaleY = 1;
+            IconScale.ScaleX = IconScale.ScaleY = 1;
+        }
+        else if (FindResource("EggIn") is Storyboard inn)
             inn.Begin(this, true);
 
         _hold?.Stop();
@@ -80,7 +87,7 @@ public partial class EggOverlay : System.Windows.Controls.UserControl
             _busy = false;
         }
 
-        if (FindResource("EggOut") is Storyboard outing)
+        if (!UiMotion.Reduced && FindResource("EggOut") is Storyboard outing)
         {
             EventHandler? handler = null;
             handler = (_, _) =>

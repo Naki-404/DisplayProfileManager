@@ -5,16 +5,23 @@
     Visor-<version>-portable.zip Visor.exe + Assets (self-contained, no .NET runtime needed)
     SHA256SUMS.txt
 
+  Before anything in .\release is touched the whole test suite runs (dotnet test Visor.sln -c Release);
+  a failing test aborts the build. A dirty git working tree only produces a warning.
+
 .PARAMETER Force
   Stop Visor / Visor-Setup processes that run from this repo's build folders (they lock outputs).
   Without -Force the script only reports them.
+
+.PARAMETER SkipTests
+  Skip the test gate. Use only for local experiments, never for a published release.
 
 .NOTES
   Requires the .NET 10 SDK. Version comes from Directory.Build.props (<Version>).
 #>
 [CmdletBinding()]
 param(
-  [switch]$Force
+  [switch]$Force,
+  [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,6 +37,7 @@ $stageDir = Join-Path $root '_payload-stage'
 $payloadZip = Join-Path $root 'Installer\payload.zip'
 $appProject = Join-Path $root 'Visor.csproj'
 $setupProject = Join-Path $root 'Installer\Installer.csproj'
+$solution = Join-Path $root 'Visor.sln'
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -60,6 +68,26 @@ function New-Zip([string]$sourceDir, [string]$zipPath, [string]$prefix = '') {
   } finally { $zip.Dispose() }
 }
 
+# Lines from `git status --porcelain`, or $null when git is missing or $root is not a work tree.
+# Native stderr is swallowed on purpose: this is advisory only and must never abort the build.
+function Get-GitDirtyLines {
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if ($null -eq $git) { return $null }
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $inside = (& git -C $root rev-parse --is-inside-work-tree 2>&1 | Where-Object { $_ -is [string] }) -join ''
+    if ($LASTEXITCODE -ne 0 -or $inside.Trim() -ne 'true') { return $null }
+    $lines = @(& git -C $root status --porcelain 2>&1 | Where-Object { ($_ -is [string]) -and ($_.Length -gt 0) })
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return $lines
+  } catch {
+    return $null
+  } finally {
+    $ErrorActionPreference = $previous
+  }
+}
+
 # --- version (single source: Directory.Build.props) ---
 [xml]$props = Get-Content -LiteralPath (Join-Path $root 'Directory.Build.props') -Raw
 $versionNode = $props.SelectSingleNode('//Version')
@@ -68,6 +96,22 @@ if ($null -eq $versionNode -or [string]::IsNullOrWhiteSpace($versionNode.InnerTe
 }
 $version = $versionNode.InnerText.Trim()
 Write-Host "Visor $version" -ForegroundColor Green
+
+# --- git tree state (warning only) ---
+$dirty = Get-GitDirtyLines
+if ($null -ne $dirty -and $dirty.Count -gt 0) {
+  $preview = ($dirty | Select-Object -First 10) -join "`n"
+  if ($dirty.Count -gt 10) { $preview += "`n  ... and $($dirty.Count - 10) more" }
+  Write-Warning ("Git working tree is dirty ({0} modified/untracked path(s)); these artifacts will not match any commit:`n{1}" -f $dirty.Count, $preview)
+}
+
+# --- test gate (runs before anything in release\ is removed) ---
+if ($SkipTests) {
+  Write-Warning 'Test gate skipped (-SkipTests). Do not publish artifacts from this run.'
+} else {
+  Write-Step 'Test gate: dotnet test Visor.sln -c Release'
+  Invoke-Dotnet -What 'Test gate' -Arguments @('test', $solution, '-c', 'Release', '-nologo')
+}
 
 # --- processes that would lock build outputs ---
 $lockers = @(Get-Process -Name 'Visor', 'Visor-Setup' -ErrorAction SilentlyContinue | Where-Object {
@@ -172,4 +216,5 @@ $sums = foreach ($a in $artifacts) {
 
 Write-Host ''
 Write-Host "Done. Visor $version artifacts in $release" -ForegroundColor Green
+if ($SkipTests) { Write-Warning 'Built with -SkipTests: re-run without it before publishing.' }
 $sums | Format-Table -AutoSize | Out-String -Width 200 | Write-Host

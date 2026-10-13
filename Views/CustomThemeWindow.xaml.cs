@@ -32,20 +32,25 @@ public partial class CustomThemeWindow : Window
         ("CheckCheckedBg", "Checkbox checked fill", "Чекбокс (вкл)", p => p.CheckCheckedBg, (p, v) => p.CheckCheckedBg = v),
         ("ComboHighlight", "Dropdown hover", "Выпадающий список hover", p => p.ComboHighlight, (p, v) => p.ComboHighlight = v),
         ("ComboSelected", "Dropdown selected", "Выпадающий список выбран", p => p.ComboSelected, (p, v) => p.ComboSelected = v),
-        ("TabSelected", "Tab selected", "Вкладка активная", p => p.TabSelected, (p, v) => p.TabSelected = v),
-        ("TabHover", "Tab hover", "Вкладка hover", p => p.TabHover, (p, v) => p.TabHover = v),
+        ("TabSelected", "Nav selected", "Навигация активная", p => p.TabSelected, (p, v) => p.TabSelected = v),
+        ("TabHover", "Nav hover", "Навигация hover", p => p.TabHover, (p, v) => p.TabHover = v),
         ("CaptionHover", "Window buttons hover", "Кнопки окна hover", p => p.CaptionHover, (p, v) => p.CaptionHover = v),
         ("PillBg", "Active pill", "Плашка «активно»", p => p.PillBg, (p, v) => p.PillBg = v),
         ("ToastBg", "Toast background", "Фон уведомления", p => p.ToastBg, (p, v) => p.ToastBg = v),
         ("ToastBorder", "Toast border", "Рамка уведомления", p => p.ToastBorder, (p, v) => p.ToastBorder = v),
         ("Danger", "Danger / close hover", "Опасный / закрытие", p => p.Danger, (p, v) => p.Danger = v),
+        ("Success", "Success / positive", "Успех / позитив", p => p.Success, (p, v) => p.Success = v),
+        ("Warning", "Warning / attention", "Предупреждение", p => p.Warning, (p, v) => p.Warning = v),
     };
 
     public CustomThemeWindow(ThemePalette initial)
     {
         InitializeComponent();
-        Opacity = 0;
-        Loaded += (_, _) => UiMotion.PopIn(this);
+        Loaded += (_, _) =>
+        {
+            OverlayWin32.EnsureInsideWorkArea(this); // 540 DIP default: fits 768-px @125% work areas
+            UiMotion.PopIn(ChromeRoot);
+        };
         _working = initial.Clone();
         // Revert to what was on screen before this dialog (may itself be an unsaved preview).
         _originalSnapshot = initial.Clone();
@@ -68,7 +73,9 @@ public partial class CustomThemeWindow : Window
         BtnCancel.Content = Loc.T("btn.cancel");
         BtnOk.Content = Loc.T("btn.ok");
         BtnCaptionClose.ToolTip = Loc.T("btn.close");
+        System.Windows.Automation.AutomationProperties.SetName(BtnCaptionClose, Loc.T("btn.close"));
         SmpAccent.Content = Loc.T("palette.sample.accent");
+        SmpSuccess.Content = Loc.T("palette.sample.success");
         SmpGhost.Content = Loc.T("palette.sample.ghost");
         SmpCheck.Content = Loc.T("palette.sample.check");
         SmpMuted.Text = Loc.T("palette.sample.muted");

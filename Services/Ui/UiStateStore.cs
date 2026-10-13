@@ -17,6 +17,8 @@ public sealed class UiState
     public bool WindowMaximized { get; set; }
     /// <summary>"Visor keeps running in the tray" notice was shown once.</summary>
     public bool TrayNoticeShown { get; set; }
+    /// <summary>Recommendation ids the user dismissed (Home card).</summary>
+    public List<string> DismissedRecommendations { get; set; } = new();
 }
 
 public static class UiStateStore
@@ -56,6 +58,40 @@ public static class UiStateStore
             }
             return _state;
         }
+    }
+
+    /// <summary>
+    /// Pure bounds clamp for a saved window rect (DIPs): the rect is shrunk to fit the largest
+    /// work area when oversized, and moved onto the primary (first) work area when it has less than
+    /// <paramref name="minVisibleWidth"/>×<paramref name="minVisibleHeight"/> visible on any monitor
+    /// (off-screen or on a monitor that no longer exists). A rect already visible is returned as-is.
+    /// </summary>
+    internal static System.Windows.Rect ClampToWorkAreas(
+        System.Windows.Rect window,
+        IReadOnlyList<System.Windows.Rect> workAreas,
+        double minVisibleWidth = 48,
+        double minVisibleHeight = 24)
+    {
+        if (workAreas.Count == 0 || window.IsEmpty) return window;
+
+        double maxW = workAreas.Max(a => a.Width);
+        double maxH = workAreas.Max(a => a.Height);
+        double w = Math.Min(window.Width, maxW);
+        double h = Math.Min(window.Height, maxH);
+        var r = new System.Windows.Rect(window.Left, window.Top, w, h);
+
+        foreach (var area in workAreas)
+        {
+            double visW = Math.Min(r.Right, area.Right) - Math.Max(r.Left, area.Left);
+            double visH = Math.Min(r.Bottom, area.Bottom) - Math.Max(r.Top, area.Top);
+            if (visW >= minVisibleWidth && visH >= minVisibleHeight)
+                return r;
+        }
+
+        var primary = workAreas[0];
+        double left = Math.Max(primary.Left, Math.Min(r.Left, primary.Right - r.Width));
+        double top = Math.Max(primary.Top, Math.Min(r.Top, primary.Bottom - r.Height));
+        return new System.Windows.Rect(left, top, Math.Min(r.Width, primary.Width), Math.Min(r.Height, primary.Height));
     }
 
     public static void Save()

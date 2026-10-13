@@ -49,18 +49,21 @@ SmartScreen may show *"Windows protected your PC"*. Click **More info → Run an
 
 ## Screenshots
 
+> The screenshots are being refreshed: they show the 2.0 layout, and `01-play.png` / `02-library.png` are
+> currently the same image. New captures will land together with the 2.1 shell.
+
 <p align="center">
-  <img src="docs/screenshots/01-play.png" width="820" alt="Play tab: live color while a game is running"><br>
-  <em>Play: live color, presets and session options while a game is running</em>
+  <img src="docs/screenshots/01-play.png" width="820" alt="Games hub with sidebar: list, sticky actions, Display/Color/Session/Companions tabs"><br>
+  <em>Games: one list, sticky Apply/Launch, editor tabs for Display · Color · Session · Companions</em>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/02-library.png" width="820" alt="Library tab: per-game profiles"><br>
-  <em>Library: per-game profiles with resolution, power plan and companion apps</em>
+  <img src="docs/screenshots/02-library.png" width="820" alt="Games Display tab: resolution, power plan and profile identity"><br>
+  <em>Games · Display: resolution, power plan and profile identity</em>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/03-presets.png" width="820" alt="Presets tab: hotkey color presets"><br>
+  <img src="docs/screenshots/03-presets.png" width="820" alt="Presets section with sidebar navigation: hotkey color presets"><br>
   <em>Presets: color presets on hotkeys, plus a pack gallery</em>
 </p>
 
@@ -77,6 +80,13 @@ SmartScreen may show *"Windows protected your PC"*. Click **More info → Run an
 - **Center zoom.** Scope-style zoom using the Windows Magnifier API.
 - **FPS cap.** Optional per-game cap through the NVIDIA driver profile.
 - **Companions.** Launch helper apps with a game and close them afterwards.
+- **Home dashboard.** Live session, display mode, library counts and recent activity at a glance.
+- **Command palette.** Ctrl+K jumps to games, sections and common actions without hunting the sidebar.
+- **Activity history.** Applies, restores and pauses are kept in `%AppData%\Visor\history.json` and shown under Tools.
+- **System.** CPU / RAM / GPU / disks overview, top processes, and two reversible Windows tweaks (Game Mode, High performance power plan).
+- **Network.** Adapter facts, ICMP latency / loss / jitter probe, and DNS resolve timing — no automatic DNS changes.
+- **Suggestions.** Home recommendations from real Visor / System / Network signals; Windows changes go through SafeAction with undo.
+- **DPI-aware shell.** PerMonitorV2; window size/clamp tuned for 100/125/150% and short (~768 px) displays.
 - **Tray mode.** Lives in the tray, with quick profile and preset switching.
 - **Themes and languages.** Dark, light or a custom theme, in **English and Russian**.
 - **Emergency restore.** One click resets the display to safe settings.
@@ -92,8 +102,8 @@ SmartScreen may show *"Windows protected your PC"*. Click **More info → Run an
                    restore the snapshot taken before the game started
 ```
 
-1. Add or scan your games in **Library**.
-2. Tune color in **Play**, or put presets on hotkeys in **Presets**.
+1. Add or scan your games in **Games**.
+2. Tune color on the **Color** tab, or put presets on hotkeys in **Presets**.
 3. Leave Visor in the tray. Autostart is optional.
 4. Launch games as usual and profiles apply on their own.
 
@@ -116,6 +126,10 @@ input, but you should still follow your game's rules.
 |------|---------|
 | `%LocalAppData%\Programs\Visor\` | Default install folder (`Visor.exe`, `Assets\`, `Uninstall.exe`) |
 | `%AppData%\Visor\profiles.json` | Profiles and settings |
+| `%AppData%\Visor\profiles.json.bak` | Last known-good copy of the config, used if `profiles.json` is corrupt |
+| `%AppData%\Visor\active-session.json` | Snapshot of your desktop state taken when a game session starts; deleted after a successful restore |
+| `%AppData%\Visor\ui-state.json` | Window position, dismissed suggestions and other cosmetic UI state |
+| `%AppData%\Visor\history.json` | Recent Visor activity (apply / restore / pause) |
 | `%AppData%\Visor\Visor.log` | App log |
 
 When upgrading from Display Profile Manager, Visor imports your settings from `%AppData%\DisplayProfileManager\`
@@ -143,10 +157,11 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) on
 ```powershell
 git clone https://github.com/Naki-404/DisplayProfileManager.git
 cd DisplayProfileManager
-dotnet build .\Visor.csproj -c Release
+dotnet build .\Visor.sln -c Release
+dotnet test .\Visor.sln
 ```
 
-To build the release artifacts (installer, portable zip and checksums) into `.\release`:
+The tests never change display, power, registry or any other system setting and write only to a temp folder. A few read live system information (network adapters, WMI, the registry) and skip themselves when it is not available. To build the release artifacts (installer, portable zip and checksums) into `.\release`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build-release.ps1
@@ -162,12 +177,17 @@ The version number lives in one place, `Directory.Build.props`. The app is publi
 compressed single file. The installer targets .NET Framework 4.8, which ships with Windows, so it stays tiny.
 
 ```text
+Visor.sln               app + installer + tests
 Visor.csproj            app (WPF, net10.0-windows)
 Assets/                 app.ico, Sounds/, Packs/
 Models/ Views/ Controls/ Services/
 Installer/              Visor-Setup.exe / Uninstall.exe (WPF, net48)
+tests/Visor.Tests/      xunit test suite (app)
+tests/Visor.Installer.Tests/  installer safety tests (PathGuard, install manifest)
+_IconGen/               generates Assets/app.ico
 build-release.ps1       release pipeline
 Directory.Build.props   version + company (shared)
+docs/QA-CHECKLIST.md    manual checks for a real Windows PC
 ```
 
 ---

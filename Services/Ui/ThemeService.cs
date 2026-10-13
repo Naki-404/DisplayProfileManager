@@ -12,7 +12,7 @@ public static class ThemeService
     public const string BrandCyan = "#22D3EE";
     public const string BrandVioletDark = "#8B5CF6";
     public const string BrandVioletLight = "#7C3AED";
-    public const string BrandBackground = "#0B0F14";
+    public const string BrandBackground = "#0A0C10";
 
     /// <summary>True when the effective theme has a dark background (used by tray menu / DWM caption).</summary>
     public static bool IsDarkTheme(UiPreferences? ui) => IsDark(Hex(Resolve(ui ?? new UiPreferences()).Bg));
@@ -52,6 +52,19 @@ public static class ThemeService
         Set("AccentBrush", Hex(p.Accent));
         Set("AccentHoverBrush", Hex(p.AccentHover));
         Set("DangerBrush", Hex(p.Danger));
+        bool darkSurface = IsDark(Hex(p.Bg));
+        var success = Hex(string.IsNullOrWhiteSpace(p.Success)
+            ? (darkSurface ? "#22C55E" : "#15803D")
+            : p.Success);
+        var warning = Hex(string.IsNullOrWhiteSpace(p.Warning)
+            ? (darkSurface ? "#F59E0B" : "#B45309")
+            : p.Warning);
+        Set("SuccessBrush", success);
+        Set("WarningBrush", warning);
+        // Pick white vs near-black by WCAG contrast (IsDark threshold alone fails on #22C55E).
+        Set("SuccessButtonTextBrush", BestContrastingLabel(success));
+        // Soft hover tint for danger fills (close caption, DangerButton).
+        Set("DangerHoverBrush", Blend(Hex(p.Danger), Hex("#FFFFFF"), 0.14));
         Set("FieldBrush", Hex(p.Field));
         Set("TrackBrush", Hex(p.Track));
         Set("GhostBgBrush", Hex(p.GhostBg));
@@ -87,22 +100,26 @@ public static class ThemeService
         SetSystem(System.Windows.SystemColors.ControlBrushKey, Hex(p.Panel));
         SetSystem(System.Windows.SystemColors.WindowTextBrushKey, Hex(p.Text));
         SetSystem(System.Windows.SystemColors.ControlTextBrushKey, Hex(p.Text));
+
+        Visor.UiMotion.SyncChromeDurations();
     }
 
     public static ThemePalette DarkPalette() => new()
     {
-        Bg = "#0B0F14",
-        Panel = "#121821",
-        Border = "#243041",
-        Text = "#E6EDF5",
-        Muted = "#8A98AB",
+        Bg = "#0A0C10",
+        Panel = "#12161C",
+        Border = "#1E2630",
+        Text = "#E8EEF4",
+        Muted = "#8B9AAB",
         Accent = BrandCyan,
         AccentHover = "#67E8F9",
         Danger = "#E05252",
-        Field = "#161D28",
+        Success = "#22C55E",
+        Warning = "#F59E0B",
+        Field = "#161B22",
         Track = "#1F2835",
-        GhostBg = "#151C26",
-        GhostBorder = "#243041",
+        GhostBg = "#151A22",
+        GhostBorder = "#1E2630",
         GhostHover = "#1B2431",
         AccentButtonText = "#06121A",
         CheckCheckedBg = "#0E2A33",
@@ -113,7 +130,7 @@ public static class ThemeService
         CaptionHover = "#1B2431",
         TitleBar = "#0D1218",
         PillBg = "#10242E",
-        ToastBg = "#151C26",
+        ToastBg = "#151A22",
         ToastBorder = "#2A3A4F"
     };
 
@@ -128,6 +145,8 @@ public static class ThemeService
         Accent = "#0E7490",
         AccentHover = "#0891B2",
         Danger = "#C0392B",
+        Success = "#15803D",
+        Warning = "#B45309",
         Field = "#FFFFFF",
         Track = "#E2E8F0",
         GhostBg = "#F6F8FB",
@@ -170,7 +189,10 @@ public static class ThemeService
             Muted = ToHex(muted),
             Accent = ToHex(accent),
             AccentHover = ToHex(hover),
-            Danger = "#E05252",
+            // Like Success/Warning: the light-surface red needs more depth to keep AA contrast for red text at rest.
+            Danger = dark ? "#E05252" : "#C0392B",
+            Success = dark ? "#22C55E" : "#15803D",
+            Warning = dark ? "#F59E0B" : "#B45309",
             Field = ToHex(field),
             Track = ToHex(Blend(bg, accent, 0.22)),
             GhostBg = ToHex(Blend(panel, text, dark ? 0.06 : 0.04)),
@@ -214,6 +236,33 @@ public static class ThemeService
     public static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
 
     public static bool IsDark(Color c) => (c.R * 0.299 + c.G * 0.587 + c.B * 0.114) < 140;
+
+    /// <summary>White or near-black label — whichever has higher WCAG contrast on <paramref name="bg"/>.</summary>
+    public static Color BestContrastingLabel(Color bg)
+    {
+        var white = Hex("#FFFFFF");
+        var ink = Hex("#052E16");
+        return ContrastRatio(bg, white) >= ContrastRatio(bg, ink) ? white : ink;
+    }
+
+    private static double RelativeLuminance(Color c)
+    {
+        static double Lin(byte u)
+        {
+            double s = u / 255.0;
+            return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+        }
+        return 0.2126 * Lin(c.R) + 0.7152 * Lin(c.G) + 0.0722 * Lin(c.B);
+    }
+
+    private static double ContrastRatio(Color a, Color b)
+    {
+        double l1 = RelativeLuminance(a);
+        double l2 = RelativeLuminance(b);
+        double hi = Math.Max(l1, l2);
+        double lo = Math.Min(l1, l2);
+        return (hi + 0.05) / (lo + 0.05);
+    }
 
     private static Color Blend(Color a, Color b, double t)
     {

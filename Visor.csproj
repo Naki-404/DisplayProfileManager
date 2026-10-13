@@ -17,8 +17,12 @@
     <Description>Per-game display profiles for Windows by Nakidev</Description>
     <AssemblyTitle>Visor</AssemblyTitle>
     <DebugType>embedded</DebugType>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Installer\**;_IconGen\**;_payload-stage\**;dist\**;release\**;obj\**;bin\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Installer\**;_IconGen\**;_payload-stage\**;dist\**;release\**;obj\**;bin\**;tests\**</DefaultItemExcludes>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Visor.Tests" />
+  </ItemGroup>
 
   <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">
     <SelfContained>true</SelfContained>
@@ -32,7 +36,7 @@
 
   <ItemGroup>
     <PackageReference Include="NvAPIWrapper.Net" Version="0.8.1.101" />
-    <PackageReference Include="System.Management" Version="10.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>

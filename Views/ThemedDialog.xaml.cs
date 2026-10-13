@@ -20,6 +20,7 @@ public partial class ThemedDialog : Window
         Title = TitleText.Text;
         MessageText.Text = message ?? "";
         BtnClose.ToolTip = Loc.T("btn.close");
+        System.Windows.Automation.AutomationProperties.SetName(BtnClose, Loc.T("btn.close"));
         BtnCancel.Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed;
         BtnOk.Content = showCancel ? Loc.T("btn.yes") : Loc.T("btn.ok");
         BtnCancel.Content = showCancel ? Loc.T("btn.no") : Loc.T("btn.cancel");
@@ -27,25 +28,35 @@ public partial class ThemedDialog : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        Card.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
-        Card.RenderTransform = new System.Windows.Media.ScaleTransform(0.96, 0.96);
+        // CenterOwner does not clamp: an owner hugging a screen edge would push us partly off-screen.
+        OverlayWin32.EnsureInsideWorkArea(this);
 
-        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150))
+        if (UiMotion.Reduced)
         {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        BeginAnimation(OpacityProperty, fade);
+            Opacity = 1;
+        }
+        else
+        {
+            Card.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+            Card.RenderTransform = new System.Windows.Media.ScaleTransform(0.96, 0.96);
 
-        var scaleX = new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(160))
-        {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        var scaleY = new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(160))
-        {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        Card.RenderTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, scaleX);
-        Card.RenderTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, scaleY);
+            var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            BeginAnimation(OpacityProperty, fade);
+
+            var scaleX = new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            var scaleY = new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            Card.RenderTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, scaleX);
+            Card.RenderTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, scaleY);
+        }
 
         if (InputBox.Visibility == Visibility.Visible)
         {
@@ -68,6 +79,12 @@ public partial class ThemedDialog : Window
         if (_closing) return;
         _closing = true;
         IsHitTestVisible = false;
+        if (UiMotion.Reduced)
+        {
+            try { DialogResult = result; }
+            catch { Close(); }
+            return;
+        }
         var fade = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(120))
         {
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
@@ -97,11 +114,18 @@ public partial class ThemedDialog : Window
         var dlg = new ThemedDialog(title ?? Loc.T("app.name"), message, showCancel);
         if (owner != null && owner.IsVisible)
         {
+            // Owned: always above the owner (also when the owner is the Topmost overlay), no taskbar entry.
             dlg.Owner = owner;
             dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            dlg.ShowInTaskbar = false;
         }
         else
+        {
+            // Owner hidden (tray mode) or none: WPF's CenterScreen centers on the work area of the monitor
+            // under the cursor. Without an owner the dialog needs its own taskbar button so it can't get lost.
             dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            dlg.ShowInTaskbar = true;
+        }
         return dlg;
     }
 

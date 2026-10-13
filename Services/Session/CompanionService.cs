@@ -146,8 +146,22 @@ public sealed class CompanionService
         }
     }
 
+    private static readonly TimeSpan DefaultStopBudget = TimeSpan.FromSeconds(6);
+    private const int CloseWaitMs = 2500;
+    private const int KillWaitMs = 3000;
+
     /// <summary>Closes / kills only the processes this companion entry started. Blocking (waits for exit) — call off the UI thread.</summary>
-    public void Stop(CompanionApp companion)
+    public void Stop(CompanionApp companion) => Stop(companion, DefaultStopBudget);
+
+    /// <summary>
+    /// As <see cref="Stop(CompanionApp)"/>, but every wait is bounded by <paramref name="budget"/>
+    /// in total (app exit has a fixed time box). Order: WM_CLOSE to every tracked process first,
+    /// then one wait for all of them with the remaining budget (a recorder like OBS gets the whole
+    /// budget to finish its file), then Kill only what is still alive — and only while budget
+    /// remains. Once the budget is spent a companion is left to Windows: it has had its close
+    /// request and is never killed late.
+    /// </summary>
+    public void Stop(CompanionApp companion, TimeSpan budget)
     {
         try
         {
@@ -164,32 +178,22 @@ public sealed class CompanionService
             var mode = companion.OnStop ?? "";
             bool closeFirst = !string.Equals(mode, "kill", StringComparison.OrdinalIgnoreCase);
             bool kill = !string.Equals(mode, "close", StringComparison.OrdinalIgnoreCase);
+            var deadline = DateTime.UtcNow + (budget > TimeSpan.Zero ? budget : TimeSpan.FromMilliseconds(200));
 
+            // Only processes Visor started that are still the same process (pid not reused).
+            var live = new List<Process>();
             foreach (var (pid, started) in pids)
             {
                 try
                 {
-                    using var p = Process.GetProcessById(pid);
+                    var p = Process.GetProcessById(pid);
                     if (!IsSameProcess(p, started))
                     {
                         AppLog.Info($"Companion pid {pid} was reused by another process — skipped.");
+                        p.Dispose();
                         continue;
                     }
-
-                    if (closeFirst)
-                    {
-                        foreach (var hwnd in FindTopWindows((uint)pid))
-                            PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-                        try { p.CloseMainWindow(); } catch (InvalidOperationException) { /* exited */ }
-                        if (p.WaitForExit(2500))
-                            continue;
-                    }
-
-                    if (kill && !p.HasExited)
-                    {
-                        p.Kill(entireProcessTree: false);
-                        p.WaitForExit(3000);
-                    }
+                    live.Add(p);
                 }
                 catch (ArgumentException)
                 {
@@ -201,6 +205,69 @@ public sealed class CompanionService
                 }
             }
 
+            try
+            {
+                if (closeFirst)
+                {
+                    // 1. Ask everyone to close.
+                    foreach (var p in live)
+                    {
+                        try
+                        {
+                            foreach (var hwnd in FindTopWindows((uint)p.Id))
+                                PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                            try { p.CloseMainWindow(); } catch (InvalidOperationException) { /* exited */ }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLog.Warn(ex, $"Companion close request (pid {p.Id})");
+                        }
+                    }
+
+                    // 2. One wait for all of them, bounded by the close step cap and the deadline.
+                    var closeDeadline = Earliest(deadline, DateTime.UtcNow.AddMilliseconds(CloseWaitMs));
+                    foreach (var p in live)
+                    {
+                        try { p.WaitForExit(WaitMs(closeDeadline)); }
+                        catch (Exception ex) { AppLog.Warn(ex, $"Companion close wait (pid {p.Id})"); }
+                    }
+                }
+
+                // 3. Kill only what is still running, and only while budget remains.
+                foreach (var p in live)
+                {
+                    try
+                    {
+                        if (p.HasExited) continue;
+                        if (!kill)
+                        {
+                            AppLog.Info($"Companion pid {p.Id} is still running after the close request (OnStop=close) — left to Windows.");
+                            continue;
+                        }
+                        if (DateTime.UtcNow >= deadline)
+                        {
+                            AppLog.Warn($"Companion pid {p.Id} did not close within the stop budget — left to Windows (not killed).");
+                            continue;
+                        }
+                        p.Kill(entireProcessTree: false);
+                        if (!p.WaitForExit(WaitMs(Earliest(deadline, DateTime.UtcNow.AddMilliseconds(KillWaitMs)))))
+                            AppLog.Warn($"Companion pid {p.Id} did not exit within the stop budget.");
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // exited meanwhile
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLog.Error($"Failed to stop companion pid {p.Id}: {ex.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                foreach (var p in live) p.Dispose();
+            }
+
             AppLog.Info("Companion stopped.");
         }
         catch (Exception ex)
@@ -209,13 +276,26 @@ public sealed class CompanionService
         }
     }
 
+    private static DateTime Earliest(DateTime a, DateTime b) => a < b ? a : b;
+
+    /// <summary>Milliseconds left until <paramref name="deadline"/> (at least 1 — never a blocking -1).</summary>
+    private static int WaitMs(DateTime deadline)
+    {
+        var left = (deadline - DateTime.UtcNow).TotalMilliseconds;
+        return (int)Math.Clamp(left, 1, int.MaxValue);
+    }
+
+    /// <summary>
+    /// schtasks /Run by absolute System32 path (CreateProcess searches the app folder first).
+    /// Nothing is redirected — no pipe can fill up — and a hung schtasks is killed after 5 s.
+    /// </summary>
     private static bool StartScheduledTask(string taskName)
     {
         try
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "schtasks.exe",
+                FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
                 CreateNoWindow = true,
                 UseShellExecute = false
             };
@@ -227,7 +307,8 @@ public sealed class CompanionService
             if (p == null) return false;
             if (!p.WaitForExit(5000))
             {
-                AppLog.Error("schtasks /Run timed out.");
+                AppLog.Error("schtasks /Run timed out — killed.");
+                try { p.Kill(); p.WaitForExit(1000); } catch (Exception ex) { AppLog.Warn(ex, "schtasks kill"); }
                 return false;
             }
             if (p.ExitCode != 0)
@@ -340,15 +421,13 @@ public sealed class CompanionService
         return (c.TaskName ?? "unknown").Trim().ToLowerInvariant();
     }
 
+    /// <summary>PIDs of every running instance of the exe — one process-list scan, no handles opened.</summary>
     private static HashSet<int> SnapshotPidsByName(string? bareName)
     {
         var set = new HashSet<int>();
-        if (string.IsNullOrWhiteSpace(bareName)) return set;
-        foreach (var p in Process.GetProcessesByName(bareName))
-        {
-            try { set.Add(p.Id); }
-            finally { p.Dispose(); }
-        }
+        var key = ProcessNames.Key(bareName);
+        if (key.Length == 0) return set;
+        ProcessSnapshot.PidsOf(key, set);
         return set;
     }
 

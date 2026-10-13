@@ -320,7 +320,23 @@ public static class ProfilePackService
 
         try
         {
-            var text = File.ReadAllText(dlg.FileName);
+            return ImportFromJson(File.ReadAllText(dlg.FileName));
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Profile pack import (unreadable file)");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Parses a profile pack (or bare GameProfile) JSON document and returns the sanitized profile.
+    /// Null when the document is unreadable, has no process name, or names a protected process.
+    /// </summary>
+    internal static GameProfile? ImportFromJson(string text)
+    {
+        try
+        {
             var pack = JsonSerializer.Deserialize<Pack>(text, Json);
             var src = pack?.Profile;
             if (src == null || string.IsNullOrWhiteSpace(src.ProcessName))
@@ -334,7 +350,7 @@ public static class ProfilePackService
         }
         catch (Exception ex)
         {
-            AppLog.Warn(ex, "Profile pack import (unreadable file)");
+            AppLog.Warn(ex, "Profile pack import (unreadable JSON)");
             return null;
         }
     }

@@ -30,7 +30,8 @@ public partial class GameOverlayWindow : Window
         InitializeComponent();
         _suppress = false;
 
-        _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
+        // One-shot debounce (restarted per slider tick), never periodic: ≤10 ramp pushes/s while dragging.
+        _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _liveTimer.Tick += (_, _) =>
         {
             _liveTimer.Stop();
@@ -114,9 +115,14 @@ public partial class GameOverlayWindow : Window
                 Top = ui.OverlayTop!.Value;
                 UpdateLayout();
                 if (OverlayWin32.IsReasonablyOnScreen(this) && OverlayWin32.IsOnTargetMonitor(this))
+                {
+                    // Partially off the edge (monitor layout / DPI changed since it was saved): pull it in.
+                    OverlayWin32.EnsureInsideWorkArea(this);
                     return;
+                }
             }
             ColorUiHelper.PlaceOverlayDefault(this);
+            OverlayWin32.EnsureInsideWorkArea(this);
         }
         finally
         {
@@ -134,6 +140,13 @@ public partial class GameOverlayWindow : Window
     public void HideOverlay()
     {
         Hide();
+        // Nothing may keep ticking while hidden: drop a pending live push, flush a pending position save.
+        _liveTimer.Stop();
+        if (_persistTimer.IsEnabled)
+        {
+            _persistTimer.Stop();
+            FlushPendingUiSave();
+        }
         var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
         ui.OverlayVisible = false;
         App.Services.Config.Save(App.Services.Config.Current, raiseChanged: false);
@@ -521,6 +534,12 @@ public partial class GameOverlayWindow : Window
         BtnMiniNext.ToolTip = Loc.T("hotkey.next");
         BtnCollapse.ToolTip = Loc.T("overlay.collapse");
         BtnHide.ToolTip = Loc.T("overlay.hide");
+        // Glyph-only buttons: expose a name to UI Automation (ToolTip is only help text).
+        System.Windows.Automation.AutomationProperties.SetName(BtnMiniPrev, Loc.T("hotkey.prev"));
+        System.Windows.Automation.AutomationProperties.SetName(BtnMiniNext, Loc.T("hotkey.next"));
+        System.Windows.Automation.AutomationProperties.SetName(BtnMiniAb, Loc.T("overlay.ab"));
+        System.Windows.Automation.AutomationProperties.SetName(BtnCollapse, Loc.T("overlay.collapse"));
+        System.Windows.Automation.AutomationProperties.SetName(BtnHide, Loc.T("overlay.hide"));
         TxtMini.Text = Loc.T("overlay.mini");
         LblPanelOpacityTitle.Text = Loc.T("overlay.panelOpacity");
         ChkLockColor.Content = Loc.T("color.lock");

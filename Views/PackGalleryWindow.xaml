@@ -10,7 +10,7 @@
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="36" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
-    <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource BgBrush}">
+    <Border x:Name="ChromeRoot" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource BgBrush}" Opacity="0">
         <Grid Margin="18">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -30,7 +30,7 @@
 
             <ScrollViewer Grid.Row="1" Margin="0,14,0,12" VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="0,0,8,0">
-                    <TextBlock x:Name="LblHint" Text="Apply a built-in pack to the game selected on the Presets tab."
+                    <TextBlock x:Name="LblHint" Text="Apply a built-in pack to the game selected in Presets."
                                Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     <TextBlock x:Name="LblAppliesTo" Text="" FontWeight="SemiBold" FontSize="12"
                                Foreground="{DynamicResource AccentBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
@@ -45,8 +45,8 @@
                                                 Style="{StaticResource CompactAccentButton}" MinWidth="72"
                                                 VerticalAlignment="Center" Click="ApplyPack_Click" Tag="{Binding}"/>
                                         <StackPanel Margin="0,0,10,0">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-                                            <TextBlock Text="{Binding Subtitle}"
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                                            <TextBlock Text="{Binding Subtitle}" TextWrapping="Wrap"
                                                        FontSize="11" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0"/>
                                         </StackPanel>
                                     </DockPanel>

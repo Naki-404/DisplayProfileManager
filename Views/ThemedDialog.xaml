@@ -12,7 +12,7 @@
         MaxWidth="460"
         Opacity="0"
         Loaded="Window_Loaded">
-    <Border x:Name="Card" Margin="12" CornerRadius="10"
+    <Border x:Name="Card" Margin="12" CornerRadius="14"
             Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.45" Color="#000000"/>
@@ -25,7 +25,7 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0" Background="{DynamicResource TitleBarBrush}" CornerRadius="10,10,0,0" Padding="14,8"
+            <Border Grid.Row="0" Background="{DynamicResource TitleBarBrush}" CornerRadius="14,14,0,0" Padding="14,8"
                     MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                 <DockPanel>
                     <Button x:Name="BtnClose" DockPanel.Dock="Right" Style="{StaticResource CaptionCloseButton}"
@@ -42,13 +42,17 @@
                 </DockPanel>
             </Border>
 
-            <TextBlock Grid.Row="1" x:Name="MessageText" Text=""
-                       Margin="18,16,18,12" Foreground="{DynamicResource TextBrush}" FontSize="13"
-                       TextWrapping="Wrap" LineHeight="19"/>
+            <!-- Long messages (e.g. the list of found games) scroll inside the card instead of growing past the screen. -->
+            <ScrollViewer Grid.Row="1" MaxHeight="420" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled" Margin="0,16,0,12">
+                <TextBlock x:Name="MessageText" Text=""
+                           Margin="18,0,18,0" Foreground="{DynamicResource TextBrush}" FontSize="13"
+                           TextWrapping="Wrap" LineHeight="19"/>
+            </ScrollViewer>
 
             <TextBox Grid.Row="2" x:Name="InputBox" Margin="18,0,18,16" Visibility="Collapsed"/>
 
-            <Border Grid.Row="3" Background="{DynamicResource TitleBarBrush}" CornerRadius="0,0,10,10" Padding="14,10">
+            <Border Grid.Row="3" Background="{DynamicResource TitleBarBrush}" CornerRadius="0,0,14,14" Padding="14,10">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button x:Name="BtnCancel" Content="Cancel" Style="{StaticResource GhostButton}"
                             MinWidth="80" Margin="0,0,8,0" Visibility="Collapsed" IsCancel="True" Click="Cancel_Click"/>

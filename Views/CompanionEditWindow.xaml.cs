@@ -12,8 +12,11 @@ public partial class CompanionEditWindow : Window
     public CompanionEditWindow(CompanionApp model)
     {
         InitializeComponent();
-        Opacity = 0;
-        Loaded += (_, _) => UiMotion.PopIn(this);
+        Loaded += (_, _) =>
+        {
+            OverlayWin32.EnsureInsideWorkArea(this);
+            UiMotion.PopIn(ChromeRoot);
+        };
         _model = model;
         ApplyLabels();
 
@@ -38,6 +41,7 @@ public partial class CompanionEditWindow : Window
         Title = Loc.T("companion.title");
         TxtTitle.Text = Loc.T("companion.title");
         BtnClose.ToolTip = Loc.T("btn.close");
+        System.Windows.Automation.AutomationProperties.SetName(BtnClose, Loc.T("btn.close"));
         LblLaunch.Text = Loc.T("companion.launch");
         ItmDirect.Content = Loc.T("companion.launch.direct");
         ItmTask.Content = Loc.T("companion.launch.task");

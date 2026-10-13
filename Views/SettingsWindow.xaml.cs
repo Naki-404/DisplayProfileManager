@@ -17,8 +17,11 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
-        Opacity = 0;
-        Loaded += (_, _) => UiMotion.PopIn(this);
+        Loaded += (_, _) =>
+        {
+            OverlayWin32.EnsureInsideWorkArea(this); // 560 DIP default: fits 1366×768 @125%; still clamps if needed
+            UiMotion.PopIn(ChromeRoot);
+        };
         Closing += (_, _) =>
         {
             if (!_committed) RevertPreview();
@@ -32,11 +35,10 @@ public partial class SettingsWindow : Window
     private void RevertPreview()
     {
         var ui = App.Services.Config.Current.Ui ?? new UiPreferences();
+        // Loc.Changed relabels the main window (once) when the locale actually changed.
         Loc.SetLocale(ui.Locale);
         ThemeService.Apply(ui);
         UiSound.ApplyFromConfig(ui);
-        if (Owner is MainWindow mw)
-            mw.ApplyLocalization();
         if (System.Windows.Application.Current is App app)
             app.RebuildTrayMenu();
     }
@@ -115,6 +117,7 @@ public partial class SettingsWindow : Window
     {
         Title = Loc.T("settings.title");
         if (BtnCaptionClose != null) BtnCaptionClose.ToolTip = Loc.T("btn.close");
+        System.Windows.Automation.AutomationProperties.SetName(BtnCaptionClose, Loc.T("btn.close"));
         if (LblConfigPath != null) LblConfigPath.Text = Loc.Tf("settings.configPath", App.Services.Config.ConfigPath);
         ChkAutostart.ToolTip = Loc.T("global.autostart.tip");
         ChkStartMin.ToolTip = Loc.T("global.startmin.tip");
@@ -189,11 +192,9 @@ public partial class SettingsWindow : Window
         if (!IsLoaded) return;
         if (CmbLang.SelectedItem is ComboBoxItem lang)
         {
+            // Loc.Changed relabels the main window while the dialog is open (deferred, once per change).
             Loc.SetLocale(lang.Tag?.ToString());
             ApplyLabels();
-            // Also refresh main window immediately while settings dialog is open
-            if (Owner is MainWindow mw)
-                mw.ApplyLocalization();
             if (System.Windows.Application.Current is App app)
                 app.RebuildTrayMenu();
         }

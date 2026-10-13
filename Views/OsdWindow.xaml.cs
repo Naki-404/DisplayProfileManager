@@ -59,14 +59,24 @@ public partial class OsdWindow : Window
         OverlayWin32.PlaceTopCenter(this, 48);
         OverlayWin32.StayTopmost(this);
 
-        Card.BeginAnimation(OpacityProperty, new DoubleAnimation(Card.Opacity, 1, TimeSpan.FromMilliseconds(140))
+        if (UiMotion.Reduced)
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-        });
-        Slide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(Slide.Y, 0, TimeSpan.FromMilliseconds(180))
+            Card.BeginAnimation(OpacityProperty, null);
+            Slide.BeginAnimation(TranslateTransform.YProperty, null);
+            Card.Opacity = 1;
+            Slide.Y = 0;
+        }
+        else
         {
-            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.3 }
-        });
+            Card.BeginAnimation(OpacityProperty, new DoubleAnimation(Card.Opacity, 1, TimeSpan.FromMilliseconds(140))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+            Slide.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(Slide.Y, 0, TimeSpan.FromMilliseconds(180))
+            {
+                EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.3 }
+            });
+        }
 
         int chars = title.Length + (subtitle?.Length ?? 0);
         _hold.Stop();
@@ -76,6 +86,13 @@ public partial class OsdWindow : Window
 
     private void FadeOut()
     {
+        if (UiMotion.Reduced)
+        {
+            Card.Opacity = 0;
+            Slide.Y = -8;
+            Hide();
+            return;
+        }
         var fade = new DoubleAnimation(Card.Opacity, 0, TimeSpan.FromMilliseconds(220))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }

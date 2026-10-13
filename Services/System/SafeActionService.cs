@@ -1,0 +1,193 @@
+namespace Visor.Services;
+
+/// <summary>
+/// Tiny apply / undo façade over <see cref="ISafeActionTarget"/>s with a persisted undo journal.
+/// Nothing is applied without an explicit call; every apply verifies by re-reading the real value;
+/// undo verifies that the setting is still what Visor set before reverting (else <see cref="SafeActionUndoResult.Conflict"/>).
+/// </summary>
+public sealed class SafeActionService
+{
+    private readonly Dictionary<string, ISafeActionTarget> _targets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Func<bool> _isGameSessionActive;
+    private readonly object _gate = new();
+
+    public SafeActionJournal Journal { get; }
+
+    /// <param name="isGameSessionActive">Seam for the session owner (MainWindow passes <c>() => Monitor.SnapshotActive</c>).</param>
+    public SafeActionService(SafeActionJournal journal, IEnumerable<ISafeActionTarget> targets,
+        Func<bool>? isGameSessionActive = null)
+    {
+        Journal = journal ?? throw new ArgumentNullException(nameof(journal));
+        ArgumentNullException.ThrowIfNull(targets);
+        foreach (var t in targets)
+            _targets[t.ActionId] = t;
+        _isGameSessionActive = isGameSessionActive ?? (() => false);
+    }
+
+    /// <summary>Real targets: Game Mode (HKCU) and the High performance power plan.</summary>
+    public static SafeActionService CreateDefault(string? configDirectory, Func<string, bool> setPlan,
+        Func<bool>? isGameSessionActive)
+    {
+        ArgumentNullException.ThrowIfNull(setPlan);
+        return new SafeActionService(
+            new SafeActionJournal(configDirectory),
+            new ISafeActionTarget[]
+            {
+                new GameModeSafeActionTarget(enable: true),
+                new GameModeSafeActionTarget(enable: false),
+                new PowerPlanSafeActionTarget(setPlan)
+            },
+            isGameSessionActive);
+    }
+
+    public IReadOnlyCollection<string> ActionIds => _targets.Keys.ToList();
+
+    public ISafeActionTarget? FindTarget(string actionId) =>
+        actionId != null && _targets.TryGetValue(actionId, out var t) ? t : null;
+
+    /// <summary>Current raw state of the target behind <paramref name="actionId"/> (null when unreadable / unknown).</summary>
+    public string? ReadState(string actionId) => FindTarget(actionId)?.ReadState();
+
+    /// <summary>True when the setting already satisfies the action's target (apply would be a no-op).</summary>
+    public bool IsAtTarget(string actionId)
+    {
+        var t = FindTarget(actionId);
+        if (t == null) return false;
+        var cur = t.ReadState();
+        var target = t.ResolveTargetState();
+        return cur != null && target != null && t.SatisfiesTarget(cur, target);
+    }
+
+    public SafeActionOutcome Apply(string actionId)
+    {
+        var target = FindTarget(actionId);
+        if (target == null)
+            return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.UnknownAction);
+
+        lock (_gate)
+        {
+            if (target.BlockedDuringGameSession && SafeInvoke(_isGameSessionActive))
+                return new SafeActionOutcome(SafeActionResult.Blocked, SafeActionCodes.SessionActive);
+
+            string? previous = target.ReadState();
+            if (previous == null)
+                return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.Unavailable);
+
+            string? targetState = target.ResolveTargetState();
+            if (targetState == null)
+                return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.SchemeMissing);
+
+            // Second click at target: nothing written, existing undo entry untouched.
+            if (target.SatisfiesTarget(previous, targetState))
+                return new SafeActionOutcome(SafeActionResult.NoOp);
+
+            bool wrote;
+            try { wrote = target.WriteState(targetState); }
+            catch (Exception ex)
+            {
+                AppLog.Warn(ex, "SafeAction apply " + actionId);
+                wrote = false;
+            }
+
+            string? after = target.ReadState();
+            bool atTarget = after != null && target.SatisfiesTarget(after, targetState);
+            if (atTarget)
+            {
+                Journal.Record(new SafeActionJournalEntry
+                {
+                    Key = target.JournalKey,
+                    ActionId = target.ActionId,
+                    Utc = DateTime.UtcNow,
+                    PreviousState = previous,
+                    TargetState = after!
+                });
+                return new SafeActionOutcome(SafeActionResult.Applied);
+            }
+
+            // Not at target. If the value moved anyway, keep a backup so the user can undo the partial change.
+            bool moved = after != null && !target.StatesEqual(after, previous);
+            if (moved)
+            {
+                Journal.Record(new SafeActionJournalEntry
+                {
+                    Key = target.JournalKey,
+                    ActionId = target.ActionId,
+                    Utc = DateTime.UtcNow,
+                    PreviousState = previous,
+                    TargetState = after!
+                });
+            }
+            return new SafeActionOutcome(SafeActionResult.Failed,
+                wrote ? SafeActionCodes.VerifyMismatch : SafeActionCodes.ApplyFailed);
+        }
+    }
+
+    /// <param name="actionId">Action id or its journal key (e.g. "gameMode" covers gameMode.on / gameMode.off).</param>
+    public bool CanUndo(string actionId) => FindEntry(actionId) != null;
+
+    /// <param name="actionId">Action id or its journal key.</param>
+    /// <param name="confirmedConflict">
+    /// True after the user confirmed a <see cref="SafeActionUndoResult.Conflict"/>: restore the journaled
+    /// previous state even though the setting no longer matches what Visor applied.
+    /// </param>
+    public SafeActionUndoOutcome Undo(string actionId, bool confirmedConflict = false)
+    {
+        lock (_gate)
+        {
+            var entry = FindEntry(actionId);
+            if (entry == null)
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.CannotRollback);
+            var target = FindTarget(entry.ActionId);
+            if (target == null)
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.UnknownAction);
+
+            string? current = target.ReadState();
+            if (current == null)
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.Unavailable);
+
+            if (target.StatesEqual(current, entry.PreviousState))
+            {
+                // Already back (e.g. the session snapshot restored it) — nothing to write.
+                Journal.Remove(entry.Key);
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Undone);
+            }
+
+            if (!confirmedConflict && !target.StatesEqual(current, entry.TargetState))
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Conflict, SafeActionCodes.Conflict);
+
+            bool wrote;
+            try { wrote = target.WriteState(entry.PreviousState); }
+            catch (Exception ex)
+            {
+                AppLog.Warn(ex, "SafeAction undo " + entry.ActionId);
+                wrote = false;
+            }
+
+            string? after = target.ReadState();
+            if (after != null && target.StatesEqual(after, entry.PreviousState))
+            {
+                Journal.Remove(entry.Key);
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Undone);
+            }
+            return new SafeActionUndoOutcome(SafeActionUndoResult.Failed,
+                wrote ? SafeActionCodes.RollbackVerifyMismatch : SafeActionCodes.ApplyFailed);
+        }
+    }
+
+    private SafeActionJournalEntry? FindEntry(string actionId)
+    {
+        if (string.IsNullOrWhiteSpace(actionId)) return null;
+        var target = FindTarget(actionId);
+        return Journal.Get(target?.JournalKey ?? actionId) ?? Journal.Get(actionId);
+    }
+
+    private static bool SafeInvoke(Func<bool> f)
+    {
+        try { return f(); }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "isGameSessionActive");
+            return false;
+        }
+    }
+}

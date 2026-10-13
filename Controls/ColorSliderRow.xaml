@@ -1,0 +1,20 @@
+<UserControl x:Class="Visor.Controls.ColorSliderRow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Margin="0,0,0,2">
+    <!-- One color slider row: name (104) · slider (*) · value (56). Styles live in App.xaml. -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="104"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="56"/>
+        </Grid.ColumnDefinitions>
+        <TextBlock x:Name="PART_Label" Style="{StaticResource SliderName}"/>
+        <Slider x:Name="PART_Slider" Grid.Column="1" Minimum="0" Maximum="1"
+                TickFrequency="0.01" SmallChange="0.01" LargeChange="0.05"
+                IsSnapToTickEnabled="True"
+                AutomationProperties.LabeledBy="{Binding ElementName=PART_Label}"
+                ValueChanged="Slider_ValueChanged"/>
+        <TextBlock x:Name="PART_Value" Grid.Column="2" Style="{StaticResource SliderValue}"/>
+    </Grid>
+</UserControl>

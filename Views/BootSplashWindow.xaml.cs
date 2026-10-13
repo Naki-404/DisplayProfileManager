@@ -25,13 +25,33 @@ public partial class BootSplashWindow : Window
             Close(); // shown modeless (Show), so DialogResult is not available
         }
 
-        if (FindResource("BootStory") is Storyboard sb)
+        bool reduced = UiMotion.Reduced;
+        if (!reduced && FindResource("BootStory") is Storyboard sb)
         {
             sb.Completed += (_, _) => Finish();
-            sb.Begin(this);
+            sb.Begin(this, true);
+            // Hidden early by the main window's ContentRendered: stop the spin so nothing keeps ticking.
+            IsVisibleChanged += (_, args) =>
+            {
+                if (args.NewValue is false && !done)
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        sb.Stop(this);
+                        Finish();
+                    });
+            };
+        }
+        else
+        {
+            // Reduced motion: static card, no spin / scale, and it goes away sooner.
+            Card.Opacity = 1;
+            CardScale.ScaleX = CardScale.ScaleY = 1;
+            IconScale.ScaleX = IconScale.ScaleY = 1;
+            BrandTitle.Opacity = 1;
+            Subtitle.Opacity = 1;
         }
 
-        var safety = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.4) };
+        var safety = new DispatcherTimer { Interval = TimeSpan.FromSeconds(reduced ? 1.2 : 2.4) };
         safety.Tick += (_, _) =>
         {
             safety.Stop();

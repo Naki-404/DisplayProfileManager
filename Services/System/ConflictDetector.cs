@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace Visor.Services;
@@ -25,21 +24,12 @@ public static class ConflictDetector
         var found = new List<string>();
         try
         {
-            var running = Process.GetProcesses();
-            try
+            // One Toolhelp32 snapshot, no Process objects (keeps the startup scan cheap).
+            var running = ProcessWatcher.RunningKeys(ConflictingProcessNames);
+            foreach (var name in ConflictingProcessNames)
             {
-                foreach (var name in ConflictingProcessNames)
-                {
-                    if (running.Any(p => MatchesName(p, name)))
-                        found.Add(name);
-                }
-            }
-            finally
-            {
-                foreach (var p in running)
-                {
-                    try { p.Dispose(); } catch { }
-                }
+                if (running.Contains(ProcessNames.Key(name)))
+                    found.Add(name);
             }
         }
         catch (Exception ex)
@@ -64,12 +54,6 @@ public static class ConflictDetector
         if (r.NightLightOn)
             parts.Add("Windows Night Light is on");
         return string.Join(" · ", parts);
-    }
-
-    private static bool MatchesName(Process p, string want)
-    {
-        try { return p.ProcessName.Equals(want, StringComparison.OrdinalIgnoreCase); }
-        catch { return false; }
     }
 
     /// <summary>

@@ -14,10 +14,10 @@ public partial class ProcessPickerWindow : Window
     public ProcessPickerWindow(IEnumerable<string> processes)
     {
         InitializeComponent();
-        Opacity = 0;
         Loaded += (_, _) =>
         {
-            UiMotion.PopIn(this);
+            OverlayWin32.EnsureInsideWorkArea(this);
+            UiMotion.PopIn(ChromeRoot);
             TxtFilter.Focus();
         };
         _all = processes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
@@ -29,6 +29,7 @@ public partial class ProcessPickerWindow : Window
         BtnCancel.Content = Loc.T("btn.cancel");
         BtnSelect.Content = Loc.T("picker.select");
         BtnClose.ToolTip = Loc.T("btn.close");
+        System.Windows.Automation.AutomationProperties.SetName(BtnClose, Loc.T("btn.close"));
         UpdateEmpty();
     }
 

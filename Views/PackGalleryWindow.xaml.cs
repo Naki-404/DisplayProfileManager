@@ -36,8 +36,11 @@ public partial class PackGalleryWindow : Window
     public PackGalleryWindow()
     {
         InitializeComponent();
-        Opacity = 0;
-        Loaded += (_, _) => UiMotion.PopIn(this);
+        Loaded += (_, _) =>
+        {
+            OverlayWin32.EnsureInsideWorkArea(this);
+            UiMotion.PopIn(ChromeRoot);
+        };
         PacksList.ItemsSource = _packs;
         LoadPacks();
         ApplyLabels();
@@ -91,6 +94,7 @@ public partial class PackGalleryWindow : Window
         LblHint.Text = Loc.T("presets.gallery.hint");
         BtnClose.Content = Loc.T("btn.close");
         BtnCaptionClose.ToolTip = Loc.T("btn.close");
+        System.Windows.Automation.AutomationProperties.SetName(BtnCaptionClose, Loc.T("btn.close"));
         foreach (var p in _packs)
             p.ApplyLabel = Loc.T("btn.apply");
     }

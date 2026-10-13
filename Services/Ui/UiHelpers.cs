@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Forms;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -16,6 +17,15 @@ namespace Visor;
 /// <summary>Short one-shot UI motion — Cubic/Back ease, no continuous timers after playback.</summary>
 internal static class UiMotion
 {
+    /// <summary>Hover / chrome transitions (buttons, tabs).</summary>
+    public const int FastMs = 120;
+    /// <summary>Default fade / soft content.</summary>
+    public const int NormalMs = 160;
+    /// <summary>Page / panel enter.</summary>
+    public const int SlowMs = 200;
+    /// <summary>Press scale snap.</summary>
+    public const int PressMs = 80;
+
     private static readonly IEasingFunction EaseOut = new CubicEase { EasingMode = EasingMode.EaseOut };
     private static readonly IEasingFunction EaseIn = new CubicEase { EasingMode = EasingMode.EaseIn };
     private static readonly IEasingFunction EaseInOut = new CubicEase { EasingMode = EasingMode.EaseInOut };
@@ -24,9 +34,39 @@ internal static class UiMotion
     private static DispatcherTimer? _toastHold;
     private static int _toastGen;
 
+    /// <summary>
+    /// Windows "Show animations" is off (SPI_GETCLIENTAREAANIMATION): decorative motion is skipped and
+    /// every helper jumps straight to its end state. Functional feedback (toast hold time) is kept.
+    /// </summary>
+    public static bool Reduced
+    {
+        get
+        {
+            try { return !SystemParameters.ClientAreaAnimation; }
+            catch { return false; }
+        }
+    }
+
+    /// <summary>
+    /// Chrome button/tab templates use instant Trigger setters (no Duration storyboards), so they
+    /// already honor reduced motion. Kept as a hook for future DynamicResource timing tokens.
+    /// </summary>
+    public static void SyncChromeDurations()
+    {
+        // Intentionally empty: StaticResource Duration + storyboards were removed after review
+        // proved resource swaps never reached already-parsed animations.
+    }
+
     public static void FadeTo(UIElement element, double to, Action? onCompleted = null, int ms = 160)
     {
         if (element == null) return;
+        if (Reduced)
+        {
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            element.Opacity = to;
+            onCompleted?.Invoke();
+            return;
+        }
         var anim = new DoubleAnimation(element.Opacity, to, TimeSpan.FromMilliseconds(ms))
         {
             EasingFunction = EaseInOut
@@ -38,7 +78,7 @@ internal static class UiMotion
 
     public static void PulseOpacity(UIElement element)
     {
-        if (element == null) return;
+        if (element == null || Reduced) return;
         var anim = new DoubleAnimationUsingKeyFrames
         {
             Duration = TimeSpan.FromMilliseconds(320),
@@ -50,10 +90,18 @@ internal static class UiMotion
     }
 
     /// <summary>Fade + soft upward slide for tab / panel content.</summary>
-    public static void FadeSlideIn(FrameworkElement element, double fromY = 10, int ms = 220)
+    public static void FadeSlideIn(FrameworkElement element, double fromY = 10, int ms = 200)
     {
         if (element == null) return;
         EnsureTranslate(element, out var tt);
+        if (Reduced)
+        {
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            tt.BeginAnimation(TranslateTransform.YProperty, null);
+            element.Opacity = 1;
+            tt.Y = 0;
+            return;
+        }
         element.Opacity = 0;
         tt.Y = fromY;
 
@@ -64,7 +112,7 @@ internal static class UiMotion
     }
 
     /// <summary>Tab content: soft brightness nudge — no hard flash.</summary>
-    public static void SoftContentIn(FrameworkElement element, int ms = 200)
+    public static void SoftContentIn(FrameworkElement element, int ms = SlowMs)
     {
         if (element == null) return;
 
@@ -76,6 +124,7 @@ internal static class UiMotion
 
         element.BeginAnimation(UIElement.OpacityProperty, null);
         element.Opacity = 1;
+        if (Reduced) return;
 
         var anim = new DoubleAnimation(0.92, 1, TimeSpan.FromMilliseconds(ms))
         {
@@ -84,10 +133,38 @@ internal static class UiMotion
         element.BeginAnimation(UIElement.OpacityProperty, anim);
     }
 
-    /// <summary>Window open: fade + soft overshoot scale.</summary>
-    public static void PopIn(FrameworkElement element, int ms = 240)
+    /// <summary>Tab / section host enter: soft rise + fade (falls back instantly when Reduced).</summary>
+    public static void PageFadeIn(FrameworkElement element, int ms = SlowMs) =>
+        FadeSlideIn(element, fromY: 8, ms: ms);
+
+    /// <summary>Brief opacity flash after a successful action (save / apply) — never blocks the command.</summary>
+    public static void FlashSuccess(FrameworkElement element)
+    {
+        if (element == null || Reduced) return;
+        var anim = new DoubleAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromMilliseconds(380),
+            FillBehavior = FillBehavior.Stop
+        };
+        anim.KeyFrames.Add(new EasingDoubleKeyFrame(0.72, KeyTime.FromPercent(0.35), EaseOut));
+        anim.KeyFrames.Add(new EasingDoubleKeyFrame(1.0, KeyTime.FromPercent(1.0), EaseOut));
+        element.BeginAnimation(UIElement.OpacityProperty, anim);
+    }
+
+    /// <summary>
+    /// Window open: fade + soft overshoot scale. Pass the window's root element (not the Window itself):
+    /// WPF ignores RenderTransform on a Window, and Opacity on one without AllowsTransparency.
+    /// </summary>
+    public static void PopIn(FrameworkElement element, int ms = 200)
     {
         if (element == null) return;
+        bool isWindow = element is Window;
+        if (Reduced || isWindow)
+        {
+            element.BeginAnimation(UIElement.OpacityProperty, null);
+            element.Opacity = 1;
+            return;
+        }
         EnsureScale(element, out var scale);
         element.Opacity = 0;
         scale.ScaleX = scale.ScaleY = 0.94;
@@ -103,7 +180,7 @@ internal static class UiMotion
     /// <summary>Window hide: fade + soft scale-down.</summary>
     public static void PopOut(FrameworkElement element, Action? onCompleted = null, int ms = 150)
     {
-        if (element == null)
+        if (element == null || Reduced || element is Window)
         {
             onCompleted?.Invoke();
             return;
@@ -137,6 +214,7 @@ internal static class UiMotion
         if (host == null) return;
         if (label != null && text != null)
             label.Text = text;
+        AnnounceLiveRegion(label);
         int hold = holdMs ?? ToastHoldMs(text ?? label?.Text);
 
         _toastHold?.Stop();
@@ -144,13 +222,8 @@ internal static class UiMotion
 
         EnsureTranslate(host, out var tt);
         host.Visibility = Visibility.Visible;
-        host.Opacity = 0;
-        tt.Y = 14;
 
-        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200)) { EasingFunction = EaseOut };
-        var slideIn = new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = BackOut };
-
-        fadeIn.Completed += (_, _) =>
+        void StartHold()
         {
             if (gen != _toastGen) return;
             _toastHold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(hold) };
@@ -158,6 +231,11 @@ internal static class UiMotion
             {
                 _toastHold.Stop();
                 if (gen != _toastGen) return;
+                if (Reduced)
+                {
+                    host.Visibility = Visibility.Collapsed;
+                    return;
+                }
 
                 var fadeOut = new DoubleAnimation(host.Opacity, 0, TimeSpan.FromMilliseconds(200))
                 {
@@ -173,10 +251,46 @@ internal static class UiMotion
                     new DoubleAnimation(0, 8, TimeSpan.FromMilliseconds(200)) { EasingFunction = EaseIn });
             };
             _toastHold.Start();
-        };
+        }
+
+        if (Reduced)
+        {
+            host.BeginAnimation(UIElement.OpacityProperty, null);
+            tt.BeginAnimation(TranslateTransform.YProperty, null);
+            host.Opacity = 1;
+            tt.Y = 0;
+            StartHold();
+            return;
+        }
+
+        host.Opacity = 0;
+        tt.Y = 14;
+
+        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200)) { EasingFunction = EaseOut };
+        var slideIn = new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = BackOut };
+        fadeIn.Completed += (_, _) => StartHold();
 
         host.BeginAnimation(UIElement.OpacityProperty, fadeIn);
         tt.BeginAnimation(TranslateTransform.YProperty, slideIn);
+    }
+
+    /// <summary>Screen readers only announce a live region when LiveRegionChanged is raised for it.</summary>
+    public static void AnnounceLiveRegion(UIElement? element)
+    {
+        if (element == null) return;
+        try
+        {
+            if (System.Windows.Automation.AutomationProperties.GetLiveSetting(element)
+                == System.Windows.Automation.AutomationLiveSetting.Off)
+                return;
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.FromElement(element)
+                       ?? System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(element);
+            peer?.RaiseAutomationEvent(System.Windows.Automation.Peers.AutomationEvents.LiveRegionChanged);
+        }
+        catch (Exception ex)
+        {
+            Visor.Services.AppLog.Warn(ex, "Live region announce");
+        }
     }
 
     /// <summary>Dismisses the current toast immediately (e.g. after Undo was clicked).</summary>
@@ -185,6 +299,12 @@ internal static class UiMotion
         if (host == null) return;
         _toastHold?.Stop();
         int gen = ++_toastGen;
+        if (Reduced)
+        {
+            host.BeginAnimation(UIElement.OpacityProperty, null);
+            host.Visibility = Visibility.Collapsed;
+            return;
+        }
         var fadeOut = new DoubleAnimation(host.Opacity, 0, TimeSpan.FromMilliseconds(140)) { EasingFunction = EaseIn };
         fadeOut.Completed += (_, _) =>
         {
@@ -219,6 +339,51 @@ internal static class UiMotion
         scale = new ScaleTransform(1, 1);
         element.RenderTransform = scale;
         element.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+    }
+}
+
+/// <summary>
+/// Scrollable control nested inside a page ScrollViewer (e.g. a short ListBox in a form): WPF's inner
+/// ScrollViewer swallows every wheel tick, so the page stops scrolling as soon as the pointer crosses the
+/// list. This hands the wheel back to the parent whenever the inner control cannot scroll further.
+/// </summary>
+internal static class NestedScroll
+{
+    public static void ForwardWheelAtEdge(FrameworkElement inner)
+    {
+        if (inner == null) return;
+        inner.PreviewMouseWheel += (s, e) =>
+        {
+            if (e.Handled || s is not FrameworkElement fe) return;
+            var sv = FindScrollViewer(fe);
+            if (sv != null && sv.ScrollableHeight > 0)
+            {
+                bool canScroll = e.Delta < 0
+                    ? sv.VerticalOffset < sv.ScrollableHeight - 0.5
+                    : sv.VerticalOffset > 0.5;
+                if (canScroll) return;
+            }
+
+            e.Handled = true;
+            if (VisualTreeHelper.GetParent(fe) is not UIElement parent) return;
+            parent.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+            {
+                RoutedEvent = UIElement.MouseWheelEvent,
+                Source = fe
+            });
+        };
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        if (root is ScrollViewer sv) return sv;
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var found = FindScrollViewer(VisualTreeHelper.GetChild(root, i));
+            if (found != null) return found;
+        }
+        return null;
     }
 }
 
