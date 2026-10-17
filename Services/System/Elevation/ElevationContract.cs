@@ -25,6 +25,18 @@ public enum ElevatedOpKind
     PowerDuplicateScheme,
     /// <summary>Target = HKLM key path, Name = value name, Value = hex bytes (REG_BINARY, e.g. "020000000000000000000000").</summary>
     RegSetBinary,
+    /// <summary>
+    /// No parameters (Target = "", Name and Value null). Clears the Delivery Optimization cache with the documented
+    /// <c>Delete-DeliveryOptimizationCache -Force</c> cmdlet (fixed command string, pinned files kept).
+    /// Output = freed bytes (decimal) when the helper could measure before and after.
+    /// </summary>
+    DeliveryOptimizationClear,
+    /// <summary>
+    /// Target = "", Name null, Value = GUID ("D" form) of a power scheme Visor created (the duplicated Ultimate
+    /// Performance plan). Built-in scheme GUIDs are refused. Runs <c>powercfg /delete &lt;guid&gt;</c>; Windows itself
+    /// refuses to delete the active scheme, and Visor never asks while it is active (switch away first).
+    /// </summary>
+    PowerDeleteScheme,
 }
 
 public sealed record ElevatedOp(ElevatedOpKind Kind, string Target, string? Name = null, string? Value = null);

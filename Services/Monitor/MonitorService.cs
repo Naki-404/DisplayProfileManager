@@ -1,14 +1,14 @@
+using Visor.Services.FrameCapture;
+
 namespace Visor.Services;
 
 public enum MonitorState
 {
     Idle,
-    /// <summary>Looking for / verifying PresentMon.exe (synchronous, fast).</summary>
-    Locating,
-    /// <summary>UAC prompt shown; waiting for the first frame.</summary>
+    /// <summary>UAC prompt shown / capture helper starting; waiting for the first frame.</summary>
     Starting,
     Capturing,
-    /// <summary>Stop helper launched (second UAC); waiting for the capture to exit.</summary>
+    /// <summary>Stop byte sent; waiting for the capture helper to end its session.</summary>
     Stopping,
     /// <summary>Last capture ended with an error (<see cref="MonitorService.LastError"/>); cleared by the next start.</summary>
     Error
@@ -17,28 +17,26 @@ public enum MonitorState
 public enum MonitorErrorCode
 {
     None,
-    /// <summary>PresentMon.exe is not installed (see docs\MONITOR-PRESENTMON.md to drop it in).</summary>
-    BinaryMissing,
-    /// <summary>A PresentMon.exe was found but is neither Intel-signed nor pinned.</summary>
-    Unverified,
     /// <summary>The user declined the elevation prompt.</summary>
     UacDeclined,
-    /// <summary>The target exe is not running (checked before the UAC prompt).</summary>
+    /// <summary>The target exe is not running (checked before the UAC prompt, and again by the helper).</summary>
     ProcessNotFound,
-    /// <summary>PresentMon exited with an error before producing data (ETW session could not start).</summary>
+    /// <summary>The ETW session could not start (access denied, session limit, another tool holding it).</summary>
     EtwFailed,
-    /// <summary>PresentMon could not be launched (policy / blocked file / IO).</summary>
+    /// <summary>The capture helper could not be launched or refused to run.</summary>
     StartFailed,
-    /// <summary>PresentMon ran but produced no data (target never presented / exited at once).</summary>
+    /// <summary>Capturing, but the target never presented a frame.</summary>
     NoOutput,
-    /// <summary>The CSV could not be read.</summary>
+    /// <summary>The capture helper's data stream was malformed.</summary>
     OutputUnreadable,
-    /// <summary>The stop helper was declined or failed; the capture keeps running until the game exits or the cap.</summary>
+    /// <summary>The stop request could not be delivered; the helper still ends with the game, with Visor, or at the safety cap.</summary>
     StopFailed,
     /// <summary>Another capture is already running.</summary>
     Busy,
     /// <summary>The exe name is not a plain file name.</summary>
-    InvalidTarget
+    InvalidTarget,
+    /// <summary>No elevated helper can be started here (Visor runs under the dotnet host / a test runner, not as Visor.exe).</summary>
+    ElevationUnavailable
 }
 
 public readonly record struct MonitorStartResult(bool Started, MonitorErrorCode Error, string Detail)
@@ -48,23 +46,27 @@ public readonly record struct MonitorStartResult(bool Started, MonitorErrorCode 
 }
 
 /// <summary>
-/// Facade over locator + session + stats: one capture at a time, never auto-started, state
-/// machine Idle → Locating → Starting(UAC) → Capturing → Stopping → Idle | Error. Events fire
-/// on worker threads; UI code marshals. Per-second summaries go to <see cref="SummaryUpdated"/>
-/// and, as named <c>MetricSample</c>s, to every attached <see cref="IMetricSink"/>.
+/// Facade over the built-in frame capture + stats: one capture at a time, never auto-started,
+/// state machine Idle → Starting(UAC) → Capturing → Stopping → Idle | Error. Events fire on worker
+/// threads; UI code marshals. Per-second summaries (with the limiter estimate from
+/// <see cref="BoundEstimator"/>) go to <see cref="SummaryUpdated"/> and, as named
+/// <c>MetricSample</c>s, to every attached <see cref="IMetricSink"/>.
 /// </summary>
 public sealed class MonitorService : IDisposable
 {
     public const int SummaryIntervalMs = 1000;
 
-    private readonly Func<string?, PresentMonLocateResult> _locate;
-    private readonly Func<string, IPresentMonSession> _sessionFactory;
+    private readonly Func<IFrameCaptureSession> _sessionFactory;
     private readonly Func<string, bool> _isProcessRunning;
+    private readonly Func<bool> _captureSupported;
+    private readonly IBoundSignals? _signals;
     private readonly object _gate = new();
     private readonly List<IMetricSink> _sinks = new();
+    private readonly Queue<double> _gpuSamples = new();
     private readonly System.Threading.Timer _summaryTimer;
 
-    private IPresentMonSession? _session;
+    private IFrameCaptureSession? _session;
+    private IDisposable? _signalToken;
     private MonitorState _state = MonitorState.Idle;
     private MonitorErrorCode _lastError = MonitorErrorCode.None;
     private string _lastErrorDetail = "";
@@ -73,23 +75,22 @@ public sealed class MonitorService : IDisposable
     private string _target = "";
     private bool _disposed;
 
-    /// <summary>Production wiring: real locator, real elevated session, process check via the kernel PID list.</summary>
+    /// <summary>Production wiring: built-in elevated capture, process check via the kernel PID list, NvAPI GPU load + display refresh.</summary>
     public MonitorService(double windowSeconds = 10)
-        : this(new PresentMonLocator(), path => new PresentMonSession(path), null, windowSeconds) { }
+        : this(() => new NativeFrameCaptureSession(), null, windowSeconds, new SystemBoundSignals(), () => NativeFrameCaptureSession.IsSupported) { }
 
-    public MonitorService(PresentMonLocator locator, Func<string, IPresentMonSession> sessionFactory,
-        Func<string, bool>? isProcessRunning = null, double windowSeconds = 10)
-        : this(locator.Locate, sessionFactory, isProcessRunning, windowSeconds)
+    /// <param name="sessionFactory">One new session per capture.</param>
+    /// <param name="isProcessRunning">Pre-flight "is the game running" (default: kernel PID list).</param>
+    /// <param name="windowSeconds">Stats window.</param>
+    /// <param name="boundSignals">GPU load / refresh for the limiter estimate; null = estimate stays Unknown.</param>
+    /// <param name="captureSupported">False → <see cref="MonitorErrorCode.ElevationUnavailable"/> without any prompt. Default: true.</param>
+    public MonitorService(Func<IFrameCaptureSession> sessionFactory, Func<string, bool>? isProcessRunning = null,
+        double windowSeconds = 10, IBoundSignals? boundSignals = null, Func<bool>? captureSupported = null)
     {
-        ArgumentNullException.ThrowIfNull(locator);
-    }
-
-    public MonitorService(Func<string?, PresentMonLocateResult> locate, Func<string, IPresentMonSession> sessionFactory,
-        Func<string, bool>? isProcessRunning = null, double windowSeconds = 10)
-    {
-        _locate = locate ?? throw new ArgumentNullException(nameof(locate));
         _sessionFactory = sessionFactory ?? throw new ArgumentNullException(nameof(sessionFactory));
         _isProcessRunning = isProcessRunning ?? (exe => ProcessSnapshot.IsRunning(ProcessNames.Key(exe)));
+        _captureSupported = captureSupported ?? (() => true);
+        _signals = boundSignals;
         Stats = new FrameStats(windowSeconds);
         _summaryTimer = new System.Threading.Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
     }
@@ -103,14 +104,19 @@ public sealed class MonitorService : IDisposable
 
     public FrameStats Stats { get; }
     public FrameStatsSummary LastSummary { get; private set; } = FrameStatsSummary.Empty;
-    /// <summary>Result of the last <see cref="Locate"/> / start attempt (for the settings UI).</summary>
-    public PresentMonLocateResult? LastLocate { get; private set; }
-
-    /// <summary>Optional: a user-configured PresentMon.exe path (file or folder). Null = default folders only.</summary>
-    public string? UserConfiguredPath { get; set; }
 
     /// <summary>When true (default) the target exe must already be running; otherwise the UAC prompt is skipped and <see cref="MonitorErrorCode.ProcessNotFound"/> is returned.</summary>
     public bool RequireRunningTarget { get; set; } = true;
+
+    /// <summary>True when a capture can be started at all (Visor runs as its own exe, so the helper can be elevated).</summary>
+    public bool IsCaptureSupported
+    {
+        get
+        {
+            try { return _captureSupported(); }
+            catch (Exception) { return false; }
+        }
+    }
 
     public event Action<MonitorState, MonitorErrorCode>? StateChanged;
     public event Action<FrameStatsSummary>? SummaryUpdated;
@@ -127,16 +133,8 @@ public sealed class MonitorService : IDisposable
         lock (_gate) _sinks.Remove(sink);
     }
 
-    /// <summary>Finds PresentMon without starting anything (settings page / pre-flight).</summary>
-    public PresentMonLocateResult Locate()
-    {
-        var r = _locate(UserConfiguredPath);
-        LastLocate = r;
-        return r;
-    }
-
     /// <summary>
-    /// Explicit user action only. Synchronously locates and launches; the UAC prompt appears
+    /// Explicit user action only. Synchronously launches the capture helper; the UAC prompt appears
     /// inside this call. Returns a failure result instead of throwing for every expected case.
     /// </summary>
     public MonitorStartResult StartCapture(string exeName)
@@ -144,27 +142,16 @@ public sealed class MonitorService : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_state is MonitorState.Locating or MonitorState.Starting or MonitorState.Capturing or MonitorState.Stopping)
+            if (_state is MonitorState.Starting or MonitorState.Capturing or MonitorState.Stopping)
                 return MonitorStartResult.Fail(MonitorErrorCode.Busy, $"already capturing {_target}");
         }
 
         var exe = ProcessNames.ToExeName(exeName);
         if (!ProcessNames.IsPlainExeName(exe))
-            return FailNow(MonitorErrorCode.InvalidTarget, $"'{exeName}' is not a plain exe name");
+            return FailNow(MonitorErrorCode.InvalidTarget, $"'{exeName}' is not a plain exe name", exe);
 
-        SetState(MonitorState.Locating, MonitorErrorCode.None, "", target: exe);
-
-        PresentMonLocateResult located;
-        try { located = Locate(); }
-        catch (Exception ex)
-        {
-            AppLog.Error(ex, "PresentMon locate");
-            return FailNow(MonitorErrorCode.BinaryMissing, ex.Message);
-        }
-        if (located.Status == PresentMonStatus.Missing)
-            return FailNow(MonitorErrorCode.BinaryMissing, located.Detail);
-        if (located.Status == PresentMonStatus.Unverified)
-            return FailNow(MonitorErrorCode.Unverified, located.Detail);
+        if (!IsCaptureSupported)
+            return FailNow(MonitorErrorCode.ElevationUnavailable, "built-in capture needs Visor.exe (dotnet host / test runner)", exe);
 
         if (RequireRunningTarget)
         {
@@ -172,15 +159,15 @@ public sealed class MonitorService : IDisposable
             try { running = _isProcessRunning(exe); }
             catch (Exception ex) { AppLog.Warn(ex, "process check"); running = true; }   // unknown ≠ not running
             if (!running)
-                return FailNow(MonitorErrorCode.ProcessNotFound, $"{exe} is not running");
+                return FailNow(MonitorErrorCode.ProcessNotFound, $"{exe} is not running", exe);
         }
 
-        IPresentMonSession session;
-        try { session = _sessionFactory(located.Path!); }
+        IFrameCaptureSession session;
+        try { session = _sessionFactory(); }
         catch (Exception ex)
         {
-            AppLog.Error(ex, "PresentMon session");
-            return FailNow(MonitorErrorCode.StartFailed, ex.Message);
+            AppLog.Error(ex, "Frame capture session");
+            return FailNow(MonitorErrorCode.StartFailed, ex.Message, exe);
         }
 
         lock (_gate)
@@ -188,21 +175,22 @@ public sealed class MonitorService : IDisposable
             _session = session;
             _pendingError = MonitorErrorCode.None;
             _pendingDetail = "";
+            _gpuSamples.Clear();
         }
         Stats.Clear();
         LastSummary = FrameStatsSummary.Empty;
         session.Frame += OnFrame;
         session.Error += OnSessionError;
         session.Exited += OnSessionExited;
-        SetState(MonitorState.Starting, MonitorErrorCode.None, "");
+        SetState(MonitorState.Starting, MonitorErrorCode.None, "", target: exe);
 
         try
         {
-            session.Start(PresentMonTarget.ForExe(exe));
+            session.Start(FrameCaptureTarget.ForExe(exe));
         }
         catch (Exception ex)
         {
-            AppLog.Error(ex, "PresentMon session start");
+            AppLog.Error(ex, "Frame capture start");
             DetachSession(session);
             return FailNow(MonitorErrorCode.StartFailed, ex.Message);
         }
@@ -213,16 +201,17 @@ public sealed class MonitorService : IDisposable
             if (_state == MonitorState.Error)
                 return MonitorStartResult.Fail(_lastError, _lastErrorDetail);
             if (_state == MonitorState.Idle)
-                return MonitorStartResult.Fail(MonitorErrorCode.NoOutput, "PresentMon exited immediately");
+                return MonitorStartResult.Fail(MonitorErrorCode.NoOutput, "capture ended immediately");
         }
+        BeginSignals();
         _summaryTimer.Change(SummaryIntervalMs, SummaryIntervalMs);
         return MonitorStartResult.Ok;
     }
 
-    /// <summary>Explicit user action; the real session shows a second UAC prompt for the stop helper.</summary>
+    /// <summary>Explicit user action. Sends the stop byte — no second UAC prompt.</summary>
     public void StopCapture()
     {
-        IPresentMonSession? session;
+        IFrameCaptureSession? session;
         lock (_gate)
         {
             if (_state is not (MonitorState.Starting or MonitorState.Capturing)) return;
@@ -232,8 +221,8 @@ public sealed class MonitorService : IDisposable
         try { session?.RequestStop(); }
         catch (Exception ex)
         {
-            AppLog.Error(ex, "PresentMon stop");
-            OnSessionError(PresentMonErrorCode.StopFailed, ex.Message);
+            AppLog.Error(ex, "Frame capture stop");
+            OnSessionError(FrameCaptureErrorCode.StopFailed, ex.Message);
         }
     }
 
@@ -253,7 +242,7 @@ public sealed class MonitorService : IDisposable
             if (_state is not (MonitorState.Capturing or MonitorState.Stopping)) return LastSummary;
             sinks = _sinks.ToArray();
         }
-        var summary = Stats.Snapshot();
+        var summary = WithBound(Stats.Snapshot(), SampleGpu(), SafeRefresh());
         LastSummary = summary;
         try { SummaryUpdated?.Invoke(summary); } catch (Exception ex) { AppLog.Warn(ex, "Monitor summary handler"); }
         if (summary.FrameCount > 0 && sinks.Length > 0)
@@ -271,6 +260,57 @@ public sealed class MonitorService : IDisposable
         return summary;
     }
 
+    /// <summary>Adds the limiter estimate to a stats snapshot (pure).</summary>
+    internal static FrameStatsSummary WithBound(FrameStatsSummary summary, double? avgGpuPercent, double? refreshHz)
+    {
+        if (summary.FrameCount == 0) return summary;
+        var (bound, evidence) = BoundEstimator.Classify(new BoundInputs(
+            summary.FrameCount, summary.AvgFps, summary.FrameTimeCv, avgGpuPercent, refreshHz));
+        return summary with { Bound = bound, BoundEvidence = evidence };
+    }
+
+    /// <summary>Reads the GPU load once per tick and returns the average over the stats window (null when never available).</summary>
+    private double? SampleGpu()
+    {
+        double? now = null;
+        try { now = _signals?.GpuUtilizationPercent(); }
+        catch (Exception ex) { AppLog.Warn(ex, "Monitor: GPU load"); }
+        lock (_gate)
+        {
+            if (now is double v && double.IsFinite(v))
+            {
+                _gpuSamples.Enqueue(v);
+                int max = Math.Max(1, (int)Math.Ceiling(Stats.WindowSeconds * 1000 / SummaryIntervalMs));
+                while (_gpuSamples.Count > max) _gpuSamples.Dequeue();
+            }
+            return _gpuSamples.Count > 0 ? _gpuSamples.Average() : null;
+        }
+    }
+
+    private double? SafeRefresh()
+    {
+        try { return _signals?.DisplayRefreshHz(); }
+        catch (Exception) { return null; }
+    }
+
+    private void BeginSignals()
+    {
+        if (_signals == null) return;
+        IDisposable? token = null;
+        try { token = _signals.BeginCapture(); }
+        catch (Exception ex) { AppLog.Warn(ex, "Monitor: bound signals"); }
+        IDisposable? old;
+        lock (_gate) { old = _signalToken; _signalToken = token; }
+        old?.Dispose();
+    }
+
+    private void EndSignals()
+    {
+        IDisposable? token;
+        lock (_gate) { token = _signalToken; _signalToken = null; }
+        try { token?.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "Monitor: bound signals end"); }
+    }
+
     private void OnFrame(FrameRecord frame)
     {
         Stats.Add(frame);
@@ -280,7 +320,7 @@ public sealed class MonitorService : IDisposable
         try { FrameReceived?.Invoke(frame); } catch (Exception ex) { AppLog.Warn(ex, "Monitor frame handler"); }
     }
 
-    private void OnSessionError(PresentMonErrorCode code, string detail)
+    private void OnSessionError(FrameCaptureErrorCode code, string detail)
     {
         var mapped = Map(code);
         if (mapped == MonitorErrorCode.StopFailed)
@@ -296,14 +336,14 @@ public sealed class MonitorService : IDisposable
             if (wasStopping) SetState(MonitorState.Capturing, mapped, detail, keepError: true);
             return;
         }
-        // NoOutput is advisory while the process is alive (game not started yet); every code
-        // becomes the final reason only if the session then exits without data.
+        // NoOutput is advisory while the helper runs (game not presenting yet); every code becomes
+        // the final reason only if the session then ends without data.
         lock (_gate) { _pendingError = mapped; _pendingDetail = detail; }
     }
 
     private void OnSessionExited(int? exitCode)
     {
-        IPresentMonSession? session;
+        IFrameCaptureSession? session;
         MonitorErrorCode pending;
         string pendingDetail;
         bool hadFrames = Stats.TotalAdded > 0;
@@ -316,39 +356,42 @@ public sealed class MonitorService : IDisposable
             _pendingDetail = "";
         }
         _summaryTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        EndSignals();
         if (session != null) DetachSession(session);
         if (pending != MonitorErrorCode.None && !(pending == MonitorErrorCode.NoOutput && hadFrames))
             SetState(MonitorState.Error, pending, pendingDetail);
         else if (!hadFrames && pending == MonitorErrorCode.None && State == MonitorState.Starting)
-            SetState(MonitorState.Error, MonitorErrorCode.NoOutput, $"PresentMon exited (code {exitCode?.ToString() ?? "?"}) without data");
+            SetState(MonitorState.Error, MonitorErrorCode.NoOutput, $"capture ended (helper exit {exitCode?.ToString() ?? "?"}) without frames");
         else
             SetState(MonitorState.Idle, MonitorErrorCode.None, "");
     }
 
-    private static MonitorErrorCode Map(PresentMonErrorCode code) => code switch
+    internal static MonitorErrorCode Map(FrameCaptureErrorCode code) => code switch
     {
-        PresentMonErrorCode.UacDeclined => MonitorErrorCode.UacDeclined,
-        PresentMonErrorCode.StartFailed => MonitorErrorCode.StartFailed,
-        PresentMonErrorCode.ExitedWithError => MonitorErrorCode.EtwFailed,
-        PresentMonErrorCode.NoOutput => MonitorErrorCode.NoOutput,
-        PresentMonErrorCode.OutputUnreadable => MonitorErrorCode.OutputUnreadable,
-        PresentMonErrorCode.StopFailed => MonitorErrorCode.StopFailed,
+        FrameCaptureErrorCode.UacDeclined => MonitorErrorCode.UacDeclined,
+        FrameCaptureErrorCode.StartFailed => MonitorErrorCode.StartFailed,
+        FrameCaptureErrorCode.EtwFailed => MonitorErrorCode.EtwFailed,
+        FrameCaptureErrorCode.ProcessNotFound => MonitorErrorCode.ProcessNotFound,
+        FrameCaptureErrorCode.NoOutput => MonitorErrorCode.NoOutput,
+        FrameCaptureErrorCode.StreamUnreadable => MonitorErrorCode.OutputUnreadable,
+        FrameCaptureErrorCode.ElevationUnavailable => MonitorErrorCode.ElevationUnavailable,
+        FrameCaptureErrorCode.StopFailed => MonitorErrorCode.StopFailed,
         _ => MonitorErrorCode.None
     };
 
-    private MonitorStartResult FailNow(MonitorErrorCode code, string detail)
+    private MonitorStartResult FailNow(MonitorErrorCode code, string detail, string? target = null)
     {
-        SetState(MonitorState.Error, code, detail);
+        SetState(MonitorState.Error, code, detail, target);
         return MonitorStartResult.Fail(code, detail);
     }
 
-    private void DetachSession(IPresentMonSession session)
+    private void DetachSession(IFrameCaptureSession session)
     {
         session.Frame -= OnFrame;
         session.Error -= OnSessionError;
         session.Exited -= OnSessionExited;
         lock (_gate) if (ReferenceEquals(_session, session)) _session = null;
-        try { session.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "PresentMon session dispose"); }
+        try { session.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "Frame capture session dispose"); }
     }
 
     private void SetState(MonitorState state, MonitorErrorCode error, string detail, string? target = null, bool keepError = false)
@@ -370,7 +413,7 @@ public sealed class MonitorService : IDisposable
 
     public void Dispose()
     {
-        IPresentMonSession? session;
+        IFrameCaptureSession? session;
         lock (_gate)
         {
             if (_disposed) return;
@@ -379,14 +422,15 @@ public sealed class MonitorService : IDisposable
             _session = null;
         }
         _summaryTimer.Dispose();
+        EndSignals();
         if (session != null)
         {
-            // Visor is closing: we stop listening; the elevated capture ends on its own
-            // (--terminate_on_proc_exit / --timed). No UAC prompt from Dispose, ever.
+            // Visor is closing: disposing the session closes the pipe, and the elevated helper stops
+            // its ETW session on the broken pipe (and on Visor's exit). No UAC prompt from Dispose, ever.
             session.Frame -= OnFrame;
             session.Error -= OnSessionError;
             session.Exited -= OnSessionExited;
-            try { session.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "PresentMon session dispose"); }
+            try { session.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "Frame capture session dispose"); }
         }
     }
 }

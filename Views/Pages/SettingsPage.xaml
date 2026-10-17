@@ -120,31 +120,14 @@
                 </ScrollViewer>
             </Border>
 
-            <!-- Monitor (PresentMon path + FPS overlay) -->
+            <!-- FPS monitor (built-in capture: only the overlay is configurable) -->
             <Border x:Name="PanelMonitor" Style="{StaticResource CardSurface}" Padding="0" Visibility="Collapsed">
                 <!-- Inset 8/2/8 keeps the overlay scrollbar inside the card's 14-DIP rounded corners. -->
                 <ScrollViewer Margin="0,8,2,8" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                               CanContentScroll="False" PanningMode="VerticalOnly">
                     <StackPanel MaxWidth="640" HorizontalAlignment="Left" Margin="20,8,22,8">
-                        <TextBlock x:Name="LblMonitorTitle" Text="Monitor" Style="{StaticResource SectionTitle}" Margin="0,0,0,4"/>
-                        <TextBlock x:Name="LblMonitorHint" Style="{StaticResource Hint}" FontSize="12" Margin="0,0,0,10"/>
-                        <TextBlock x:Name="LblPresentMonPath" Text="PresentMon path" Style="{StaticResource FieldLabel}"/>
-                        <DockPanel>
-                            <Button x:Name="BtnPresentMonBrowse" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
-                                    Margin="8,0,0,0" Click="PresentMonBrowse_Click"/>
-                            <Button x:Name="BtnPresentMonLocate" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
-                                    Margin="8,0,0,0" Click="PresentMonLocate_Click"/>
-                            <TextBox x:Name="TxtPresentMonPath" AutomationProperties.LabeledBy="{Binding ElementName=LblPresentMonPath}"
-                                     TextChanged="PresentMonPath_TextChanged"/>
-                        </DockPanel>
-                        <DockPanel Margin="0,8,0,0">
-                            <controls:StatusDot x:Name="DotPresentMon" DockPanel.Dock="Left" Margin="0,4,8,0" VerticalAlignment="Top"/>
-                            <TextBlock x:Name="TxtPresentMonStatus" Style="{StaticResource Hint}" FontSize="12"
-                                       AutomationProperties.LiveSetting="Polite"/>
-                        </DockPanel>
-                        <Button x:Name="BtnPresentMonDownload" Style="{StaticResource LinkButton}" HorizontalAlignment="Left"
-                                Margin="0,6,0,0" Click="PresentMonDownload_Click"/>
-                        <Separator Margin="0,16,0,12"/>
+                        <TextBlock x:Name="LblMonitorTitle" Text="FPS monitor" Style="{StaticResource SectionTitle}" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="LblMonitorHint" Style="{StaticResource Hint}" FontSize="12" Margin="0,0,0,12"/>
                         <CheckBox x:Name="ChkMonitorOsd" IsChecked="True" Checked="GlobalEditorChanged" Unchecked="GlobalEditorChanged"/>
                         <TextBlock x:Name="LblMonitorOsdHint" Style="{StaticResource Hint}" Margin="0,6,0,0"/>
                     </StackPanel>

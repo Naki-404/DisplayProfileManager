@@ -273,9 +273,6 @@ public class PathGuardTests
     [InlineData(@"Assets/Sounds/click.wav")]
     [InlineData(@"assets\sounds\CLICK.WAV")]
     [InlineData(@"Assets\Packs\tarkov.json")]
-    [InlineData(@"tools\presentmon\PresentMon.exe")]
-    [InlineData(@"tools/presentmon/README.md")]
-    [InlineData(@"TOOLS\PRESENTMON\presentmon.exe")]
     public void IsKnownAppFile_accepts_the_shipped_file_set(string rel) =>
         Assert.True(PathGuard.IsKnownAppFile(rel), rel);
 
@@ -292,10 +289,8 @@ public class PathGuardTests
     [InlineData(@"Assets\Other\x.wav")]
     [InlineData(@"Assets\x.wav")]
     [InlineData(@"Sounds\click.wav")]
-    [InlineData(@"tools\presentmon\other.exe")]   // only the pinned PresentMon files
-    [InlineData(@"tools\PresentMon.exe")]
-    [InlineData(@"tools\presentmon\sub\PresentMon.exe")]
-    [InlineData(@"presentmon\PresentMon.exe")]
+    [InlineData(@"tools\x.exe")]                 // no third-party tools folder ships with Visor
+    [InlineData(@"tools\sub\x.exe")]
     [InlineData(@"..\Visor.exe")]
     [InlineData(@"sub\Visor.exe")]
     [InlineData("")]

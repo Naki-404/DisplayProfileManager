@@ -5,7 +5,7 @@ namespace Visor.Services.Optimize;
 /// <summary>Why an Optimize card has no Apply button.</summary>
 public enum OptimizeInfoKind
 {
-    /// <summary>Needs HKLM / elevation — Visor never elevates; the card only shows the current state.</summary>
+    /// <summary>Needs HKLM / elevation — changed only through the elevated helper (one UAC prompt per change).</summary>
     RequiresAdmin,
     /// <summary>Already handled per game by the profile system (power plan) — read-only status.</summary>
     ManagedByProfile,
@@ -48,6 +48,10 @@ public static class OptimizeStatus
     public const string HagsId = "hags";
     public const string PowerPerGameId = "powerPerGame";
     public const string VisualEffectsId = "visualEffects";
+    /// <summary>In-app visual effects action (<see cref="Pc.VisualEffectsSafeActionTarget"/>, journal key / Loc prefix "optimize.visualFx").</summary>
+    public const string VisualFxId = Pc.VisualEffectsSafeActionTarget.Key;
+    /// <summary>Delivery Optimization cache row in Cleanup (<see cref="Pc.DeliveryOptimizationService"/>, Loc prefix "optimize.doCache").</summary>
+    public const string DeliveryOptimizationId = "doCache";
     /// <summary>PC tweak panels (Services\System\Optimize\Pc) — Loc prefix "optimize.{id}".</summary>
     public const string StartupAppsId = "startupApps";
     public const string CleanupId = "cleanup";
@@ -123,7 +127,10 @@ public static class OptimizeStatus
         };
     }
 
-    /// <summary>Visual effects stay manual (Performance Options) — see the report / Loc why text.</summary>
+    /// <summary>
+    /// Legacy read-only card from before visual effects became an in-app action. The Graphics section now renders
+    /// <see cref="Pc.VisualEffectsSafeActionTarget"/> (<see cref="VisualFxId"/>) instead; kept for the info-card API.
+    /// </summary>
     public static OptimizeInfoItem VisualEffectsItem() => new()
     {
         Id = VisualEffectsId,

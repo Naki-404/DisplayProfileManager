@@ -108,7 +108,50 @@ public partial class OptimizePage
         row.AddAction(Loc.T("system.rollback"), accent: false,
             run: () => UndoAndRefreshAsync(UltimatePlanTarget.Key),
             enabled: Safe.CanUndo(UltimatePlanTarget.Key));
+        if (_snap.UltimateCreatedGuid != null)
+        {
+            // Only the scheme Visor created, never while it is the active plan (or a game session owns the plan).
+            bool createdActive = active && string.Equals(_snap.UltimateCreatedGuid, _snap.UltimateGuid, StringComparison.OrdinalIgnoreCase);
+            row.AddAction(Loc.T("optimize.ultimatePlan.remove"), accent: false, run: RemoveUltimateAsync,
+                enabled: !createdActive && !session,
+                tooltip: session ? Loc.T("safeAction.code.sessionActive")
+                    : createdActive ? Loc.T("optimize.ultimatePlan.remove.active")
+                    : Loc.T("optimize.ultimatePlan.remove.tip"),
+                busyText: Loc.T("optimize.ui.busy.uac"));
+        }
         return row;
+    }
+
+    private async Task RemoveUltimateAsync()
+    {
+        string msg = Loc.T("optimize.ultimatePlan.remove.confirm") + "\n\n" + Loc.T("net.tweak.status.uacHint") + ".";
+        if (!ThemedDialog.Confirm(Host.Window, msg, Loc.T("optimize.ultimatePlan.title"), Loc.T("optimize.ultimatePlan.remove")))
+            return;
+        UltimateRemoveResult r;
+        try
+        {
+            r = await Task.Run(() => App.Services.Pc.Ultimate.RemoveCreatedAsync());
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Ultimate plan remove");
+            r = new UltimateRemoveResult(UltimateRemoveStatus.Failed, SafeActionCodes.ElevationFailed);
+        }
+        switch (r.Status)
+        {
+            case UltimateRemoveStatus.Removed:
+            case UltimateRemoveStatus.NothingToRemove:
+                App.Services.History.Add("safeAction", detail: "ultimatePlan.remove");
+                Host.ShowToast(Loc.T("optimize.ultimatePlan.removed"));
+                break;
+            case UltimateRemoveStatus.Active:
+                Host.ShowToast(Loc.T("optimize.ultimatePlan.remove.active"));
+                break;
+            default:
+                Host.ShowToast(SafeActionUi.FailText(r.Code ?? SafeActionCodes.ApplyFailed));
+                break;
+        }
+        await RefreshNowAsync();
     }
 
     private async Task CreateUltimateAsync()
@@ -220,27 +263,32 @@ public partial class OptimizePage
         }
         TxtPerGameEmpty.Visibility = PerGameList.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        // HAGS shortcut: state here, the switch lives in System (one place to change it).
+        // HAGS: the same in-app switch as in System (same target, same journal slot) — no Windows Settings link.
         GfxHagsList.Children.Clear();
-        var h = _snap.Hags;
-        var hags = new TweakRow(Loc.T("optimize.hagsMode.title"))
-            .SetStatus(HagsStatusText(h), h?.Supported == false ? StatusKind.Unknown : StatusDot.FromBool(h?.EffectiveOn, StatusKind.Unknown));
-        if (h?.PendingRestart == true)
-            hags.AddBadge(Loc.T("optimize.hagsMode.restartBadge"), "WarningBrush", "WarningBrush", Loc.T("optimize.hagsMode.pendingRestart"));
-        hags.AddAction(Loc.T("optimize.ui.goSystem"), accent: false, link: true, run: () =>
-        {
-            ShowSection(OptimizeSection.System);
-            return Task.CompletedTask;
-        });
-        hags.AddAction(Loc.T("optimize.ui.openSettings"), accent: false, link: true, run: () =>
-        {
-            OpenShell("ms-settings:display-advancedgraphics");
-            return Task.CompletedTask;
-        });
-        GfxHagsList.Children.Add(hags);
+        GfxHagsList.Children.Add(BuildHagsRow());
 
+        // Visual effects: in-app action with exact undo (HKCU, no admin) — replaces the Performance Options dialog.
         GfxInfoList.Children.Clear();
-        GfxInfoList.Children.Add(BuildInfoCard(OptimizeStatus.VisualEffectsItem()));
+        GfxInfoList.Children.Add(BuildVisualFxRow());
+    }
+
+    private TweakRow BuildVisualFxRow()
+    {
+        bool? on = _snap.VisualFxOn;
+        var row = new TweakRow(Loc.T("optimize.visualFx.title"))
+            .SetStatus(on == null ? Loc.T("system.unavailable")
+                    : Loc.T(on.Value ? "optimize.visualFx.status.on" : "optimize.visualFx.status.off"),
+                on == null ? StatusKind.Unknown : on.Value ? StatusKind.Unknown : StatusKind.Ok)
+            .AddLine(Loc.T("optimize.visualFx.fpsNote"))
+            .SetDetails(Loc.T("optimize.visualFx.why"), Loc.T("optimize.visualFx.risk"), Loc.T("optimize.visualFx.undo"));
+        if (_snap.VisualFxEffects is { Count: > 0 } fx) row.AddChips(fx);
+        row.AddAction(Loc.T("optimize.visualFx.apply"), accent: true,
+            run: () => ApplyAndRefreshAsync(VisualEffectsSafeActionTarget.Id),
+            enabled: on == true);
+        row.AddAction(Loc.T("system.rollback"), accent: false,
+            run: () => UndoAndRefreshAsync(VisualEffectsSafeActionTarget.Key),
+            enabled: Safe.CanUndo(VisualEffectsSafeActionTarget.Key));
+        return row;
     }
 
     private TweakRow BuildPerGameRow(string actionId, string name, string exePath, string status, StatusKind dot, bool applyEnabled)
@@ -284,16 +332,9 @@ public partial class OptimizePage
             .SetDetails(Loc.T(item.WhyKey), Loc.T(item.RiskKey), null);
         if (item.Evidence.Length > 0) row.AddChips(item.Evidence);
 
-        // The only control: a link to where the setting really lives.
+        // The only control: in-app navigation to where the setting really lives.
         switch (item.Id)
         {
-            case OptimizeStatus.VisualEffectsId:
-                row.AddAction(Loc.T("optimize.ui.openPerfOptions"), accent: false, link: true, run: () =>
-                {
-                    OpenShell("SystemPropertiesPerformance.exe");
-                    return Task.CompletedTask;
-                });
-                break;
             case OptimizeStatus.PowerPerGameId:
                 row.AddAction(Loc.T("rec.emptyLibrary.action"), accent: false, link: true, run: () =>
                 {

@@ -1004,7 +1004,7 @@ public partial class MainWindow : Window, IShellHost
             new() { Id = "nav.games", Title = Loc.T("nav.games"), Group = nav, SearchText = "ctrl+3" },
             new() { Id = "nav.optimize", Title = Loc.T("nav.optimize"), Group = nav, SearchText = "ctrl+4" },
             new() { Id = "nav.network", Title = Loc.T("nav.network"), Group = nav, SearchText = "ctrl+5" },
-            new() { Id = "nav.monitor", Title = Loc.T("nav.monitor"), Group = nav, SearchText = "ctrl+6 fps frametime presentmon" },
+            new() { Id = "nav.monitor", Title = Loc.T("nav.monitor"), Group = nav, SearchText = "ctrl+6 fps frametime capture etw" },
             new() { Id = "nav.settings", Title = Loc.T("nav.settings"), Group = nav, SearchText = "ctrl+7" },
             new() { Id = "cmd.preferences", Title = Loc.T("shell.preferences"), Subtitle = Loc.T("shell.preferences.tip"), Group = nav },
             new()

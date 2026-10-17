@@ -229,6 +229,40 @@ public class LocTests
     }
 
     [Fact]
+    public void Obsolete_external_tool_and_shortcut_keys_are_gone()
+    {
+        // FPS capture is built in (no external binary to locate, verify or download), and the in-app pass
+        // replaced the "open Windows dialog" shortcuts — none of these keys may come back.
+        var map = Table();
+        foreach (var key in new[]
+                 {
+                     "monitor.uac.stop", "monitor.err.binaryMissing", "monitor.err.binaryMissing.body", "monitor.err.unverified",
+                     "monitor.err.unverified.body", "monitor.locate.found", "monitor.locate.unverified", "monitor.locate.missing",
+                     "monitor.choosePath", "monitor.settings.hint", "monitor.settings.path", "monitor.settings.locate",
+                     "monitor.openDownload", "monitor.verify.None", "monitor.verify.AuthenticodeIntel", "monitor.verify.PinnedHash",
+                     "monitor.verify.DevOverride", "monitor.state.locating", "hw.stability.openEventViewer",
+                     "hw.stability.openEventViewer.fail", "optimize.ui.openPerfOptions", "optimize.ui.openSettings",
+                     "optimize.ui.goSystem", "optimize.cleanup.infoOnly", "optimize.cleanup.openStorage",
+                     "optimize.cleanup.cat.deliveryOptimization", "net.sug.dnsManual"
+                 })
+            Assert.False(map.ContainsKey(key), key);
+        // Old external tool name, split so a repo-wide grep for it only finds historical docs.
+        const string oldTool = "Present" + "Mon";
+        foreach (var (key, (en, ru)) in map)
+        {
+            Assert.DoesNotContain(oldTool, en, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(oldTool, ru, StringComparison.OrdinalIgnoreCase);
+            if (key is "autostart.failed" or "optimize.startup.readOnly")
+            {
+                Assert.DoesNotContain("Task Manager", en);
+                Assert.DoesNotContain("Диспетчер", ru);
+            }
+        }
+        Assert.True(map.ContainsKey("monitor.err.elevationUnavailable"));
+        Assert.True(map.ContainsKey("net.sug.dnsInApp"));
+    }
+
+    [Fact]
     public void Shell_strings_exist_and_say_nothing_about_round_the_clock_support()
     {
         var map = Table();

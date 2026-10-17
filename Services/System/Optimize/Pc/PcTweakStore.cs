@@ -56,6 +56,18 @@ public sealed class PcTweakStore
         }
     }
 
+    /// <summary>Forgets the created scheme (after Visor removed it, or when it no longer exists).</summary>
+    public void ClearCreatedUltimate()
+    {
+        lock (_gate)
+        {
+            if (_data.CreatedUltimateGuid == null && _data.CreatedUltimateUtc == null) return;
+            _data.CreatedUltimateGuid = null;
+            _data.CreatedUltimateUtc = null;
+            Save();
+        }
+    }
+
     private void Load()
     {
         if (_path == null || !File.Exists(_path)) return;

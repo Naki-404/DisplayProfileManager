@@ -11,14 +11,14 @@ public static class MonitorMetricNames
     public const string FrameTimeMs = "frametimeMs";
     public const string FrameTimeP99Ms = "frametimeP99Ms";
     public const string Stutters = "stutters";
-    /// <summary>Only emitted when PresentMon attributed input to at least one frame in the window.</summary>
+    /// <summary>Only emitted when input latency was measured for at least one frame in the window (never by the built-in capture today).</summary>
     public const string ClickToPhotonMs = "clickToPhotonMs";
 }
 
 /// <summary>
 /// Receiver of per-second monitor samples (<see cref="MetricSample"/> from
 /// <c>Services\System\Optimize</c>). Called on a timer thread; implementations must be quick
-/// and must not throw. Only measured values are exported — a metric PresentMon did not report
+/// and must not throw. Only measured values are exported — a metric the capture did not measure
 /// is simply absent, never zero.
 /// </summary>
 public interface IMetricSink

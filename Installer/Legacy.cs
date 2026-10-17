@@ -33,10 +33,9 @@ internal sealed class LegacyInstall
         @"Assets\Sounds\ui_open.wav", @"Assets\Sounds\ui_preset.wav", @"Assets\Sounds\ui_save.wav",
         @"Assets\Sounds\ui_warn.wav", @"Assets\Sounds\ui_work_loop.wav",
         @"Assets\Packs\pubg.json", @"Assets\Packs\tarkov.json", @"Assets\Packs\valorant.json",
-        Product.PresentMonExe, Product.PresentMonReadme,
     };
 
-    private static readonly string[] KnownDirs = { @"Assets\Sounds", @"Assets\Packs", "Assets", @"tools\presentmon", "tools" };
+    private static readonly string[] KnownDirs = { @"Assets\Sounds", @"Assets\Packs", "Assets" };
 
     private LegacyInstall(string? dir, bool hasArpKey)
     {

@@ -14,7 +14,7 @@ public sealed class AppServices : IDisposable
     public ActivityHistoryStore History { get; }
     /// <summary>1 Hz hardware sensors; samples only while a page holds a <see cref="SensorService.Subscribe"/> token.</summary>
     public SensorService Sensors { get; }
-    /// <summary>FPS / frametime capture via PresentMon (named FrameMonitor: <see cref="Monitor"/> is the profile monitor).</summary>
+    /// <summary>FPS / frametime capture via the built-in ETW engine (named FrameMonitor: <see cref="Monitor"/> is the profile monitor).</summary>
     public MonitorService FrameMonitor { get; }
     /// <summary>Per-action elevated helper (one UAC prompt per apply / undo). Visor itself never runs elevated.</summary>
     public Services.Elevation.ElevationBroker Elevation { get; }
@@ -218,8 +218,8 @@ public sealed class AppServices : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        // FrameMonitor first: it only stops listening — the elevated PresentMon capture ends on its own
-        // (--terminate_on_proc_exit / --timed); no UAC prompt is ever shown from the exit path.
+        // FrameMonitor first: it closes the capture pipe — the elevated --frame-capture helper ends on the
+        // broken pipe / Visor's exit (or its time cap); no UAC prompt is ever shown from the exit path.
         try { FrameMonitor.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "Frame monitor dispose"); }
         try { Zoom.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "Zoom dispose"); }
         try { Monitor.Dispose(); } catch (Exception ex) { AppLog.Warn(ex, "Monitor dispose"); }

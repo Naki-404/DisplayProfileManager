@@ -14,7 +14,8 @@ public sealed record DiagnosisEvidence(string Key, params object[] Args);
 
 /// <summary>
 /// One hypothesis with the numbers that support it. <see cref="Key"/> is a Loc key (net.diag.*),
-/// <see cref="Suggestions"/> are Loc keys (net.sug.*) for safe, manual actions only.
+/// <see cref="Suggestions"/> are Loc keys (net.sug.*) for safe actions; <see cref="DiagnosisEngine.SuggestionSubSection"/>
+/// says which ones open a Visor section (e.g. the DNS test) instead of being plain advice.
 /// </summary>
 public sealed class DiagnosisFinding
 {
@@ -88,13 +89,18 @@ public static class DiagnosisEngine
     public const string SugBand5 = "net.sug.band5";
     public const string SugRestartRouter = "net.sug.restartRouter";
     public const string SugCheckCable = "net.sug.checkCable";
-    public const string SugDnsManual = "net.sug.dnsManual";
+    /// <summary>Points at Network → DNS (resolver test + one-click switch with undo); the UI renders it as a link.</summary>
+    public const string SugDnsInApp = "net.sug.dnsInApp";
     public const string SugContactIsp = "net.sug.contactIsp";
     public const string SugDuplexAuto = "net.sug.duplexAuto";
     public const string SugMtuCheck = "net.sug.mtuCheck";
     public const string SugIcmpFiltered = "net.sug.icmpFiltered";
     public const string SugRunLonger = "net.sug.runLonger";
     public const string SugDhcpRenew = "net.sug.dhcpRenew";
+
+    /// <summary>Network sub-section a suggestion links to ("dns"), or null when it is plain advice.</summary>
+    public static string? SuggestionSubSection(string suggestionKey) =>
+        string.Equals(suggestionKey, SugDnsInApp, StringComparison.OrdinalIgnoreCase) ? "dns" : null;
 
     // Evidence keys
     public const string EvWifiSignal = "net.ev.wifiSignal";   // {0} quality %, {1} dBm
@@ -300,7 +306,7 @@ public static class DiagnosisEngine
                     Severity = pingFine ? DiagnosisSeverity.Problem : DiagnosisSeverity.Warning,
                     Key = KeyDnsFail,
                     Evidence = ev,
-                    Suggestions = new[] { SugDnsManual, SugRestartRouter }
+                    Suggestions = new[] { SugDnsInApp, SugRestartRouter }
                 });
             }
             else if (slow.Count > 0 && (pingFine || !pingKnown))
@@ -313,7 +319,7 @@ public static class DiagnosisEngine
                     Key = KeyDnsSlow,
                     Args = new object[] { R(slow.Max(d => d.Ms!.Value)) },
                     Evidence = ev,
-                    Suggestions = new[] { SugDnsManual }
+                    Suggestions = new[] { SugDnsInApp }
                 });
             }
         }

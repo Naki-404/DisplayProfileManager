@@ -873,7 +873,23 @@ public partial class NetworkPage : ShellPageBase
         {
             col.Children.Add(Hint(Loc.T("net.report.try"), new Thickness(0, 6, 0, 0)));
             foreach (var s in f.Suggestions)
-                col.Children.Add(Hint("– " + Loc.T(s), new Thickness(8, 2, 0, 0)));
+            {
+                // In-app suggestions (DNS test) are links to the Visor section that does it.
+                if (DiagnosisEngine.SuggestionSubSection(s) is { } sub)
+                {
+                    var link = new System.Windows.Controls.Button
+                    {
+                        Content = new TextBlock { Text = "– " + Loc.T(s), TextWrapping = TextWrapping.Wrap },
+                        Margin = new Thickness(8, 2, 0, 0),
+                        HorizontalAlignment = System.Windows.HorizontalAlignment.Left
+                    };
+                    link.SetResourceReference(StyleProperty, "LinkButton");
+                    link.Click += (_, _) => ShowSubSection(sub);
+                    col.Children.Add(link);
+                }
+                else
+                    col.Children.Add(Hint("– " + Loc.T(s), new Thickness(8, 2, 0, 0)));
+            }
         }
         card.Child = col;
         return card;

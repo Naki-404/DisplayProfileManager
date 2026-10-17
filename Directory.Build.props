@@ -2,8 +2,8 @@
   <!-- Single source of truth for version and branding (app + installer).
        build-release.ps1 reads <Version> from here. -->
   <PropertyGroup>
-    <Version>2.1.0</Version>
-    <FileVersion>2.1.0.0</FileVersion>
+    <Version>2.2.0</Version>
+    <FileVersion>2.2.0.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
     <!-- Keep InformationalVersion clean ("2.0.0", not "2.0.0+<git sha>"); the UI shows it. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

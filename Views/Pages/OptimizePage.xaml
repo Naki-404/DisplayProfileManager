@@ -100,7 +100,7 @@
                             <StackPanel x:Name="SystemGpuList"/>
                         </StackPanel>
                     </Border>
-                    <!-- Managed / info: read-only cards (no buttons that do nothing; links to the Windows dialog instead). -->
+                    <!-- Managed / info: read-only cards (no buttons that do nothing; in-app navigation only). -->
                     <Border Style="{StaticResource CardSurface}">
                         <StackPanel>
                             <TextBlock x:Name="LblInfo" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
@@ -110,7 +110,7 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ================= GRAPHICS: per-game FSO · HAGS shortcut · visual effects ================= -->
+                <!-- ================= GRAPHICS: per-game FSO · HAGS switch (same row as System) · visual effects (in-app, undoable) ================= -->
                 <StackPanel x:Name="PanelGraphics" Visibility="Collapsed">
                     <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
                         <StackPanel>
@@ -191,7 +191,7 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ================= CLEANUP: measured caches, one category per explicit click ================= -->
+                <!-- ================= CLEANUP: measured caches, one category per explicit click; Delivery Optimization via one UAC prompt ================= -->
                 <StackPanel x:Name="PanelCleanup" Visibility="Collapsed">
                     <Border Style="{StaticResource CardSurface}">
                         <StackPanel>

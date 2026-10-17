@@ -1,16 +1,18 @@
 namespace Visor.Services;
 
 /// <summary>
-/// One presented (or dropped) frame as reported by PresentMon. All durations are milliseconds;
-/// optional values are null when the CSV has no such column or the cell is "NA".
+/// One frame of the captured game. All durations are milliseconds. The built-in capture
+/// (<c>Services\Monitor\Native</c>) measures present-to-present time only; the optional values
+/// (GPU / CPU busy, display latency, click-to-photon, dropped) need tracking of the whole present
+/// lifecycle (DWM, flip queue, vsync) and are null / false — every consumer treats null as "not measured".
 /// </summary>
-/// <param name="Time">Seconds since the capture started (PresentMon <c>CPUStartTime</c> / <c>TimeInSeconds</c>).</param>
-/// <param name="FrameTimeMs">Time between this present and the previous one (<c>FrameTime</c> / <c>msBetweenPresents</c>).</param>
-/// <param name="GpuBusyMs">GPU execution time for the frame (<c>GPUBusy</c> / <c>msGPUActive</c>).</param>
-/// <param name="CpuBusyMs">CPU time spent producing the frame (<c>CPUBusy</c>; 1.x has no equivalent).</param>
-/// <param name="DisplayLatencyMs">Present-to-scanout latency (<c>DisplayLatency</c> / <c>msUntilDisplayed</c>).</param>
-/// <param name="ClickToPhotonMs">Input-to-photon latency when PresentMon could attribute input (<c>ClickToPhotonLatency</c>).</param>
-/// <param name="Dropped">The frame was never displayed.</param>
+/// <param name="Time">Seconds since the capture started (first present seen).</param>
+/// <param name="FrameTimeMs">Time between this present and the previous one of the same swap chain.</param>
+/// <param name="GpuBusyMs">GPU execution time for the frame (not measured by the built-in capture).</param>
+/// <param name="CpuBusyMs">CPU time spent producing the frame (not measured by the built-in capture).</param>
+/// <param name="DisplayLatencyMs">Present-to-scanout latency (not measured by the built-in capture).</param>
+/// <param name="ClickToPhotonMs">Input-to-photon latency (not measured by the built-in capture).</param>
+/// <param name="Dropped">The frame was never displayed (not measured by the built-in capture).</param>
 public readonly record struct FrameRecord(
     double Time,
     double FrameTimeMs,
@@ -20,10 +22,10 @@ public readonly record struct FrameRecord(
     double? ClickToPhotonMs,
     bool Dropped)
 {
-    /// <summary>Process the frame belongs to (PresentMon <c>Application</c> column), when known.</summary>
+    /// <summary>Process the frame belongs to, when known.</summary>
     public string? Application { get; init; }
 
-    /// <summary>PID of the presenting process, or 0 when the column is absent.</summary>
+    /// <summary>PID of the presenting process, or 0 when unknown.</summary>
     public int ProcessId { get; init; }
 
     /// <summary>Instantaneous FPS for this frame (0 when the frame time is not positive).</summary>

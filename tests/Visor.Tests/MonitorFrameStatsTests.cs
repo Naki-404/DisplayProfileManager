@@ -84,53 +84,29 @@ public class MonitorFrameStatsTests
     }
 
     [Fact]
-    public void Bound_gpu_when_gpu_busy_dominates()
+    public void Compute_leaves_the_bound_to_the_service_and_keeps_busy_averages()
     {
         var frames = Enumerable.Range(1, 60).Select(i => F(i * 0.0166, 16.6, gpu: 15.5, cpu: 6)).ToList();
         var s = FrameStats.Compute(frames);
-        Assert.Equal(BoundKind.LikelyGpu, s.Bound);
-        Assert.Contains("GPU busy", s.BoundEvidence);
-        Assert.Contains("93", s.BoundEvidence);
-    }
-
-    [Fact]
-    public void Bound_cpu_when_gpu_idles_and_cpu_busy_dominates()
-    {
-        var frames = Enumerable.Range(1, 60).Select(i => F(i * 0.02, 20, gpu: 6, cpu: 18)).ToList();
-        var s = FrameStats.Compute(frames);
-        Assert.Equal(BoundKind.LikelyCpu, s.Bound);
-        Assert.Contains("CPU busy", s.BoundEvidence);
-        Assert.Contains("GPU busy", s.BoundEvidence);
-    }
-
-    [Fact]
-    public void Bound_capped_when_both_idle()
-    {
-        var frames = Enumerable.Range(1, 60).Select(i => F(i * 0.0166, 16.6, gpu: 5, cpu: 4)).ToList();
-        Assert.Equal(BoundKind.LikelyCappedOrBalanced, FrameStats.Compute(frames).Bound);
-    }
-
-    [Fact]
-    public void Bound_unknown_without_gpu_data_or_too_few_frames()
-    {
-        var noGpu = Enumerable.Range(1, 60).Select(i => F(i * 0.0166, 16.6, cpu: 4)).ToList();
-        var s = FrameStats.Compute(noGpu);
         Assert.Equal(BoundKind.Unknown, s.Bound);
         Assert.Equal("", s.BoundEvidence);
-        Assert.Null(s.AvgGpuBusyMs);
-        Assert.Equal(4, s.AvgCpuBusyMs);
-
-        var few = Enumerable.Range(1, 10).Select(i => F(i * 0.0166, 16.6, gpu: 16, cpu: 4)).ToList();
-        Assert.Equal(BoundKind.Unknown, FrameStats.Compute(few).Bound);
+        Assert.Equal(15.5, s.AvgGpuBusyMs!.Value, 6);
+        Assert.Equal(6, s.AvgCpuBusyMs!.Value, 6);
     }
 
     [Fact]
-    public void Bound_1x_without_cpu_column_uses_gpu_only()
+    public void Frame_time_spread_is_population_stddev_and_cv()
     {
-        var frames = Enumerable.Range(1, 60).Select(i => F(i * 0.02, 20, gpu: 5)).ToList();
+        // 10 and 20 ms alternating: mean 15, population stddev 5, CV 1/3.
+        var frames = Enumerable.Range(1, 100).Select(i => F(i * 0.015, i % 2 == 0 ? 10 : 20)).ToList();
         var s = FrameStats.Compute(frames);
-        Assert.Equal(BoundKind.LikelyCpu, s.Bound);
-        Assert.Contains("no CPUBusy", s.BoundEvidence);
+        Assert.Equal(15, s.AvgFrameTimeMs, 9);
+        Assert.Equal(5, s.FrameTimeStdDevMs, 9);
+        Assert.Equal(1.0 / 3, s.FrameTimeCv, 9);
+
+        var steady = Enumerable.Range(1, 100).Select(i => F(i * 0.01, 10)).ToList();
+        Assert.Equal(0, FrameStats.Compute(steady).FrameTimeCv, 12);
+        Assert.Equal(0, FrameStatsSummary.Empty.FrameTimeCv);
     }
 
     [Fact]

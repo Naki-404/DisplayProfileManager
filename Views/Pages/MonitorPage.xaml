@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Visor"
         xmlns:controls="clr-namespace:Visor.Controls">
-    <!-- Monitor: FPS / frametime capture through Intel PresentMon (elevated, user-started only). -->
+    <!-- Monitor: FPS / frametime capture through Visor's built-in ETW engine (elevated helper, user-started only). -->
     <local:ShellPageBase.Resources>
         <Style x:Key="StatCard" TargetType="Border" BasedOn="{StaticResource CardSurface}">
             <Setter Property="Padding" Value="12,10"/>
@@ -26,7 +26,8 @@
                 <StackPanel>
                     <DockPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Button x:Name="BtnMonStart" Style="{StaticResource CompactAccentButton}" Click="Start_Click"/>
+                            <Button x:Name="BtnMonStart" Style="{StaticResource CompactAccentButton}" Click="Start_Click"
+                                    ToolTipService.ShowOnDisabled="True"/>
                             <Button x:Name="BtnMonStop" Style="{StaticResource CompactGhostButton}" Margin="8,0,0,0"
                                     Click="Stop_Click" IsEnabled="False"/>
                         </StackPanel>
@@ -68,12 +69,6 @@
                     <TextBlock x:Name="TxtErrorDetail" Style="{StaticResource Hint}" FontFamily="Consolas" Margin="0,6,0,0"
                                Visibility="Collapsed"/>
                     <WrapPanel Margin="0,10,0,0">
-                        <Button x:Name="BtnOpenDownload" Style="{StaticResource CompactAccentButton}" Margin="0,0,8,6"
-                                Click="OpenDownload_Click" Visibility="Collapsed"/>
-                        <Button x:Name="BtnChoosePath" Style="{StaticResource CompactGhostButton}" Margin="0,0,8,6"
-                                Click="ChoosePath_Click" Visibility="Collapsed"/>
-                        <Button x:Name="BtnOpenSettings" Style="{StaticResource CompactGhostButton}" Margin="0,0,8,6"
-                                Click="OpenSettings_Click" Visibility="Collapsed"/>
                         <Button x:Name="BtnRetry" Style="{StaticResource CompactGhostButton}" Margin="0,0,8,6"
                                 Click="Retry_Click" Visibility="Collapsed"/>
                         <Button x:Name="BtnDismiss" Style="{StaticResource CompactGhostButton}" Margin="0,0,8,6"
@@ -120,7 +115,8 @@
                         <TextBlock x:Name="LblBound" Style="{StaticResource CardCaption}"/>
                     </StackPanel>
                 </Border>
-                <Border x:Name="CardC2p" Style="{StaticResource StatCard}">
+                <!-- Click-to-photon is not measured by the built-in capture: shown only if a summary ever carries it. -->
+                <Border x:Name="CardC2p" Style="{StaticResource StatCard}" Visibility="Collapsed">
                     <StackPanel>
                         <TextBlock x:Name="TxtC2p" Style="{StaticResource StatValue}" Text="—"/>
                         <TextBlock x:Name="LblC2p" Style="{StaticResource CardCaption}"/>

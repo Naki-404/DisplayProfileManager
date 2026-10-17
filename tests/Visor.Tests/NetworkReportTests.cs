@@ -47,7 +47,7 @@ public class NetworkReportTests
             {
                 Severity = DiagnosisSeverity.Warning, Key = DiagnosisEngine.KeyDnsSlow, Args = new object[] { 450.0 },
                 Evidence = new[] { new DiagnosisEvidence(DiagnosisEngine.EvDnsSlow, "dns.google", 450.0) },
-                Suggestions = new[] { DiagnosisEngine.SugDnsManual }
+                Suggestions = new[] { DiagnosisEngine.SugDnsInApp }
             }
         }
     };
@@ -81,7 +81,7 @@ public class NetworkReportTests
         Assert.Contains("## net.report.findings", md);
         Assert.Contains("**net.sev.warning** — net.diag.dnsSlow(450)", md);
         Assert.Contains("  - net.ev.dnsSlow(dns.google,450)", md);
-        Assert.Contains("    - net.sug.dnsManual", md);
+        Assert.Contains("    - net.sug.dnsInApp", md);
         Assert.Contains("## net.report.adapter", md);
         Assert.Contains("Wi-Fi (Intel(R) Wi-Fi 6 AX201)", md);
         Assert.Contains("1.2 Gbps", md);

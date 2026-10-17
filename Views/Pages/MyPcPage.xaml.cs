@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -11,7 +10,8 @@ namespace Visor;
 /// My PC section: inventory snapshot (CPU / RAM / GPU / Windows / storage), live hardware cards and a read-only
 /// process sample. Hardware cards read <see cref="HardwareInventoryService"/> (once, off-thread),
 /// <see cref="SensorService"/> (1 Hz, subscribed only while this page is live and visible),
-/// <see cref="AppServices.Health"/> and <see cref="AppServices.CrashSummary"/>. A value that cannot be read shows
+/// <see cref="AppServices.Health"/> and <see cref="AppServices.CrashSummary"/>; the Stability card opens the in-app event
+/// list (MyPcPage.Events.cs). A value that cannot be read shows
 /// "—" with the reason as a tooltip — never an estimate.
 /// </summary>
 public partial class MyPcPage : ShellPageBase
@@ -121,7 +121,7 @@ public partial class MyPcPage : ShellPageBase
         LblOsTitle.Text = Loc.T("system.os");
         LblStabilityTitle.Text = Loc.T("hw.stability");
         DotStability.Label = LblStabilityTitle.Text;
-        BtnEventViewer.Content = Loc.T("hw.stability.openEventViewer");
+        LocalizeEvents();
 
         // Re-render cached data in the new language (cheap; no I/O).
         _findingsSignature = null;
@@ -956,18 +956,5 @@ public partial class MyPcPage : ShellPageBase
     {
         LoadInventory(force: true);
         App.Services?.RequestCrashSummaryRefresh();
-    }
-
-    private void EventViewer_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo("eventvwr.msc") { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn(ex, "Open Event Viewer");
-            Host.ShowToast(Loc.Tf("hw.stability.openEventViewer.fail", ex.Message));
-        }
     }
 }

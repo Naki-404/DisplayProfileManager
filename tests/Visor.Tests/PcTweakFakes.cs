@@ -37,6 +37,10 @@ internal sealed class PcFakeBroker : IElevationBroker
     public string? DuplicateOutput;
     /// <summary>Called after a successful duplicate (lets a test make the new scheme appear).</summary>
     public Action<string>? OnDuplicate;
+    /// <summary>False → PowerDeleteScheme ops fail with "commandFailed".</summary>
+    public bool DeleteSucceeds = true;
+    /// <summary>Called after a successful delete with the scheme GUID (lets a test make the scheme disappear).</summary>
+    public Action<string>? OnDelete;
 
     public Task<ElevatedBatchResult> RunAsync(IReadOnlyList<ElevatedOp> ops, CancellationToken ct = default)
     {
@@ -69,6 +73,14 @@ internal sealed class PcFakeBroker : IElevationBroker
                     {
                         OnDuplicate?.Invoke(DuplicateOutput);
                         results.Add(new ElevatedOpResult(true, null, DuplicateOutput));
+                    }
+                    break;
+                case ElevatedOpKind.PowerDeleteScheme:
+                    if (!DeleteSucceeds) results.Add(new ElevatedOpResult(false, "commandFailed"));
+                    else
+                    {
+                        OnDelete?.Invoke(op.Value!);
+                        results.Add(new ElevatedOpResult(true));
                     }
                     break;
                 default:

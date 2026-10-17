@@ -15,7 +15,7 @@
         SizeToContent="WidthAndHeight"
         WindowStartupLocation="Manual"
         Left="-10000" Top="-10000">
-    <!-- FPS overlay while a PresentMon capture runs: click-through, never activates, no animation. -->
+    <!-- FPS overlay while a frame capture runs: click-through, never activates, no animation. -->
     <Border x:Name="Card" Margin="6" CornerRadius="8" Padding="10,5,12,5"
             Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

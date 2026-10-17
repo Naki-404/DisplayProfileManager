@@ -257,6 +257,31 @@ public class ConfigServiceTests
     }
 
     [Fact]
+    public void Config_from_a_build_with_an_external_FPS_tool_path_still_loads()
+    {
+        // 2.1-era builds stored the external FPS tool's path in ui; the property is gone and the
+        // deserializer ignores it. (Name split so a repo-wide grep for the old tool only hits history.)
+        const string oldProperty = "present" + "MonPath";
+        using var dir = new TempDir();
+        dir.Write("profiles.json", $$"""
+            {
+              "configVersion": 19,
+              "ui": { "locale": "ru", "{{oldProperty}}": "D:\\Tools\\pm", "monitorOsdEnabled": false },
+              "profiles": []
+            }
+            """);
+        using var svc = NewService(dir);
+
+        var cfg = svc.LoadOrCreate();
+
+        Assert.Null(svc.LastRecoveryMessage);
+        Assert.Equal("ru", cfg.Ui!.Locale);
+        Assert.False(cfg.Ui.MonitorOsdEnabled);
+        Assert.Null(typeof(Visor.Models.UiPreferences).GetProperty(oldProperty, System.Reflection.BindingFlags.IgnoreCase
+            | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance));
+    }
+
+    [Fact]
     public void Top_level_profiles_null_yields_empty_list()
     {
         using var dir = new TempDir();

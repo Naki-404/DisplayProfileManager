@@ -99,6 +99,134 @@ public class PcTweakPowerHagsTests
         Assert.Equal(UltimateCreateStatus.Unavailable, (await new UltimatePlanService(StockSchemes()).CreateAsync()).Status);
     }
 
+    // ---------------- removing the created scheme (elevated) ----------------
+
+    private static (UltimatePlanService Svc, PcFakePowerSource Source, PcFakeBroker Broker, PcTweakStore Store) Removable(
+        string active = Balanced, PcFakeBroker? broker = null)
+    {
+        var source = StockSchemes(active);
+        source.Schemes.Add(new PowerSchemeInfo(Created, UltimateRaw, "Ultimate Performance"));
+        var store = new PcTweakStore(null);
+        store.SetCreatedUltimate(Created, new DateTime(2026, 10, 17, 0, 0, 0, DateTimeKind.Utc));
+        broker ??= new PcFakeBroker();
+        broker.OnDelete ??= g => source.Schemes.RemoveAll(s => string.Equals(s.Guid, g, StringComparison.OrdinalIgnoreCase));
+        return (new UltimatePlanService(source, broker, store), source, broker, store);
+    }
+
+    [Fact]
+    public async Task RemoveCreatedAsync_deletes_only_the_recorded_scheme_and_forgets_it()
+    {
+        using var dir = new TempDir();
+        var (svc, source, broker, store) = Removable();
+        Assert.Equal(Created, svc.CreatedInstalledGuid());
+
+        var r = await svc.RemoveCreatedAsync();
+        Assert.Equal(UltimateRemoveStatus.Removed, r.Status);
+        var op = Assert.Single(Assert.Single(broker.Batches));
+        Assert.Equal(ElevatedOpKind.PowerDeleteScheme, op.Kind);
+        Assert.Equal("", op.Target);
+        Assert.Equal(Created, op.Value);
+        Assert.Null(ElevationAllowlist.Validate(op, _ => true));
+        Assert.Null(store.CreatedUltimateGuid);
+        Assert.Null(svc.CreatedInstalledGuid());
+        Assert.Equal(2, source.Schemes.Count); // Windows' own plans untouched
+
+        // Nothing recorded any more → nothing to remove, no prompt.
+        Assert.Equal(UltimateRemoveStatus.NothingToRemove, (await svc.RemoveCreatedAsync()).Status);
+        Assert.Single(broker.Batches);
+    }
+
+    [Fact]
+    public async Task RemoveCreatedAsync_never_touches_a_scheme_Visor_did_not_create()
+    {
+        // An Ultimate scheme exists, but Visor has no record of creating it.
+        var source = StockSchemes();
+        source.Schemes.Add(new PowerSchemeInfo(Created, UltimateRaw, "Ultimate Performance"));
+        var broker = new PcFakeBroker();
+        var svc = new UltimatePlanService(source, broker, new PcTweakStore(null));
+        Assert.Equal(Created, svc.FindInstalled());
+        Assert.Null(svc.CreatedInstalledGuid());
+        Assert.Equal(UltimateRemoveStatus.NothingToRemove, (await svc.RemoveCreatedAsync()).Status);
+        Assert.Empty(broker.Batches);
+    }
+
+    [Fact]
+    public async Task RemoveCreatedAsync_refuses_while_the_plan_is_active_and_without_a_broker()
+    {
+        var (active, _, broker, store) = Removable(active: Created);
+        var r = await active.RemoveCreatedAsync();
+        Assert.Equal(UltimateRemoveStatus.Active, r.Status);
+        Assert.Empty(broker.Batches);
+        Assert.Equal(Created, store.CreatedUltimateGuid);
+
+        var source = StockSchemes();
+        source.Schemes.Add(new PowerSchemeInfo(Created, UltimateRaw, null));
+        var st = new PcTweakStore(null);
+        st.SetCreatedUltimate(Created, DateTime.UtcNow);
+        Assert.Equal(UltimateRemoveStatus.Unavailable, (await new UltimatePlanService(source, null, st).RemoveCreatedAsync()).Status);
+    }
+
+    [Fact]
+    public async Task RemoveCreatedAsync_reports_decline_failure_and_already_gone_honestly()
+    {
+        var (declined, _, _, store1) = Removable(broker: new PcFakeBroker { Outcome = ElevationOutcome.Declined });
+        var r1 = await declined.RemoveCreatedAsync();
+        Assert.Equal(UltimateRemoveStatus.Declined, r1.Status);
+        Assert.Equal(SafeActionCodes.ElevationDeclined, r1.Code);
+        Assert.Equal(Created, store1.CreatedUltimateGuid);
+
+        var (failing, _, _, store2) = Removable(broker: new PcFakeBroker { DeleteSucceeds = false });
+        Assert.Equal(UltimateRemoveStatus.Failed, (await failing.RemoveCreatedAsync()).Status);
+        Assert.Equal(Created, store2.CreatedUltimateGuid);
+
+        // Helper claims success but the scheme is still listed → not forgotten.
+        var (ghost, _, _, store3) = Removable(broker: new PcFakeBroker { OnDelete = _ => { } });
+        var r3 = await ghost.RemoveCreatedAsync();
+        Assert.Equal(UltimateRemoveStatus.Failed, r3.Status);
+        Assert.Equal(SafeActionCodes.VerifyMismatch, r3.Code);
+        Assert.Equal(Created, store3.CreatedUltimateGuid);
+
+        // Removed outside Visor: the record is cleared without a prompt.
+        var (gone, source4, broker4, store4) = Removable();
+        source4.Schemes.RemoveAll(s => s.Guid == Created);
+        Assert.Equal(UltimateRemoveStatus.NothingToRemove, (await gone.RemoveCreatedAsync()).Status);
+        Assert.Empty(broker4.Batches);
+        Assert.Null(store4.CreatedUltimateGuid);
+    }
+
+    [Fact]
+    public void Executor_deletes_with_powercfg_and_refuses_built_in_schemes()
+    {
+        var tools = new RecordingRunner { Result = new CommandResult(0, "") };
+        var exec = new SystemElevatedExecutor(tools, new RecordingRunner(), () => null);
+        var ok = exec.Execute(new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", Value: Created.ToUpperInvariant()));
+        Assert.True(ok.Ok);
+        var call = Assert.Single(tools.Calls);
+        Assert.Equal("powercfg.exe", call.Tool);
+        Assert.Equal(new[] { "/delete", Created }, call.Args);
+
+        var refused = exec.Execute(new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", Value: Balanced));
+        Assert.False(refused.Ok);
+        Assert.Equal(ElevationAllowlist.ReasonScheme, refused.ErrorCode);
+        Assert.Single(tools.Calls);
+
+        tools.Result = new CommandResult(1, "Unable to perform operation.");
+        var failed = exec.Execute(new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", Value: Created));
+        Assert.False(failed.Ok);
+        Assert.Equal(ElevationErrorCodes.CommandFailed, failed.ErrorCode);
+    }
+
+    [Fact]
+    public void Store_clear_forgets_the_created_scheme_on_disk()
+    {
+        using var dir = new TempDir();
+        var store = new PcTweakStore(dir.Path);
+        store.SetCreatedUltimate(Created, DateTime.UtcNow);
+        store.ClearCreatedUltimate();
+        Assert.Null(store.CreatedUltimateGuid);
+        Assert.Null(new PcTweakStore(dir.Path).CreatedUltimateGuid);
+    }
+
     // ---------------- activating (SafeAction, no admin) ----------------
 
     [Fact]

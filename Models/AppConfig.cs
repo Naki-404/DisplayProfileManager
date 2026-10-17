@@ -68,8 +68,6 @@ public sealed class UiPreferences
     /// <summary>Nav rail collapsed to icons only (56 DIP).</summary>
     public bool SidebarCollapsed { get; set; }
 
-    /// <summary>User-configured PresentMon.exe (file or folder) for the FPS monitor; null = default folders only.</summary>
-    public string? PresentMonPath { get; set; }
     /// <summary>Small FPS / 1 % low / frametime overlay on the game's monitor while a capture runs.</summary>
     public bool MonitorOsdEnabled { get; set; } = true;
 
@@ -100,7 +98,6 @@ public sealed class UiPreferences
         ZoomFactor = ZoomFactor,
         TooltipMode = TooltipMode,
         SidebarCollapsed = SidebarCollapsed,
-        PresentMonPath = PresentMonPath,
         MonitorOsdEnabled = MonitorOsdEnabled
     };
 }

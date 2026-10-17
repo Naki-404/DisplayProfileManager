@@ -19,6 +19,8 @@ public partial class OptimizePage
     private bool _cleaning;
     /// <summary>Last measurement (background first-visit scan, Scan click or after a clean).</summary>
     private CleanupScanResult? _cleanupScan;
+    /// <summary>Delivery Optimization cache size, measured with the cache scan (WMI, no admin).</summary>
+    private DeliveryOptimizationStatus? _doStatus;
 
     // -- Startup apps ----------------------------------------------------------------------------------------
 
@@ -200,9 +202,11 @@ public partial class OptimizePage
         TxtCleanupStatus.Text = Loc.T("optimize.cleanup.scanning");
         try
         {
-            var scan = await Task.Run(() => App.Services.Pc.Cleanup.Scan(cts.Token), cts.Token);
+            var pc = App.Services.Pc;
+            var (scan, doStatus) = await Task.Run(() => (pc.Cleanup.Scan(cts.Token), pc.DeliveryOptimization.Read()), cts.Token);
             if (!Host.Window.IsLoaded) return;
             _cleanupScan = scan;
+            _doStatus = doStatus;
             RenderCleanup();
         }
         catch (OperationCanceledException)
@@ -241,17 +245,9 @@ public partial class OptimizePage
 
     private TweakRow BuildCleanupRow(CleanupCategoryScan c)
     {
+        if (c.Category == CleanupCategory.DeliveryOptimization)
+            return BuildDoCacheRow();
         string label = Loc.T(CleanupService.CategoryLocKey(c.Category));
-        if (c.InfoOnly)
-        {
-            var info = new TweakRow(label).SetStatus(Loc.T("optimize.cleanup.infoOnly"), StatusKind.Unknown);
-            info.AddAction(Loc.T("optimize.cleanup.openStorage"), accent: false, link: true, run: () =>
-            {
-                OpenShell("ms-settings:storagesense");
-                return Task.CompletedTask;
-            });
-            return info;
-        }
 
         long bytes = c.Bytes ?? 0;
         var row = new TweakRow(label);
@@ -269,6 +265,70 @@ public partial class OptimizePage
             enabled: bytes > 0 && !_cleaning,
             busyText: Loc.T("optimize.cleanup.cleaning"));
         return row;
+    }
+
+    // -- Delivery Optimization cache (one UAC prompt, in-app — no Settings → Storage detour) -------------------
+
+    private TweakRow BuildDoCacheRow()
+    {
+        var st = _doStatus;
+        var row = new TweakRow(Loc.T(CleanupService.CategoryLocKey(CleanupCategory.DeliveryOptimization)));
+        if (st?.CacheBytes is { } bytes)
+            row.SetStatus(Loc.Tf("optimize.doCache.size", SystemInfoService.FormatBytes(bytes)), bytes == 0 ? StatusKind.Ok : StatusKind.Unknown);
+        else if (st?.Reason == DeliveryOptimizationSizeReason.NeedsAdmin)
+            row.SetStatus(Loc.T("optimize.doCache.sizeNeedsAdmin"), StatusKind.Unknown);
+        else
+            row.SetStatus(Loc.T(st == null ? "optimize.cleanup.notScanned" : "optimize.doCache.sizeUnavailable"), StatusKind.Unknown);
+        row.SetNeedsAdmin(true);
+        row.AddLine(Loc.T("optimize.doCache.note"));
+        // Clean is offered when there is something to clean, or when only an administrator could tell.
+        bool worth = st != null && (st.CacheBytes is > 0 || st.Reason == DeliveryOptimizationSizeReason.NeedsAdmin);
+        row.AddAction(Loc.T("optimize.doCache.clean"), accent: false,
+            run: CleanDoCacheAsync,
+            enabled: worth && !_cleaning,
+            busyText: Loc.T("optimize.ui.busy.uac"));
+        return row;
+    }
+
+    /// <summary>Confirm → one UAC prompt (helper runs Delete-DeliveryOptimizationCache) → toast → re-scan.</summary>
+    private async Task CleanDoCacheAsync()
+    {
+        if (_cleaning || _cleanupCts != null) return;
+        string size = _doStatus?.CacheBytes is { } b ? SystemInfoService.FormatBytes(b) : Loc.T("optimize.doCache.sizeUnknown");
+        string title = Loc.T(CleanupService.CategoryLocKey(CleanupCategory.DeliveryOptimization));
+        string msg = Loc.Tf("optimize.doCache.confirm", size) + "\n\n" + Loc.T("optimize.doCache.note");
+        if (!ThemedDialog.Confirm(Host.Window, msg, title, Loc.T("optimize.cleanup.clean"), danger: true))
+            return;
+
+        _cleaning = true;
+        BtnCleanupScan.IsEnabled = false;
+        try
+        {
+            var r = await Task.Run(() => App.Services.Pc.DeliveryOptimization.ClearAsync());
+            if (r.Status == DeliveryOptimizationCleanStatus.Cleaned)
+            {
+                App.Services.History.Add("cleanup", detail: CleanupCategory.DeliveryOptimization
+                    + (r.FreedBytes is { } f ? "|" + f.ToString(CultureInfo.InvariantCulture) : ""));
+                Host.ShowToast(r.FreedBytes is { } freed
+                    ? Loc.Tf("optimize.doCache.result", SystemInfoService.FormatBytes(freed))
+                    : Loc.T("optimize.doCache.resultUnknown"));
+            }
+            else
+            {
+                Host.ShowToast(SafeActionUi.FailText(r.Code ?? SafeActionCodes.ApplyFailed));
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Delivery Optimization clean");
+            Host.ShowToast(Loc.T("system.unavailable"));
+        }
+        finally
+        {
+            _cleaning = false;
+        }
+        if (Host.Window.IsLoaded)
+            await ScanCleanupAsync();
     }
 
     /// <summary>Confirm (irreversible but safe) → delete one category off the UI thread → toast → re-scan.</summary>

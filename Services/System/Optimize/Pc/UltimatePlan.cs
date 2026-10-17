@@ -159,11 +159,32 @@ public enum UltimateCreateStatus
 /// <summary>Result of <see cref="UltimatePlanService.CreateAsync"/>; <see cref="Code"/> is a <see cref="SafeActionCodes"/> code on failure.</summary>
 public sealed record UltimateCreateResult(UltimateCreateStatus Status, string? Guid = null, string? Code = null);
 
+public enum UltimateRemoveStatus
+{
+    /// <summary>The scheme Visor created was deleted (and forgotten).</summary>
+    Removed,
+    /// <summary>Visor has no record of creating a scheme, or it no longer exists (record cleared) — nothing deleted.</summary>
+    NothingToRemove,
+    /// <summary>The created scheme is the active plan — switch to another plan first. Nothing deleted.</summary>
+    Active,
+    /// <summary>User declined UAC — nothing changed.</summary>
+    Declined,
+    /// <summary>Helper refused / failed, or the scheme is still listed afterwards.</summary>
+    Failed,
+    /// <summary>No elevation broker in this build.</summary>
+    Unavailable
+}
+
+/// <summary>Result of <see cref="UltimatePlanService.RemoveCreatedAsync"/>; <see cref="Code"/> is a <see cref="SafeActionCodes"/> code on failure.</summary>
+public sealed record UltimateRemoveResult(UltimateRemoveStatus Status, string? Code = null);
+
 /// <summary>
 /// Detects / creates the Ultimate Performance scheme. Creating is an explicit, separate click: one
 /// elevated <see cref="ElevatedOpKind.PowerDuplicateScheme"/> op (the helper allowlists only the
 /// template GUID). Activating it is the <see cref="UltimatePlanTarget"/> SafeAction (no admin), undone
-/// by switching back to the previous plan. The created scheme is never deleted automatically.
+/// by switching back to the previous plan. The created scheme is never deleted automatically; the user can
+/// remove it with <see cref="RemoveCreatedAsync"/> (only the GUID recorded in <see cref="PcTweakStore"/>, never
+/// while it is the active plan, one elevated <see cref="ElevatedOpKind.PowerDeleteScheme"/> op).
 /// </summary>
 public sealed class UltimatePlanService
 {
@@ -182,6 +203,100 @@ public sealed class UltimatePlanService
     }
 
     public PcTweakStore Store => _store;
+
+    /// <summary>GUID of the scheme Visor created when it is still installed; null otherwise.</summary>
+    public string? CreatedInstalledGuid()
+    {
+        var created = _store.CreatedUltimateGuid;
+        if (created == null) return null;
+        try
+        {
+            return _source.Enumerate().Any(s => string.Equals(s.Guid, created, StringComparison.OrdinalIgnoreCase))
+                ? created.ToLowerInvariant()
+                : null;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Ultimate plan detect");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the scheme Visor created (the GUID in <see cref="PcTweakStore"/> — never any other scheme) via the
+    /// elevated helper (one UAC prompt). Refuses while it is the active plan. Never throws.
+    /// </summary>
+    public async Task<UltimateRemoveResult> RemoveCreatedAsync(CancellationToken ct = default)
+    {
+        var created = _store.CreatedUltimateGuid;
+        if (created == null || !ElevationAllowlist.IsDeletableScheme(created))
+            return new UltimateRemoveResult(UltimateRemoveStatus.NothingToRemove);
+
+        IReadOnlyList<PowerSchemeInfo> schemes;
+        string? active;
+        try
+        {
+            schemes = _source.Enumerate();
+            active = _source.ActiveGuid();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Ultimate plan remove");
+            return new UltimateRemoveResult(UltimateRemoveStatus.Failed, SafeActionCodes.Unavailable);
+        }
+        if (!schemes.Any(s => string.Equals(s.Guid, created, StringComparison.OrdinalIgnoreCase)))
+        {
+            // Already gone (removed in Windows): just forget it.
+            _store.ClearCreatedUltimate();
+            return new UltimateRemoveResult(UltimateRemoveStatus.NothingToRemove);
+        }
+        if (active == null || string.Equals(active, created, StringComparison.OrdinalIgnoreCase))
+            return new UltimateRemoveResult(UltimateRemoveStatus.Active, SafeActionCodes.Conflict);
+        if (_broker == null) return new UltimateRemoveResult(UltimateRemoveStatus.Unavailable, SafeActionCodes.ElevationFailed);
+
+        ElevatedBatchResult r;
+        try
+        {
+            r = await _broker.RunAsync(new[]
+            {
+                new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", Value: created.ToLowerInvariant())
+            }, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Ultimate plan remove");
+            return new UltimateRemoveResult(UltimateRemoveStatus.Failed, SafeActionCodes.ElevationFailed);
+        }
+
+        switch (r.Outcome)
+        {
+            case ElevationOutcome.Declined:
+                return new UltimateRemoveResult(UltimateRemoveStatus.Declined, SafeActionCodes.ElevationDeclined);
+            case ElevationOutcome.Rejected:
+                return new UltimateRemoveResult(UltimateRemoveStatus.Failed, SafeActionCodes.ElevationRejected);
+            case ElevationOutcome.Failed:
+                return new UltimateRemoveResult(UltimateRemoveStatus.Failed, SafeActionCodes.ElevationFailed);
+        }
+        var op = r.Results.Count > 0 ? r.Results[0] : null;
+        if (op == null || !op.Ok)
+        {
+            AppLog.Warn("Ultimate plan remove: helper returned " + (op?.ErrorCode ?? "no result"));
+            return new UltimateRemoveResult(UltimateRemoveStatus.Failed, SafeActionCodes.ApplyFailed);
+        }
+
+        bool stillListed;
+        try { stillListed = _source.Enumerate().Any(s => string.Equals(s.Guid, created, StringComparison.OrdinalIgnoreCase)); }
+        catch (Exception) { stillListed = false; }
+        if (stillListed)
+        {
+            AppLog.Warn("Ultimate plan remove: " + created + " still listed afterwards.");
+            return new UltimateRemoveResult(UltimateRemoveStatus.Failed, SafeActionCodes.VerifyMismatch);
+        }
+        _store.ClearCreatedUltimate();
+        AppLog.Info("Ultimate Performance plan removed: " + created);
+        return new UltimateRemoveResult(UltimateRemoveStatus.Removed);
+    }
 
     public string? FindInstalled()
     {

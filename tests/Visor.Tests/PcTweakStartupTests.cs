@@ -162,7 +162,9 @@ public class PcTweakStartupTests
         Assert.True(health.CanToggle);
 
         var java = list.Single(e => e.Name == "SunJavaUpdateSched");
-        Assert.Equal(StartupToggleBlock.NotInHelperAllowlist, java.ToggleBlock);
+        Assert.Equal(StartupLocation.MachineRun32, java.Location);
+        Assert.True(java.CanToggle);            // Run32 goes through the elevated helper too
+        Assert.True(java.RequiresElevation);
         Assert.Null(java.FileSizeBytes);        // probe knows nothing → no invented size
 
         var link = list.Single(e => e.Location == StartupLocation.UserStartupFolder);
@@ -173,7 +175,8 @@ public class PcTweakStartupTests
         Assert.Equal(64_000, link.FileSizeBytes);
 
         var bat = list.Single(e => e.Location == StartupLocation.CommonStartupFolder);
-        Assert.Equal(StartupToggleBlock.NotInHelperAllowlist, bat.ToggleBlock);
+        Assert.True(bat.CanToggle);             // all-users Startup folder: elevated helper
+        Assert.True(bat.RequiresElevation);
         Assert.DoesNotContain(list, e => e.Name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase));
 
         var summary = StartupAppsService.Summarize(list);
@@ -188,6 +191,7 @@ public class PcTweakStartupTests
         var (svc, _, _) = Fixture(dir, broker: null);
         var health = svc.List().Single(e => e.Name == "SecurityHealth");
         Assert.Equal(StartupToggleBlock.NoBroker, health.ToggleBlock);
+        Assert.All(svc.List().Where(e => e.RequiresElevation), e => Assert.Equal(StartupToggleBlock.NoBroker, e.ToggleBlock));
         Assert.Null(svc.CreateTarget(health.EnableActionId));
         Assert.Null(svc.CreateTarget(StartupToggle.ActionIdFor(false, StartupLocation.MachineRun32, "x")));
         Assert.Null(svc.CreateTarget(StartupToggle.ActionIdFor(false, StartupLocation.CommonStartupFolder, "x.lnk")));
@@ -286,6 +290,41 @@ public class PcTweakStartupTests
         Assert.Equal(SafeActionUndoResult.Undone, (await svc.UndoAsync(target.ActionId)).Result);
         Assert.Equal(ElevatedOpKind.RegDeleteValue, broker.Batches[1][0].Kind);
         Assert.Null(hklm.Get(ElevationAllowlist.StartupApprovedRunKey, "Riot Vanguard"));
+    }
+
+    [Theory]
+    [InlineData(StartupLocation.MachineRun32, "SunJavaUpdateSched")]
+    [InlineData(StartupLocation.CommonStartupFolder, "tool.bat")]
+    public async Task HKLM_Run32_and_common_Startup_folder_toggle_through_the_helper_and_undo_exactly(StartupLocation location, string name)
+    {
+        var hklm = new PcFakeMachineRegistry();
+        var broker = new PcFakeBroker(hklm);
+        using var dir = new TempDir();
+        var (svcList, _, _) = Fixture(dir, broker: broker, hklm: hklm);
+        var target = svcList.CreateTarget(StartupToggle.ActionIdFor(false, location, name));
+        var elevated = Assert.IsType<ElevatedStartupToggleTarget>(target);
+        Assert.Equal(location, elevated.Location);
+        Assert.True(elevated.RequiresElevation);
+        var svc = new SafeActionService(new SafeActionJournal(null), new ISafeActionTarget[] { elevated });
+
+        Assert.Equal(SafeActionResult.Applied, (await svc.ApplyAsync(elevated.ActionId)).Result);
+        var op = Assert.Single(Assert.Single(broker.Batches));
+        Assert.Equal(ElevatedOpKind.RegSetBinary, op.Kind);
+        Assert.Equal(StartupApproved.ApprovedKey(location), op.Target);
+        Assert.Equal(name, op.Name);
+        Assert.Equal(Convert.ToHexString(StartupApproved.DisabledBytes(Now)), op.Value);
+        Assert.Null(ElevationAllowlist.ValidateBatch(broker.Batches[0], _ => true));
+
+        Assert.Equal(SafeActionUndoResult.Undone, (await svc.UndoAsync(elevated.ActionId)).Result);
+        Assert.Equal(ElevatedOpKind.RegDeleteValue, broker.Batches[1][0].Kind);
+        Assert.Null(hklm.Get(StartupApproved.ApprovedKey(location), name));
+    }
+
+    [Fact]
+    public void Elevated_toggle_refuses_user_locations()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new ElevatedStartupToggleTarget(false, StartupLocation.UserRun, "x", new PcFakeBroker()));
     }
 
     [Fact]

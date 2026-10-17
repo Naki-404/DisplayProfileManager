@@ -45,6 +45,8 @@ public class ElevationAllowlistTests
         new object[] { new ElevatedOp(ElevatedOpKind.TcpGlobalSet, "rss", null, "enabled") },
         new object[] { new ElevatedOp(ElevatedOpKind.PowerDuplicateScheme, "", null, ElevationAllowlist.UltimatePerformanceScheme) },
         new object[] { new ElevatedOp(ElevatedOpKind.PowerDuplicateScheme, ElevationAllowlist.UltimatePerformanceScheme) },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, "ef6b3483-359a-44a0-b0f6-549a7073622c") },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, "EF6B3483-359A-44A0-B0F6-549A7073622C") },
     };
 
     [Theory]
@@ -127,6 +129,19 @@ public class ElevationAllowlistTests
         new object[] { new ElevatedOp(ElevatedOpKind.PowerDuplicateScheme, "", null, "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"), ElevationAllowlist.ReasonScheme },
         new object[] { new ElevatedOp(ElevatedOpKind.PowerDuplicateScheme, "x", null, ElevationAllowlist.UltimatePerformanceScheme), ElevationAllowlist.ReasonScheme },
         new object[] { new ElevatedOp(ElevatedOpKind.PowerDuplicateScheme, ""), ElevationAllowlist.ReasonScheme },
+        // deleting a power scheme: only a well-formed, non-built-in GUID
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, ElevationAllowlist.BalancedScheme), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, ElevationAllowlist.HighPerformanceScheme.ToUpperInvariant()), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, ElevationAllowlist.PowerSaverScheme), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, ElevationAllowlist.UltimatePerformanceScheme), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, "00000000-0000-0000-0000-000000000000"), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, "{ef6b3483-359a-44a0-b0f6-549a7073622c}"), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, "ef6b3483359a44a0b0f6549a7073622c"), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, "ef6b3483-359a-44a0-b0f6-549a7073622c /x"), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, "scheme_current"), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", null, null), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "ef6b3483-359a-44a0-b0f6-549a7073622c"), ElevationAllowlist.ReasonScheme },
+        new object[] { new ElevatedOp(ElevatedOpKind.PowerDeleteScheme, "", "x", "ef6b3483-359a-44a0-b0f6-549a7073622c"), ElevationAllowlist.ReasonValueName },
     };
 
     [Theory]

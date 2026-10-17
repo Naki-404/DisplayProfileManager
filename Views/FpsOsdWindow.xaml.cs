@@ -9,10 +9,10 @@ namespace Visor;
 
 /// <summary>
 /// Compact "FPS · 1 % low · frametime" readout in the top-left corner of the game's monitor, shown only
-/// while <see cref="MonitorService"/> is capturing and <see cref="Enabled"/> (Settings → Monitor) is on.
+/// while <see cref="MonitorService"/> is capturing and <see cref="Enabled"/> (Settings → FPS monitor) is on.
 /// Same click-through / no-activate / topmost recipe as <see cref="OsdWindow"/>, but with no motion at all
 /// (numbers change once a second; nothing fades or slides) so it is reduced-motion safe by construction.
-/// Hides itself as soon as the capture ends. Everything shown comes from the last PresentMon summary.
+/// Hides itself as soon as the capture ends. Everything shown comes from the last capture summary.
 /// </summary>
 public partial class FpsOsdWindow : Window
 {
@@ -36,7 +36,7 @@ public partial class FpsOsdWindow : Window
         };
     }
 
-    /// <summary>Settings → Monitor → "FPS overlay". Turning it off hides a visible overlay at once.</summary>
+    /// <summary>Settings → FPS monitor → "FPS overlay". Turning it off hides a visible overlay at once.</summary>
     public static bool Enabled
     {
         get => _enabled;

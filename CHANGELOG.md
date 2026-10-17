@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0 — 2026-10-17
+
+Everything now works inside Visor — no external tools to download and no "open this Windows dialog" detours.
+
+### FPS monitor
+- **Built-in FPS capture** replaces PresentMon: Visor reads the DXGI / D3D9 / DxgKrnl present events itself (raw ETW, no NuGet package, nothing bundled). One UAC prompt per capture starts a small `Visor.exe --frame-capture` helper; **Stop needs no second prompt** (stop byte over a private pipe), and the helper ends with the game, with Visor, or after an hour. The PresentMon path / locate / download UI, `ui.presentMonPath` (old configs still load) and the installer's `tools\presentmon` entries are gone. Not measured yet: displayed / dropped frames, display latency, click-to-photon. Details: `docs/MONITOR-NATIVE.md`.
+- The limiter label is an estimate ("likely GPU-bound / CPU-bound / capped") with the numbers behind it (GPU load via NvAPI, display refresh, frame-time variation).
+
+### In-app instead of Windows dialogs
+- **My PC → Stability**: crash / WHEA / TDR events are listed in Visor (no Event Viewer).
+- **Optimize → Graphics**: visual effects set to "best performance" in-app, with exact undo.
+- **Optimize → Cleanup**: Delivery Optimization cache size and clear (one UAC prompt, documented cmdlet).
+- **Optimize → Startup**: all-users entries (HKLM Run32 and the all-users Startup folder) are now toggled through the elevated helper like HKLM Run — no more "change this one in Task Manager".
+- **Optimize → System**: "Remove plan" deletes the Ultimate Performance plan Visor created (only that GUID, never while it is active, never a built-in plan; one UAC prompt).
+- **Network → Diagnose**: the slow / failing DNS finding links to Network → DNS (test resolvers, switch in one click, undo) instead of manual Windows steps.
+- Autostart failure message points at Visor's own "Start with Windows" switch.
+
 ## 2.1.0 — 2026-10-17
 
 First public release of **Visor** (formerly Display Profile Manager). It includes everything from 2.0.0 below, which was never published separately.

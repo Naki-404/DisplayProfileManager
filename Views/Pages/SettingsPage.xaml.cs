@@ -49,16 +49,9 @@ public partial class SettingsPage : ShellPageBase
         RbHotkeys.Content = Loc.T("settings.tab.hotkeys");
         RbMonitor.Content = Loc.T("settings.tab.monitor");
         LblMonitorTitle.Text = Loc.T("settings.tab.monitor");
-        LblMonitorHint.Text = Loc.T("monitor.settings.hint");
-        LblPresentMonPath.Text = Loc.T("monitor.settings.path");
-        BtnPresentMonBrowse.Content = Loc.T("btn.browse");
-        BtnPresentMonLocate.Content = Loc.T("monitor.settings.locate");
-        BtnPresentMonDownload.Content = Loc.T("monitor.openDownload");
-        BtnPresentMonDownload.ToolTip = MonitorPage.PresentMonReleasesUrl;
+        LblMonitorHint.Text = Loc.T("monitor.how");
         ChkMonitorOsd.Content = Loc.T("monitor.settings.osd");
         LblMonitorOsdHint.Text = Loc.T("monitor.settings.osd.hint");
-        DotPresentMon.Label = Loc.T("monitor.settings.path");
-        if (RbMonitor.IsChecked == true) RefreshPresentMonStatus(locate: false);
         RbHistory.Content = Loc.T("tab.history");
         RbLog.Content = Loc.T("tab.log");
         LblHistoryHint.Text = Loc.T("history.hint");
@@ -99,7 +92,6 @@ public partial class SettingsPage : ShellPageBase
     public override void OnActivated()
     {
         if (RbLog.IsChecked == true) RefreshLog();
-        if (RbMonitor.IsChecked == true) RefreshMonitorGroup();
         if (RbHistory.IsChecked == true) RefreshHistoryPanel();
     }
 
@@ -132,7 +124,6 @@ public partial class SettingsPage : ShellPageBase
         PanelDefaults.Visibility = (!log && !history && !hotkeys && !monitor) ? Visibility.Visible : Visibility.Collapsed;
         PanelHotkeys.Visibility = hotkeys ? Visibility.Visible : Visibility.Collapsed;
         PanelMonitor.Visibility = monitor ? Visibility.Visible : Visibility.Collapsed;
-        if (monitor) RefreshMonitorGroup();
         PanelHistory.Visibility = history ? Visibility.Visible : Visibility.Collapsed;
         PanelLog.Visibility = log ? Visibility.Visible : Visibility.Collapsed;
         if (history) RefreshHistoryPanel();
@@ -164,12 +155,7 @@ public partial class SettingsPage : ShellPageBase
         HkToggleZoom.Text = cfg.GlobalHotkeys.ToggleZoom ?? "";
         ComboUi.SelectByTag(CmbZoomFactor, (cfg.Ui?.ZoomFactor ?? 4).ToString());
 
-        _loadedPresentMonPath = cfg.Ui?.PresentMonPath ?? "";
-        TxtPresentMonPath.Text = _loadedPresentMonPath;
         ChkMonitorOsd.IsChecked = cfg.Ui?.MonitorOsdEnabled != false;
-        var svc = MonitorPage.FrameMonitor;
-        if (string.IsNullOrWhiteSpace(svc.UserConfiguredPath) && !string.IsNullOrWhiteSpace(_loadedPresentMonPath))
-            svc.UserConfiguredPath = _loadedPresentMonPath;
     }
 
     /// <summary>Writes defaults, hotkeys and zoom from the editors into the config (before save).</summary>
@@ -189,91 +175,8 @@ public partial class SettingsPage : ShellPageBase
         cfg.Ui ??= new UiPreferences();
         cfg.Ui.ZoomFactor = ReadZoomFactor();
 
-        // The Monitor page may have set the path itself ("Choose PresentMon.exe…"); only an edit made in
-        // this box overrides it, so a stale box cannot roll that choice back on the next autosave.
-        string box = TxtPresentMonPath.Text.Trim();
-        if (!string.Equals(box, _loadedPresentMonPath, StringComparison.Ordinal))
-        {
-            cfg.Ui.PresentMonPath = string.IsNullOrWhiteSpace(box) ? null : box;
-            _loadedPresentMonPath = box;
-            MonitorPage.FrameMonitor.UserConfiguredPath = cfg.Ui.PresentMonPath;
-            RefreshPresentMonStatus(locate: true);
-        }
         cfg.Ui.MonitorOsdEnabled = ChkMonitorOsd.IsChecked != false;
         FpsOsdWindow.Enabled = cfg.Ui.MonitorOsdEnabled;
-    }
-
-    // -- Monitor group ---------------------------------------------------------------------------------------
-
-    /// <summary>Path the box was last loaded with / written from — detects edits made in this box.</summary>
-    private string _loadedPresentMonPath = "";
-
-    /// <summary>Re-reads the persisted path (the Monitor page may have changed it) and shows the locate result.</summary>
-    private void RefreshMonitorGroup()
-    {
-        if (TxtPresentMonPath == null) return;
-        string persisted = App.Services.Config.Current.Ui?.PresentMonPath ?? "";
-        if (string.Equals(TxtPresentMonPath.Text.Trim(), _loadedPresentMonPath, StringComparison.Ordinal)
-            && !string.Equals(persisted, _loadedPresentMonPath, StringComparison.Ordinal))
-        {
-            using (Host.SuppressEditor())
-                TxtPresentMonPath.Text = persisted;
-            _loadedPresentMonPath = persisted;
-        }
-        RefreshPresentMonStatus(locate: true);
-    }
-
-    /// <summary>Shows where PresentMon was found (or why not). Locate never runs the binary.</summary>
-    private void RefreshPresentMonStatus(bool locate)
-    {
-        if (TxtPresentMonStatus == null) return;
-        var svc = MonitorPage.FrameMonitor;
-        PresentMonLocateResult? r = svc.LastLocate;
-        if (locate || r == null)
-        {
-            try { r = svc.Locate(); }
-            catch (Exception ex)
-            {
-                AppLog.Warn(ex, "PresentMon locate");
-                TxtPresentMonStatus.Text = ex.Message;
-                DotPresentMon.Status = Visor.Controls.StatusKind.Bad;
-                return;
-            }
-        }
-        TxtPresentMonStatus.Text = MonitorPage.DescribeLocate(r);
-        DotPresentMon.Status = r.Status switch
-        {
-            PresentMonStatus.Found => Visor.Controls.StatusKind.Ok,
-            PresentMonStatus.Unverified => Visor.Controls.StatusKind.Warn,
-            _ => Visor.Controls.StatusKind.Bad
-        };
-    }
-
-    private void PresentMonPath_TextChanged(object sender, TextChangedEventArgs e) => GlobalEditorChanged(sender, e);
-
-    private void PresentMonLocate_Click(object sender, RoutedEventArgs e)
-    {
-        Host.FlushAutosave(); // applies a pending edit of the box first
-        RefreshPresentMonStatus(locate: true);
-    }
-
-    private void PresentMonBrowse_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new Microsoft.Win32.OpenFileDialog
-        {
-            Filter = "PresentMon.exe|PresentMon.exe|" + Loc.T("filter.exe"),
-            Title = Loc.T("monitor.choosePath"),
-            CheckFileExists = true
-        };
-        if (dlg.ShowDialog(Host.Window) != true) return;
-        TxtPresentMonPath.Text = dlg.FileName; // TextChanged → dirty → autosave → WriteTo applies + locates
-        Host.FlushAutosave();
-    }
-
-    private void PresentMonDownload_Click(object sender, RoutedEventArgs e)
-    {
-        try { Process.Start(new ProcessStartInfo { FileName = MonitorPage.PresentMonReleasesUrl, UseShellExecute = true }); }
-        catch (Exception ex) { AppLog.Warn(ex, "Open PresentMon releases"); Host.ShowToast(ex.Message); }
     }
 
     private int ReadZoomFactor()

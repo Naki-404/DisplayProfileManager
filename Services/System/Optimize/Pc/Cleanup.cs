@@ -13,7 +13,10 @@ public enum CleanupCategory
     NvidiaShaderCache,
     /// <summary>AMD DxCache / DxcCache / GLCache.</summary>
     AmdShaderCache,
-    /// <summary>Windows Delivery Optimization cache — info only (owned by NetworkService, needs admin).</summary>
+    /// <summary>
+    /// Windows Delivery Optimization cache — not walked or deleted by this service (owned by NetworkService). Size and
+    /// clearing go through <see cref="DeliveryOptimizationService"/> (WMI size, one UAC prompt to clear).
+    /// </summary>
     DeliveryOptimization
 }
 
@@ -208,9 +211,10 @@ public sealed class CleanupService
 
     public static bool IsInfoOnly(CleanupCategory c) => c == CleanupCategory.DeliveryOptimization;
 
-    /// <summary>Loc key for a category label: optimize.cleanup.cat.userTemp, …</summary>
+    /// <summary>Loc key for a category label: optimize.cleanup.cat.userTemp, … (Delivery Optimization: optimize.cleanup.cat.doCache).</summary>
     public static string CategoryLocKey(CleanupCategory c)
     {
+        if (c == CleanupCategory.DeliveryOptimization) return "optimize.cleanup.cat.doCache";
         string n = c.ToString();
         return "optimize.cleanup.cat." + char.ToLowerInvariant(n[0]) + n[1..];
     }

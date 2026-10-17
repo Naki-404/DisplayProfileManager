@@ -500,6 +500,25 @@ public partial class App : System.Windows.Application
             return true;
         }
 
+        // Elevated frame-capture helper: "Visor.exe --frame-capture <id>.cap.json" (started by the FPS
+        // monitor via UAC). Same early position and rules as --elevated: no log, mutex, config, hooks or
+        // windows — validate the request, stream present events over Visor's pipe, stop the ETW session, exit.
+        if (args.Length > 0 && args[0].Equals(Visor.Services.FrameCapture.FrameCaptureHost.CliSwitch, StringComparison.OrdinalIgnoreCase))
+        {
+            int captureExit = Visor.Services.FrameCapture.FrameCaptureHost.ExitBadRequest;
+            try
+            {
+                if (args.Length == 2)
+                    captureExit = Visor.Services.FrameCapture.FrameCaptureHost.Run(args[1]);
+            }
+            catch (Exception)
+            {
+                captureExit = Visor.Services.FrameCapture.FrameCaptureHost.ExitFailed;
+            }
+            Shutdown(captureExit);
+            return true;
+        }
+
         bool wantsList = false;
         bool wantsEmergency = false;
         string? applyProfileName = null;

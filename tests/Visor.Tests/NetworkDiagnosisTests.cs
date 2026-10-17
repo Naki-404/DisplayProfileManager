@@ -285,7 +285,16 @@ public class NetworkDiagnosisTests
         Assert.Contains(d.Evidence, e => e.Key == DiagnosisEngine.EvDnsSlow && (string)e.Args[0] == "dns.google");
         Assert.DoesNotContain(d.Evidence, e => e.Key == DiagnosisEngine.EvDnsSlow && (string)e.Args[0] == "cloudflare-dns.com");
         Assert.Contains(d.Evidence, e => e.Key == DiagnosisEngine.EvPingP50);
-        Assert.Equal(new[] { DiagnosisEngine.SugDnsManual }, d.Suggestions);
+        Assert.Equal(new[] { DiagnosisEngine.SugDnsInApp }, d.Suggestions);
+    }
+
+    [Fact]
+    public void Dns_suggestion_links_to_the_in_app_DNS_section_and_others_stay_plain()
+    {
+        Assert.Equal("net.sug.dnsInApp", DiagnosisEngine.SugDnsInApp);
+        Assert.Equal("dns", DiagnosisEngine.SuggestionSubSection(DiagnosisEngine.SugDnsInApp));
+        Assert.Null(DiagnosisEngine.SuggestionSubSection(DiagnosisEngine.SugRestartRouter));
+        Assert.Null(DiagnosisEngine.SuggestionSubSection("net.sug.dnsManual"));
     }
 
     [Fact]
@@ -330,7 +339,7 @@ public class NetworkDiagnosisTests
         Assert.NotNull(d);
         Assert.Equal(DiagnosisSeverity.Problem, d!.Severity);
         Assert.Contains(d.Evidence, e => e.Key == DiagnosisEngine.EvDnsFail && (string)e.Args[1] == "timeout");
-        Assert.Contains(DiagnosisEngine.SugDnsManual, d.Suggestions);
+        Assert.Contains(DiagnosisEngine.SugDnsInApp, d.Suggestions);
         Assert.Null(Find(f, DiagnosisEngine.KeyDnsSlow));
     }
 

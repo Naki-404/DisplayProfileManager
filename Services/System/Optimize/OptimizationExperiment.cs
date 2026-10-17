@@ -43,7 +43,7 @@ public sealed record ExperimentReport(
 /// <summary>
 /// Pure before/after bookkeeping for one Optimize action: record samples, mark the apply moment, compute
 /// deltas. Never claims an improvement — the UI shows numbers with "insufficient data" when the window is
-/// too short. The Monitor stage (PresentMon) will feed FPS / frame time; any metric name works.
+/// too short. The FPS monitor (built-in frame capture) feeds FPS / frame time; any metric name works.
 /// </summary>
 public sealed class OptimizationExperiment
 {

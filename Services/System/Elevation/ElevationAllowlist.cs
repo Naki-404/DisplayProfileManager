@@ -24,6 +24,15 @@ public static class ElevationAllowlist
     public const int MaxValueNameChars = 255;
 
     public const string UltimatePerformanceScheme = "e9a42b02-d5df-448d-aa00-03f14749eb61";
+    public const string BalancedScheme = "381b4222-f694-41f0-9685-ff5bb260df2e";
+    public const string HighPerformanceScheme = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
+    public const string PowerSaverScheme = "a1841308-3541-4fab-bc81-f71556f20b4a";
+
+    /// <summary>Schemes that ship with Windows (incl. the hidden Ultimate template): never deletable through the helper.</summary>
+    public static readonly IReadOnlyList<string> BuiltInSchemes = new[]
+    {
+        BalancedScheme, HighPerformanceScheme, PowerSaverScheme, UltimatePerformanceScheme
+    };
 
     public const string TcpipInterfacesKey = @"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces";
     public const string MultimediaSystemProfileKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";
@@ -44,6 +53,8 @@ public static class ElevationAllowlist
     public const string ReasonTcpValue = "badTcpValue";
     public const string ReasonScheme = "badScheme";
     public const string ReasonBatch = "badBatch";
+    /// <summary>A parameterless op carried a target / name / value.</summary>
+    public const string ReasonParameters = "unexpectedParameters";
 
     private static readonly string[] InterfaceValueNames = { "TcpAckFrequency", "TCPNoDelay", "TcpDelAckTicks" };
     private static readonly string[] SystemProfileValueNames = { "NetworkThrottlingIndex", "SystemResponsiveness" };
@@ -97,6 +108,8 @@ public static class ElevationAllowlist
             ElevatedOpKind.DnsSetDhcp => ValidateDns(op, adapterExists, isStatic: false),
             ElevatedOpKind.TcpGlobalSet => ValidateTcp(op),
             ElevatedOpKind.PowerDuplicateScheme => ValidatePower(op),
+            ElevatedOpKind.PowerDeleteScheme => ValidatePowerDelete(op),
+            ElevatedOpKind.DeliveryOptimizationClear => ValidateParameterless(op),
             _ => ReasonKind
         };
     }
@@ -299,6 +312,29 @@ public static class ElevationAllowlist
             return ReasonScheme;
         return null;
     }
+
+    /// <summary>
+    /// <see cref="ElevatedOpKind.PowerDeleteScheme"/>: Target "", no Name, Value = a well-formed GUID in "D" form
+    /// (36 chars, so no braces / switches can ride along) that is not one of <see cref="BuiltInSchemes"/>.
+    /// </summary>
+    private static string? ValidatePowerDelete(ElevatedOp op)
+    {
+        if (op.Name != null) return ReasonValueName;
+        if (op.Target.Length != 0) return ReasonScheme;
+        if (!IsDeletableScheme(op.Value)) return ReasonScheme;
+        return null;
+    }
+
+    /// <summary>True for a "D"-form GUID that is not empty and not a built-in Windows scheme.</summary>
+    public static bool IsDeletableScheme(string? guid)
+    {
+        if (guid == null || guid.Length != 36 || !Guid.TryParseExact(guid, "D", out var g) || g == Guid.Empty) return false;
+        return !BuiltInSchemes.Contains(g.ToString("D"), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Ops whose whole behaviour is fixed in the helper: Target must be "", Name and Value null.</summary>
+    private static string? ValidateParameterless(ElevatedOp op) =>
+        op.Target.Length == 0 && op.Name == null && op.Value == null ? null : ReasonParameters;
 
     /// <summary>The scheme GUID a valid <see cref="ElevatedOpKind.PowerDuplicateScheme"/> op duplicates.</summary>
     public static string PowerSchemeOf(ElevatedOp op) => string.IsNullOrEmpty(op.Value) ? op.Target : op.Value;

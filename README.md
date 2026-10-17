@@ -14,9 +14,9 @@
   <a href="https://github.com/Naki-404/DisplayProfileManager/releases/latest"><img src="https://img.shields.io/github/v/release/Naki-404/DisplayProfileManager?style=flat-square&label=release" alt="Latest release"></a>
   <a href="https://github.com/Naki-404/DisplayProfileManager/releases/latest"><img src="https://img.shields.io/github/downloads/Naki-404/DisplayProfileManager/total?style=flat-square" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-22D3EE?style=flat-square" alt="Windows 10/11 x64">
-  <img src="https://img.shields.io/badge/version-2.1.0-8B5CF6?style=flat-square" alt="Version 2.1.0">
+  <img src="https://img.shields.io/badge/version-2.2.0-8B5CF6?style=flat-square" alt="Version 2.2.0">
   <img src="https://img.shields.io/badge/lang-EN%20%2F%20RU-8B9AAB?style=flat-square" alt="English / Russian">
-  <img src="https://img.shields.io/badge/tests-1350%2B-15803D?style=flat-square" alt="1350+ tests">
+  <img src="https://img.shields.io/badge/tests-1500%2B-15803D?style=flat-square" alt="1500+ tests">
 </p>
 
 <p align="center">
@@ -57,7 +57,7 @@ SmartScreen may show *"Windows protected your PC"* — click **More info → Run
 | **Games** | Per-game profiles: resolution, refresh rate, power plan, color, FPS cap, companions. Applied when the game starts, **restored when it exits**. Hotkey color presets, pack gallery, Steam launch. |
 | **Optimize** | Split into **Overview · System · Graphics · Input · Network · Startup · Cleanup**. Game Mode, Xbox Game Bar background capture, mouse acceleration, fullscreen optimizations per game, Ultimate Performance plan, hardware-accelerated GPU scheduling, startup apps manager, shader/temp cache cleanup — each with *why / risk / how to undo*. |
 | **Network** | Split into **Overview · Diagnostics · DNS · TCP**. Live throughput, Wi-Fi signal, continuous ping with p50/p95/jitter/loss, traceroute, one-click **Diagnose** that explains *where* the problem starts (Wi-Fi, LAN, ISP, DNS), report export. DNS speed test across Cloudflare / Google / Quad9 / AdGuard / OpenDNS / custom with apply & undo, DNS cache flush, Nagle, network throttling, TCP auto-tuning. |
-| **Monitor** | FPS, frame time, 1 % / 0.1 % lows, p99, stutters and a GPU-vs-CPU-bound estimate using Intel **PresentMon**; optional FPS overlay on the game's monitor. |
+| **Monitor** | FPS, frame time, 1 % / 0.1 % lows, p99, stutters and a *likely* GPU / CPU / capped estimate from Visor's **built-in frame capture** (Windows ETW events — nothing to download); optional FPS overlay on the game's monitor. |
 | **Settings** | Defaults, app hotkeys, history, log, themes (dark / light / custom), English / Russian. |
 
 Also: tray mode, in-game overlay with live color controls, center zoom (Windows Magnifier), command
@@ -72,7 +72,7 @@ palette (**Ctrl+K**), section shortcuts (**Ctrl+1…7**), emergency display rese
 - **Plain-language trade-offs.** Faster DNS speeds up finding servers and launchers — it doesn't lower
   in-game ping. Turning off Nagle helps only TCP-based games (MMOs); most shooters use UDP. Network
   throttling matters mainly when music or a stream plays during the game. Visor says so on every card.
-- **Measure, don't guess.** Use **Monitor** (PresentMon) to compare FPS and frame times before and after a change.
+- **Measure, don't guess.** Use **Monitor** (built-in frame capture) to compare FPS and frame times before and after a change.
 - **Unavailable means unavailable.** CPU temperature needs a kernel driver, which Visor doesn't ship — it
   shows "n/a" instead of a made-up number.
 
@@ -88,17 +88,22 @@ palette (**Ctrl+K**), section shortcuts (**Ctrl+1…7**), emergency display rese
   disabled (like Task Manager does), never deleted. Cache cleanup shows sizes first and asks before deleting.
 - **Games are left alone.** Visor never touches game memory or files and never injects into a game.
   It changes only system and driver settings. In-game hotkeys use standard low-level keyboard/mouse hooks
-  inside Visor's own process (like Discord or OBS). FPS capture uses ETW via PresentMon — no hooks into
-  the game. Still, follow your game's rules.
+  inside Visor's own process (like Discord or OBS). FPS capture reads Windows' own frame events (ETW)
+  through a small helper built into `Visor.exe` — no hooks into the game, no injection, no external tool.
+  Still, follow your game's rules.
 - **No telemetry, no accounts, no cloud.** Network probes run only when you click.
 
-### FPS monitoring (PresentMon)
+### FPS monitoring
 
-PresentMon is Intel's open-source (MIT) frame-capture tool. It is **not bundled**: download the console
-build from the [official releases page](https://github.com/GameTechDev/PresentMon/releases), name it
-`PresentMon.exe` and put it in `tools\presentmon` next to `Visor.exe` (or pick it in **Settings → Monitor**).
-Visor launches it only when you press **Start**, with one UAC prompt (ETW tracing needs it), and only if the
-file is signed by Intel.
+The frame capture is part of Visor — there is nothing to download or install. A real-time ETW session
+needs administrator rights, so pressing **Start capture** shows **one UAC prompt** and starts a small
+helper (`Visor.exe --frame-capture`); Visor itself stays unelevated. **Stop** needs no second prompt, and
+the helper also ends on its own when the game or Visor exits, or after an hour.
+
+Measured: FPS, frame time (present-to-present), 1 % / 0.1 % lows, p99, stutters, and a *likely* GPU-bound /
+CPU-bound / capped label with the numbers behind it (GPU load is read on NVIDIA only for now). **Not measured
+yet:** displayed vs dropped frames, display latency and click-to-photon. Details:
+[docs/MONITOR-NATIVE.md](docs/MONITOR-NATIVE.md).
 
 ---
 
@@ -173,7 +178,7 @@ build-release.ps1               release pipeline · version lives in Directory.B
 ```
 
 Docs: [Network tweaks](docs/NETWORK-TWEAKS.md) · [PC tweaks](docs/PC-TWEAKS.md) ·
-[Hardware sensors](docs/HARDWARE-SENSORS.md) · [PresentMon](docs/MONITOR-PRESENTMON.md) ·
+[Hardware sensors](docs/HARDWARE-SENSORS.md) · [FPS monitor](docs/MONITOR-NATIVE.md) ·
 [QA checklist](docs/QA-CHECKLIST.md) · [Changelog](CHANGELOG.md)
 
 ---

@@ -15,11 +15,11 @@ public enum StartupLocation
     UserRun,
     /// <summary>HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run → HKLM StartupApproved\Run (elevated helper).</summary>
     MachineRun,
-    /// <summary>HKLM\SOFTWARE\WOW6432Node\...\Run → HKLM StartupApproved\Run32 (listed read-only: not in the helper allowlist).</summary>
+    /// <summary>HKLM\SOFTWARE\WOW6432Node\...\Run → HKLM StartupApproved\Run32 (elevated helper).</summary>
     MachineRun32,
     /// <summary>shell:startup → HKCU StartupApproved\StartupFolder (no admin).</summary>
     UserStartupFolder,
-    /// <summary>shell:common startup → HKLM StartupApproved\StartupFolder (listed read-only: not in the helper allowlist).</summary>
+    /// <summary>shell:common startup → HKLM StartupApproved\StartupFolder (elevated helper).</summary>
     CommonStartupFolder
 }
 
@@ -27,8 +27,6 @@ public enum StartupLocation
 public enum StartupToggleBlock
 {
     None,
-    /// <summary>The HKLM key behind this entry is not in the elevated helper's allowlist (Run32 / common Startup folder).</summary>
-    NotInHelperAllowlist,
     /// <summary>No elevation broker was supplied (HKLM toggles impossible in this build / test).</summary>
     NoBroker
 }
@@ -84,8 +82,8 @@ public static class StartupApproved
         StartupLocation.UserRun => UserBase + @"\Run",
         StartupLocation.UserStartupFolder => UserBase + @"\StartupFolder",
         StartupLocation.MachineRun => ElevationAllowlist.StartupApprovedRunKey,
-        StartupLocation.MachineRun32 => MachineBase + @"\Run32",
-        StartupLocation.CommonStartupFolder => MachineBase + @"\StartupFolder",
+        StartupLocation.MachineRun32 => ElevationAllowlist.StartupApprovedRun32Key,
+        StartupLocation.CommonStartupFolder => ElevationAllowlist.StartupApprovedFolderKey,
         _ => throw new ArgumentOutOfRangeException(nameof(location))
     };
 
@@ -383,30 +381,43 @@ public sealed class StartupToggleTarget : RegistrySafeActionTarget
             RegValue.Binary(Enable ? StartupApproved.EnabledBytes() : StartupApproved.DisabledBytes(_utcNow())));
 }
 
-/// <summary>HKLM StartupApproved\Run toggle through the elevated helper (one UAC prompt per apply / undo).</summary>
+/// <summary>
+/// HKLM StartupApproved toggle (Run, Run32 or the all-users StartupFolder value) through the elevated
+/// helper (one UAC prompt per apply / undo). All three keys are in <see cref="ElevationAllowlist"/>.
+/// </summary>
 public sealed class ElevatedStartupToggleTarget : ElevatedRegistrySafeActionTarget
 {
     private readonly RegAddress[] _addresses;
     private readonly Func<DateTime> _utcNow;
 
+    /// <summary>HKLM Run entry (the original shape).</summary>
     public ElevatedStartupToggleTarget(bool enable, string name, IElevationBroker broker,
+        IMachineRegistryReader? registry = null, Func<DateTime>? utcNow = null)
+        : this(enable, StartupLocation.MachineRun, name, broker, registry, utcNow) { }
+
+    /// <param name="location">A machine location: <see cref="StartupLocation.MachineRun"/>,
+    /// <see cref="StartupLocation.MachineRun32"/> or <see cref="StartupLocation.CommonStartupFolder"/>.</param>
+    public ElevatedStartupToggleTarget(bool enable, StartupLocation location, string name, IElevationBroker broker,
         IMachineRegistryReader? registry = null, Func<DateTime>? utcNow = null) : base(broker, registry)
     {
+        if (!StartupApproved.IsMachine(location)) throw new ArgumentException("HKLM locations only", nameof(location));
         ArgumentException.ThrowIfNullOrEmpty(name);
         Enable = enable;
+        Location = location;
         Name = name;
-        _addresses = new[] { new RegAddress(StartupApproved.ApprovedKey(StartupLocation.MachineRun), name) };
+        _addresses = new[] { new RegAddress(StartupApproved.ApprovedKey(location), name) };
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
     }
 
     public bool Enable { get; }
+    public StartupLocation Location { get; }
     public string Name { get; }
 
-    public override string ActionId => StartupToggle.ActionIdFor(Enable, StartupLocation.MachineRun, Name);
-    public override string JournalKey => StartupToggle.JournalKeyFor(StartupLocation.MachineRun, Name);
+    public override string ActionId => StartupToggle.ActionIdFor(Enable, Location, Name);
+    public override string JournalKey => StartupToggle.JournalKeyFor(Location, Name);
     public override string LocPrefix => StartupToggle.LocPrefix;
     protected override IReadOnlyList<RegAddress> Addresses => _addresses;
-    protected override string Label => "Startup approval (HKLM) " + Name;
+    protected override string Label => "Startup approval (HKLM " + Location + ") " + Name;
 
     protected override bool Satisfies(RegistryValueSet current) =>
         StartupApproved.IsEnabled(current.Get(_addresses[0])) == Enable;
@@ -438,7 +449,7 @@ public sealed class StartupAppsService
 
     /// <param name="userStartupFolder">Default: <c>shell:startup</c>. Pass "" to skip.</param>
     /// <param name="commonStartupFolder">Default: <c>shell:common startup</c>. Pass "" to skip.</param>
-    /// <param name="broker">Needed only for HKLM Run toggles; null → those entries are read-only.</param>
+    /// <param name="broker">Needed only for HKLM toggles (Run, Run32, all-users Startup folder); null → those entries are read-only.</param>
     public StartupAppsService(IStartupRegistryReader? reader = null, IStartupFileProbe? probe = null,
         string? userStartupFolder = null, string? commonStartupFolder = null,
         IOptimizeRegistry? hkcu = null, IElevationBroker? broker = null, IMachineRegistryReader? hklm = null,
@@ -573,23 +584,19 @@ public sealed class StartupAppsService
         };
     }
 
-    private StartupToggleBlock ToggleBlockFor(StartupLocation location) => location switch
-    {
-        StartupLocation.UserRun or StartupLocation.UserStartupFolder => StartupToggleBlock.None,
-        StartupLocation.MachineRun => _broker == null ? StartupToggleBlock.NoBroker : StartupToggleBlock.None,
-        _ => StartupToggleBlock.NotInHelperAllowlist
-    };
+    private StartupToggleBlock ToggleBlockFor(StartupLocation location) =>
+        StartupApproved.IsMachine(location) && _broker == null ? StartupToggleBlock.NoBroker : StartupToggleBlock.None;
 
     /// <summary>
     /// Target for a <c>startup.enable|…</c> / <c>startup.disable|…</c> id; null for unknown ids and for
-    /// locations Visor cannot toggle (HKLM Run32 / common Startup folder, or HKLM without a broker).
+    /// HKLM locations when no elevation broker was supplied.
     /// </summary>
     public ISafeActionTarget? CreateTarget(string actionId)
     {
         if (!StartupToggle.TryParseActionId(actionId, out bool enable, out var location, out var name)) return null;
         if (ToggleBlockFor(location) != StartupToggleBlock.None) return null;
-        return location == StartupLocation.MachineRun
-            ? new ElevatedStartupToggleTarget(enable, name, _broker!, _hklm, _utcNow)
+        return StartupApproved.IsMachine(location)
+            ? new ElevatedStartupToggleTarget(enable, location, name, _broker!, _hklm, _utcNow)
             : new StartupToggleTarget(enable, location, name, _hkcu, _utcNow);
     }
 

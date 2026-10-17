@@ -188,7 +188,7 @@
                     <Border x:Name="CardStability" Style="{StaticResource HwCard}">
                         <DockPanel>
                             <DockPanel DockPanel.Dock="Top">
-                                <Button x:Name="BtnEventViewer" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="EventViewer_Click"/>
+                                <Button x:Name="BtnShowEvents" DockPanel.Dock="Right" Style="{StaticResource CardLink}" Click="ShowEvents_Click"/>
                                 <controls:StatusDot x:Name="DotStability" DockPanel.Dock="Left" Margin="0,0,8,0"/>
                                 <TextBlock x:Name="LblStabilityTitle" Style="{StaticResource CardTitle}" VerticalAlignment="Center"/>
                             </DockPanel>
@@ -200,6 +200,25 @@
                         </DockPanel>
                     </Border>
                 </Grid>
+
+                <!-- Stability events: the crash-related System-log records listed in-app (CrashEventReader.ReadRecent,
+                     off the UI thread), newest first, filter by kind, expand for the full text, copy for support.
+                     Opened from the Stability card; replaces sending the user to Event Viewer. -->
+                <Border x:Name="CardEvents" Style="{StaticResource HwCard}" Visibility="Collapsed">
+                    <StackPanel>
+                        <DockPanel>
+                            <Button x:Name="BtnEventsCopy" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                    Margin="6,0,0,0" Click="EventsCopy_Click"/>
+                            <Button x:Name="BtnEventsRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                    Click="EventsRefresh_Click"/>
+                            <TextBlock x:Name="LblEventsTitle" Style="{StaticResource CardTitle}" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <TextBlock x:Name="TxtEventsHint" Style="{StaticResource Hint}" Margin="0,4,0,8" TextWrapping="Wrap"/>
+                        <WrapPanel x:Name="EventsFilter" Margin="0,0,0,6" controls:SegmentNav.ArrowKeys="True"/>
+                        <TextBlock x:Name="TxtEventsStatus" Style="{StaticResource HwMuted}" TextWrapping="Wrap"/>
+                        <StackPanel x:Name="EventsList" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
             <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
@@ -27,7 +26,7 @@ public enum OptimizeSection
 /// <summary>
 /// Optimize section, split into sub-sections (segmented strip, Left / Right moves): Overview (summary,
 /// suggestions, undo journal), System (Game Mode, power plans, HAGS, Game Bar, managed info), Graphics (per-game
-/// fullscreen optimizations, HAGS shortcut, visual effects), Input (mouse acceleration), Network (shared
+/// fullscreen optimizations, the HAGS switch, visual effects), Input (mouse acceleration), Network (shared
 /// <see cref="NetTweakPanel"/>), Startup (startup apps) and Cleanup (cache cleanup). Every apply / undo goes
 /// through <see cref="SafeActionUi"/> (async, never blocks the UI); every read runs off the UI thread and the
 /// page re-reads after each action.
@@ -59,8 +58,14 @@ public partial class OptimizePage : ShellPageBase
         public HagsStatus? Hags;
         public string? UltimateGuid;
         public bool? UltimateActive;
+        /// <summary>The Ultimate scheme Visor created, when still installed (only that one can be removed in-app).</summary>
+        public string? UltimateCreatedGuid;
         public IReadOnlyList<StartupEntry>? Startup;
         public CleanupScanResult? CleanupScan;
+        public DeliveryOptimizationStatus? DoCache;
+        /// <summary>Visual effects: true = some effect still on, false = performance set, null = unreadable.</summary>
+        public bool? VisualFxOn;
+        public IReadOnlyList<string>? VisualFxEffects;
         public bool Loaded;
     }
 
@@ -111,7 +116,7 @@ public partial class OptimizePage : ShellPageBase
         TxtPerGameHint.Text = Loc.T("optimize.ui.perGame.hint");
         TxtPerGameEmpty.Text = Loc.T("optimize.ui.perGame.empty");
         LblGfxHags.Text = Loc.T("optimize.hagsMode.title");
-        LblGfxInfo.Text = Loc.T("optimize.ui.info");
+        LblGfxInfo.Text = Loc.T("optimize.ui.gfx.desktop");
 
         LblInput.Text = Loc.T("optimize.ui.input");
         TxtInputHint.Text = Loc.T("optimize.ui.input.hint");
@@ -261,6 +266,7 @@ public partial class OptimizePage : ShellPageBase
         var profiles = Host.Profiles.ToList();
         var dismissed = (UiStateStore.Current.DismissedRecommendations ?? new List<string>()).ToList();
         var cleanup = _cleanupScan;
+        var doCache = _doStatus;
         TxtOptLoading.Visibility = Visibility.Visible;
         BtnOptimizeRefresh.IsEnabled = false;
         BtnStartupRefresh.IsEnabled = false;
@@ -268,12 +274,12 @@ public partial class OptimizePage : ShellPageBase
         PageSnapshot snap;
         try
         {
-            snap = await Task.Run(() => CaptureSnapshot(profiles, dismissed, cleanup));
+            snap = await Task.Run(() => CaptureSnapshot(profiles, dismissed, cleanup, doCache));
         }
         catch (Exception ex)
         {
             AppLog.Warn(ex, "Optimize refresh");
-            snap = new PageSnapshot { CleanupScan = cleanup, Loaded = true };
+            snap = new PageSnapshot { CleanupScan = cleanup, DoCache = doCache, Loaded = true };
         }
         if (gen != _refreshGen || !Host.Window.IsLoaded) return; // a newer refresh is in flight
         TxtOptLoading.Visibility = Visibility.Collapsed;
@@ -281,6 +287,7 @@ public partial class OptimizePage : ShellPageBase
         BtnStartupRefresh.IsEnabled = true;
         _snap = snap;
         _cleanupScan ??= snap.CleanupScan;
+        _doStatus ??= snap.DoCache;
         try
         {
             RenderAll();
@@ -303,7 +310,8 @@ public partial class OptimizePage : ShellPageBase
         return RefreshAsync();
     }
 
-    private static PageSnapshot CaptureSnapshot(List<GameProfile> profiles, List<string> dismissed, CleanupScanResult? cleanup)
+    private static PageSnapshot CaptureSnapshot(List<GameProfile> profiles, List<string> dismissed, CleanupScanResult? cleanup,
+        DeliveryOptimizationStatus? doCache)
     {
         var safe = Safe;
         var pc = App.Services.Pc;
@@ -320,9 +328,13 @@ public partial class OptimizePage : ShellPageBase
             DismissedCount = RecommendationDismissals.Parse(dismissed, DateTime.UtcNow).Count,
             Hags = HagsStatusReader.Read(),
             UltimateGuid = pc.Ultimate.FindInstalled(),
-            CleanupScan = cleanup
+            CleanupScan = cleanup,
+            DoCache = doCache,
+            VisualFxEffects = VisualEffectsSafeActionTarget.ReadEffectsOnList()
         };
+        s.VisualFxOn = s.VisualFxEffects == null ? null : s.VisualFxEffects.Count > 0;
         s.UltimateActive = s.UltimateGuid == null ? false : pc.Ultimate.IsActive();
+        s.UltimateCreatedGuid = pc.Ultimate.CreatedInstalledGuid();
         try
         {
             var apps = pc.Startup.List();
@@ -339,6 +351,7 @@ public partial class OptimizePage : ShellPageBase
             try { s.CleanupScan = pc.Cleanup.Scan(); }
             catch (Exception ex) { AppLog.Warn(ex, "Cleanup scan"); }
         }
+        s.DoCache ??= pc.DeliveryOptimization.Read(); // WMI, no admin; measured with the first scan, then on Scan / after a clean
 
         var ctx = BuildContext(profiles, dismissed, s.GameMode, s.GameBarOn, s.MouseAccelOn, s.Fso,
             s.Startup, s.CleanupScan, pc.Cleanup.PrimaryDrive(), s.Hags);
@@ -710,19 +723,6 @@ public partial class OptimizePage : ShellPageBase
     {
         await SafeActionUi.UndoAsync(Host, actionIdOrKey, historyDetail);
         await RefreshNowAsync();
-    }
-
-    private void OpenShell(string target)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn(ex, "Open " + target);
-            Host.ShowToast(Loc.T("system.unavailable"));
-        }
     }
 
     // -- Small element factories -----------------------------------------------------------------------------

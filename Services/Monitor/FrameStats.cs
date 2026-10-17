@@ -3,13 +3,13 @@ namespace Visor.Services;
 /// <summary>Where the frame rate most likely is limited, with the evidence that produced the label.</summary>
 public enum BoundKind
 {
-    /// <summary>Not enough data, or PresentMon reported neither GPUBusy nor CPUBusy.</summary>
+    /// <summary>Not enough frames, or no GPU-load reading to judge by (see <see cref="BoundEstimator"/>).</summary>
     Unknown,
-    /// <summary>GPU busy for most of each frame — the GPU is the likely limiter.</summary>
+    /// <summary>GPU load at the ceiling while capturing — the GPU is the likely limiter.</summary>
     LikelyGpu,
-    /// <summary>CPU busy time dominates and the GPU idles — the CPU (or a frame cap / V-Sync) is the likely limiter.</summary>
+    /// <summary>GPU has headroom and FPS stays well below the refresh rate — the CPU (game thread) is the likely limiter.</summary>
     LikelyCpu,
-    /// <summary>Neither side saturates: a frame-rate cap, V-Sync or a wait is holding the pace.</summary>
+    /// <summary>FPS pinned at the refresh / a steady limiter, or neither side clearly saturated.</summary>
     LikelyCappedOrBalanced
 }
 
@@ -31,8 +31,12 @@ public sealed record FrameStatsSummary
     public double MaxFrameTimeMs { get; init; }
     /// <summary>Frames slower than 2× the median frame time.</summary>
     public int StutterCount { get; init; }
+    /// <summary>Population standard deviation of the frame times.</summary>
+    public double FrameTimeStdDevMs { get; init; }
+    /// <summary>Frame-time variation: stddev / mean (0 when empty).</summary>
+    public double FrameTimeCv => AvgFrameTimeMs > 0 ? FrameTimeStdDevMs / AvgFrameTimeMs : 0;
     public BoundKind Bound { get; init; }
-    /// <summary>Human-readable evidence for <see cref="Bound"/> (ratios), empty when Unknown.</summary>
+    /// <summary>Human-readable evidence for <see cref="Bound"/> (the numbers behind the label); may be set even when Unknown.</summary>
     public string BoundEvidence { get; init; } = "";
     public double? AvgGpuBusyMs { get; init; }
     public double? AvgCpuBusyMs { get; init; }
@@ -80,12 +84,6 @@ public sealed class FrameStats
 {
     /// <summary>Frames slower than this multiple of the median count as stutters.</summary>
     public const double StutterFactor = 2.0;
-    /// <summary>GPUBusy / FrameTime at or above this → likely GPU-bound.</summary>
-    public const double GpuBoundRatio = 0.85;
-    /// <summary>GPUBusy / FrameTime at or below this (with CPUBusy ≥ GPUBusy) → likely CPU-bound.</summary>
-    public const double CpuBoundGpuIdleRatio = 0.60;
-    /// <summary>Fewer frames than this → bound stays Unknown.</summary>
-    public const int MinFramesForBound = 30;
 
     private readonly object _gate = new();
     private readonly LinkedList<FrameRecord> _frames = new();
@@ -183,7 +181,14 @@ public sealed class FrameStats
 
         double? avgGpu = gpuN > 0 ? gpuSum / gpuN : null;
         double? avgCpu = cpuN > 0 ? cpuSum / cpuN : null;
-        var (bound, evidence) = ClassifyBound(n, avgFt, avgGpu, avgCpu);
+
+        double variance = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double d = times[i] - avgFt;
+            variance += d * d;
+        }
+        double stdDev = n > 1 ? Math.Sqrt(variance / n) : 0;
 
         double covered = n > 1 ? Math.Max(0, frames[n - 1].Time - frames[0].Time) : 0;
         return new FrameStatsSummary
@@ -199,8 +204,11 @@ public sealed class FrameStats
             P99FrameTimeMs = p99,
             MaxFrameTimeMs = max,
             StutterCount = stutters,
-            Bound = bound,
-            BoundEvidence = evidence,
+            FrameTimeStdDevMs = stdDev,
+            // The limiter estimate needs signals from outside the frame list (GPU load, refresh):
+            // MonitorService fills Bound / BoundEvidence via BoundEstimator.
+            Bound = BoundKind.Unknown,
+            BoundEvidence = "",
             AvgGpuBusyMs = avgGpu,
             AvgCpuBusyMs = avgCpu,
             AvgDisplayLatencyMs = dispN > 0 ? dispSum / dispN : null,
@@ -208,35 +216,6 @@ public sealed class FrameStats
             ClickToPhotonSamples = c2pN,
             LastFps = frames[n - 1].Fps
         };
-    }
-
-    /// <summary>
-    /// Heuristic only — PresentMon sees presents, not the whole pipeline. GPUBusy close to the
-    /// frame time means the GPU had no slack; CPUBusy ≥ GPUBusy with an idling GPU points at the
-    /// CPU; both idle means something else (cap, V-Sync, wait) sets the pace.
-    /// </summary>
-    internal static (BoundKind, string) ClassifyBound(int frames, double avgFrameTimeMs, double? avgGpuBusyMs, double? avgCpuBusyMs)
-    {
-        if (frames < MinFramesForBound || avgFrameTimeMs <= 0 || avgGpuBusyMs is not double gpu)
-            return (BoundKind.Unknown, "");
-        double gpuRatio = gpu / avgFrameTimeMs;
-        string gpuPart = $"GPU busy {gpuRatio:P0} of frame ({gpu:F1} / {avgFrameTimeMs:F1} ms)";
-        if (gpuRatio >= GpuBoundRatio)
-            return (BoundKind.LikelyGpu, gpuPart);
-        if (avgCpuBusyMs is double cpu)
-        {
-            double cpuRatio = cpu / avgFrameTimeMs;
-            string cpuPart = $"CPU busy {cpuRatio:P0} of frame ({cpu:F1} ms)";
-            if (gpuRatio <= CpuBoundGpuIdleRatio && cpu >= gpu)
-                return (BoundKind.LikelyCpu, cpuPart + "; " + gpuPart);
-            if (gpuRatio <= CpuBoundGpuIdleRatio && cpuRatio <= CpuBoundGpuIdleRatio)
-                return (BoundKind.LikelyCappedOrBalanced, cpuPart + "; " + gpuPart);
-            return (BoundKind.LikelyCappedOrBalanced, cpuPart + "; " + gpuPart);
-        }
-        // No CPU column (PresentMon 1.x): an idle GPU is all we can say.
-        return gpuRatio <= CpuBoundGpuIdleRatio
-            ? (BoundKind.LikelyCpu, gpuPart + "; no CPUBusy column")
-            : (BoundKind.LikelyCappedOrBalanced, gpuPart);
     }
 
     /// <summary>Nearest-rank percentile on an ascending array; 0 for an empty array.</summary>
