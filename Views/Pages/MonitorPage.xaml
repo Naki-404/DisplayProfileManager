@@ -7,7 +7,8 @@
     <local:ShellPageBase.Resources>
         <Style x:Key="StatCard" TargetType="Border" BasedOn="{StaticResource CardSurface}">
             <Setter Property="Padding" Value="12,10"/>
-            <Setter Property="Margin" Value="0,0,10,10"/>
+            <!-- 12-DIP gutters like every other card grid. -->
+            <Setter Property="Margin" Value="0,0,12,12"/>
             <Setter Property="Width" Value="156"/>
         </Style>
         <Style x:Key="StatValue" TargetType="TextBlock">
@@ -17,9 +18,8 @@
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
         </Style>
     </local:ShellPageBase.Resources>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                  CanContentScroll="False" PanningMode="VerticalOnly">
-        <StackPanel Margin="0,4,0,8">
+    <ScrollViewer Style="{StaticResource PageScrollViewer}">
+        <StackPanel Margin="4,4,12,8">
 
             <!-- Header: state pill · target · Start / Stop -->
             <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
@@ -83,7 +83,7 @@
             </Border>
 
             <!-- Live numbers (window = last N seconds of the capture) -->
-            <WrapPanel x:Name="StatsPanel" Margin="0,0,-10,2">
+            <WrapPanel x:Name="StatsPanel" Margin="0,0,-12,0">
                 <Border Style="{StaticResource StatCard}">
                     <StackPanel>
                         <TextBlock x:Name="TxtFpsAvg" Style="{StaticResource StatValue}" Text="—"/>

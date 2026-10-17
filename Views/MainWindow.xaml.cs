@@ -867,6 +867,12 @@ public partial class MainWindow : Window, IShellHost
         LblNavMain.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         LblBrand.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         BetaPill.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        // 56-DIP rail: logo (22) + collapse button (28) + the 12/8 side margins don't fit (70 > 55) and the logo
+        // was squeezed under the button. Compact shows only the centered expand button, on the nav items' axis.
+        BrandRow.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        DockPanel.SetDock(BtnRailCollapse, compact ? Dock.Top : Dock.Right);
+        BtnRailCollapse.HorizontalAlignment = compact ? System.Windows.HorizontalAlignment.Center : System.Windows.HorizontalAlignment.Stretch;
+        BrandDock.Margin = compact ? new Thickness(0, 2, 0, 14) : new Thickness(12, 2, 8, 14);
         RailFooter.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         RailCollapseIcon.SetResourceReference(System.Windows.Shapes.Path.DataProperty, compact ? "IconExpand" : "IconCollapse");
         string tip = Loc.T(compact ? "nav.expand" : "nav.collapse");

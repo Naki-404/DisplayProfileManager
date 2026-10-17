@@ -48,6 +48,14 @@ public static class SafeActionCodes
     public const string SessionActive = "sessionActive";
     public const string UnknownAction = "unknownAction";
     public const string Conflict = "conflict";
+    /// <summary>The target needs the elevated helper — call <see cref="SafeActionService.ApplyAsync"/> / <see cref="SafeActionService.UndoAsync"/>.</summary>
+    public const string NeedsElevation = "needsElevation";
+    /// <summary>The user clicked "No" on the UAC prompt — nothing was changed.</summary>
+    public const string ElevationDeclined = "elevationDeclined";
+    /// <summary>The elevated helper refused the request (outside its allowlist) — nothing was changed.</summary>
+    public const string ElevationRejected = "elevationRejected";
+    /// <summary>The elevated helper could not be started, timed out or returned no result.</summary>
+    public const string ElevationFailed = "elevationFailed";
 
     public const string LocPrefix = "safeAction.code.";
 
@@ -133,6 +141,25 @@ public interface ISafeActionTarget
 
     /// <summary>Writes an arbitrary raw state (apply or restore). The caller re-reads to verify regardless of the return.</summary>
     bool WriteState(string state);
+
+    /// <summary>
+    /// True when writes need administrator rights and go through the elevated helper (one UAC prompt per
+    /// write). Such targets are applied / undone only via <see cref="SafeActionService.ApplyAsync"/> /
+    /// <see cref="SafeActionService.UndoAsync"/>; the synchronous paths refuse them with
+    /// <see cref="SafeActionCodes.NeedsElevation"/>. Reading state never needs elevation.
+    /// </summary>
+    bool RequiresElevation => false;
+
+    /// <summary>Async write (elevated targets). Default: the synchronous <see cref="WriteState"/>.</summary>
+    Task<SafeActionWriteResult> WriteStateAsync(string state, CancellationToken ct) =>
+        Task.FromResult(WriteState(state) ? SafeActionWriteResult.Ok : SafeActionWriteResult.Fail(SafeActionCodes.ApplyFailed));
+}
+
+/// <summary>Result of <see cref="ISafeActionTarget.WriteStateAsync"/>: success, or a <see cref="SafeActionCodes"/> code.</summary>
+public readonly record struct SafeActionWriteResult(bool Written, string? Code = null)
+{
+    public static SafeActionWriteResult Ok => new(true);
+    public static SafeActionWriteResult Fail(string code) => new(false, code);
 }
 
 /// <summary>

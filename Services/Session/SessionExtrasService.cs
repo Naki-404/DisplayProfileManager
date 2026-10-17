@@ -60,13 +60,18 @@ public sealed class SessionExtrasService
         Step("Audio device", () =>
         {
             if (!extras.SwitchAudioDevice || string.IsNullOrWhiteSpace(extras.AudioDeviceId)) return;
+            // A stored endpoint id that no longer exists (device reinstalled / other USB port → new id)
+            // is skipped with one log line instead of failing on every (re-)apply.
+            var target = AudioEndpoint.ResolveUsable(extras.AudioDeviceId!);
+            if (target == null) return;
             if (!snap.AudioChanged)
             {
                 snap.AudioDeviceId = AudioEndpoint.GetDefaultId(AudioEndpoint.Role.Multimedia);
                 snap.AudioConsoleDeviceId = AudioEndpoint.GetDefaultId(AudioEndpoint.Role.Console);
                 snap.AudioChanged = true;
             }
-            AudioEndpoint.SetDefault(extras.AudioDeviceId!);
+            if (!AudioEndpoint.SetDefault(target))
+                AddWarning("Audio device switch failed");
         });
 
         Step("Monitor brightness", () =>
@@ -536,16 +541,165 @@ internal static class DisplayTopology
     }
 }
 
-/// <summary>Default audio endpoint via PolicyConfig (undocumented COM, widely used).</summary>
+/// <summary>Outcome of one default-endpoint switch (see <see cref="AudioEndpoint.TrySetDefaultForRole"/>).</summary>
+public enum AudioSwitchResult
+{
+    Ok,
+    /// <summary>The endpoint id is unknown to Windows (device removed / reinstalled → new id) or not active.</summary>
+    DeviceUnavailable,
+    /// <summary>The same id failed recently — not retried until <see cref="AudioSwitchMemo.RetryAfter"/> elapses.</summary>
+    Suppressed,
+    /// <summary>PolicyConfig returned a failure HRESULT (logged with the code).</summary>
+    Failed
+}
+
+/// <summary>
+/// Pure helpers around MMDevice endpoint ids ("{0.0.0.00000000}.{guid}") and the HRESULTs the
+/// PolicyConfig call returns — unit-tested without touching the audio stack.
+/// </summary>
+public static class AudioEndpointId
+{
+    public const int E_NOTFOUND = unchecked((int)0x80070490);
+    public const int E_INVALIDARG = unchecked((int)0x80070057);
+    public const int E_NOINTERFACE = unchecked((int)0x80004002);
+    public const int E_ACCESSDENIED = unchecked((int)0x80070005);
+    public const int E_NOTIMPL = unchecked((int)0x80004001);
+    public const int AUDCLNT_E_DEVICE_INVALIDATED = unchecked((int)0x88890004);
+
+    /// <summary>Data-flow part of an endpoint id: "0.0.0" = render, "0.0.1" = capture.</summary>
+    public enum Flow { Unknown, Render, Capture }
+
+    /// <summary>
+    /// Parses "{0.0.0.00000000}.{3c662cc2-4bcf-43ee-9fc0-127246e3bb71}". False for names or malformed ids.
+    /// </summary>
+    public static bool TryParse(string? id, out Flow flow, out Guid endpointGuid)
+    {
+        flow = Flow.Unknown;
+        endpointGuid = Guid.Empty;
+        if (string.IsNullOrWhiteSpace(id)) return false;
+        var s = id.Trim();
+        int sep = s.IndexOf("}.{", StringComparison.Ordinal);
+        if (!s.StartsWith('{') || !s.EndsWith('}') || sep < 0) return false;
+        string head = s[1..sep];
+        string tail = s[(sep + 2)..];
+        if (!Guid.TryParseExact(tail, "B", out endpointGuid)) return false;
+        var parts = head.Split('.');
+        if (parts.Length != 4 || parts.Any(p => p.Length == 0 || !p.All(char.IsAsciiHexDigit)))
+            return false;
+        flow = (parts[0], parts[1], parts[2]) switch
+        {
+            ("0", "0", "0") => Flow.Render,
+            ("0", "0", "1") => Flow.Capture,
+            _ => Flow.Unknown
+        };
+        return true;
+    }
+
+    /// <summary>True when <paramref name="idOrName"/> looks like an endpoint id rather than a friendly-name fragment.</summary>
+    public static bool LooksLikeId(string? idOrName) =>
+        !string.IsNullOrWhiteSpace(idOrName) && idOrName.TrimStart().StartsWith('{');
+
+    /// <summary>Log text for a PolicyConfig / MMDevice HRESULT: "0x80070490 E_NOTFOUND (…)".</summary>
+    public static string DescribeHResult(int hr)
+    {
+        string hex = "0x" + hr.ToString("X8", System.Globalization.CultureInfo.InvariantCulture);
+        string? name = hr switch
+        {
+            E_NOTFOUND => "E_NOTFOUND (endpoint id unknown — device removed or reinstalled; re-select it in the profile)",
+            E_INVALIDARG => "E_INVALIDARG (malformed endpoint id or role)",
+            E_NOINTERFACE => "E_NOINTERFACE (PolicyConfig interface not available on this Windows build)",
+            E_ACCESSDENIED => "E_ACCESSDENIED",
+            E_NOTIMPL => "E_NOTIMPL",
+            AUDCLNT_E_DEVICE_INVALIDATED => "AUDCLNT_E_DEVICE_INVALIDATED (device unplugged / disabled)",
+            _ => null
+        };
+        return name == null ? hex : hex + " " + name;
+    }
+
+    /// <summary>MMDevice DEVICE_STATE_* bits → short text for logs.</summary>
+    public static string DescribeState(int state) => state switch
+    {
+        1 => "active",
+        2 => "disabled",
+        4 => "not present",
+        8 => "unplugged",
+        _ => "state 0x" + state.ToString("X", System.Globalization.CultureInfo.InvariantCulture)
+    };
+}
+
+/// <summary>
+/// Remembers endpoint ids whose switch just failed so a profile re-apply (deferred apply, focus
+/// changes, …) does not hammer PolicyConfig and the log with the same error. Pure (clock passed in).
+/// </summary>
+public sealed class AudioSwitchMemo
+{
+    public static readonly TimeSpan RetryAfter = TimeSpan.FromMinutes(10);
+
+    private readonly Dictionary<string, (DateTime Utc, int HResult)> _failures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _reportedUnavailable = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
+
+    /// <summary>False while <paramref name="id"/> is inside its back-off window after a failure.</summary>
+    public bool ShouldAttempt(string id, DateTime nowUtc)
+    {
+        lock (_gate)
+        {
+            if (!_failures.TryGetValue(id, out var f)) return true;
+            if (nowUtc - f.Utc >= RetryAfter)
+            {
+                _failures.Remove(id);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    public void RecordFailure(string id, int hresult, DateTime nowUtc)
+    {
+        lock (_gate) _failures[id] = (nowUtc, hresult);
+    }
+
+    public void RecordSuccess(string id)
+    {
+        lock (_gate)
+        {
+            _failures.Remove(id);
+            _reportedUnavailable.Remove(id);
+        }
+    }
+
+    /// <summary>True the first time an unavailable id is seen (log once per id per run, not on every re-apply).</summary>
+    public bool FirstUnavailableReport(string id)
+    {
+        lock (_gate) return _reportedUnavailable.Add(id);
+    }
+
+    public int? LastFailure(string id)
+    {
+        lock (_gate) return _failures.TryGetValue(id, out var f) ? f.HResult : null;
+    }
+}
+
+/// <summary>
+/// Default audio endpoint via PolicyConfig (undocumented COM, widely used). The switch first checks
+/// that the stored endpoint id still exists and is active (endpoint ids change when a device is
+/// reinstalled or moved to another port), tries <c>IPolicyConfig</c> (Win7+) and falls back to
+/// <c>IPolicyConfigVista</c>, logs the HRESULT, and backs off instead of retrying on every re-apply.
+/// </summary>
 public static class AudioEndpoint
 {
+    private const int DEVICE_STATE_ACTIVE = 1;
+
+    /// <summary>Process-wide back-off memo (see <see cref="AudioSwitchMemo"/>).</summary>
+    public static AudioSwitchMemo Memo { get; } = new();
+
     public static List<(string Id, string Name)> ListDevices()
     {
         var list = new List<(string, string)>();
         try
         {
             var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
-            int hr = enumerator.EnumAudioEndpoints(EDataFlow.eRender, 1 /* DEVICE_STATE_ACTIVE */, out var coll);
+            int hr = enumerator.EnumAudioEndpoints(EDataFlow.eRender, DEVICE_STATE_ACTIVE, out var coll);
             if (hr != 0 || coll == null) return list;
 
             coll.GetCount(out int count);
@@ -616,30 +770,149 @@ public static class AudioEndpoint
     }
 
     /// <summary>
+    /// Endpoint id the profile setting refers to, only when that endpoint exists and is active now;
+    /// otherwise null (logged once per id — not on every re-apply).
+    /// </summary>
+    public static string? ResolveUsable(string idOrName)
+    {
+        var id = ResolveId(idOrName);
+        if (id == null) return null;
+        int? state = ReadState(id, out int hr);
+        if (state == DEVICE_STATE_ACTIVE) return id;
+        if (Memo.FirstUnavailableReport(id))
+        {
+            string why = state.HasValue ? AudioEndpointId.DescribeState(state.Value) : AudioEndpointId.DescribeHResult(hr);
+            AppLog.Warn($"Audio device {id} is not available ({why}) — default device left unchanged. Re-select the device in the game profile.");
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Makes the device the default for playback (console + multimedia roles). The communications
     /// role is left alone so a separate headset / chat device setup keeps working.
     /// </summary>
-    public static void SetDefault(string idOrName)
+    /// <returns>True when both roles were switched (or already set).</returns>
+    public static bool SetDefault(string idOrName)
     {
-        var id = ResolveId(idOrName);
-        if (id == null) return;
-        SetDefaultForRole(id, Role.Console);
-        SetDefaultForRole(id, Role.Multimedia);
+        var id = ResolveUsable(idOrName);
+        if (id == null) return false;
+        var console = TrySetDefaultForRole(id, Role.Console);
+        if (console is AudioSwitchResult.DeviceUnavailable or AudioSwitchResult.Suppressed) return false;
+        var multimedia = TrySetDefaultForRole(id, Role.Multimedia);
+        return console == AudioSwitchResult.Ok && multimedia == AudioSwitchResult.Ok;
     }
 
+    /// <summary>
+    /// Restore helper: throws only for a failure worth retrying later. A device that no longer exists
+    /// cannot be restored — that is logged once and treated as done (no retry on every start).
+    /// </summary>
     public static void SetDefaultForRole(string id, Role role)
     {
-        var policy = (IPolicyConfigVista)new CPolicyConfigClient();
+        var r = TrySetDefaultForRole(id, role);
+        if (r is AudioSwitchResult.Failed or AudioSwitchResult.Suppressed)
+        {
+            int hr = Memo.LastFailure(id) ?? 0;
+            throw new COMException($"SetDefaultEndpoint({role}) " +
+                (r == AudioSwitchResult.Suppressed ? "skipped after a recent failure: " : "failed: ") +
+                AudioEndpointId.DescribeHResult(hr), hr);
+        }
+    }
+
+    /// <summary>
+    /// One role switch with existence check, IPolicyConfig → IPolicyConfigVista fallback, HRESULT logging
+    /// and a back-off after a failure (<see cref="AudioSwitchMemo.RetryAfter"/>).
+    /// </summary>
+    public static AudioSwitchResult TrySetDefaultForRole(string id, Role role)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return AudioSwitchResult.DeviceUnavailable;
+        var now = DateTime.UtcNow;
+        if (!Memo.ShouldAttempt(id, now))
+            return AudioSwitchResult.Suppressed;
+
+        int? state = ReadState(id, out int stateHr);
+        if (state != DEVICE_STATE_ACTIVE)
+        {
+            if (Memo.FirstUnavailableReport(id))
+            {
+                string why = state.HasValue ? AudioEndpointId.DescribeState(state.Value) : AudioEndpointId.DescribeHResult(stateHr);
+                AppLog.Warn($"Default audio ({role}) not switched: device {id} is not available ({why}).");
+            }
+            return AudioSwitchResult.DeviceUnavailable;
+        }
+
+        int hr;
+        string via;
         try
         {
-            int hr = policy.SetDefaultEndpoint(id, (int)role);
-            if (hr != 0)
-                throw new COMException($"SetDefaultEndpoint({role}) failed", hr);
+            hr = CallSetDefaultEndpoint(id, role, out via);
+        }
+        catch (Exception ex)
+        {
+            hr = ex.HResult != 0 ? ex.HResult : AudioEndpointId.E_NOINTERFACE;
+            via = "PolicyConfig";
+        }
+
+        if (hr == 0)
+        {
+            Memo.RecordSuccess(id);
             AppLog.Info($"Default audio ({role}) → {id}");
+            return AudioSwitchResult.Ok;
+        }
+
+        Memo.RecordFailure(id, hr, now);
+        AppLog.Error($"Default audio ({role}) → {id} failed via {via}: {AudioEndpointId.DescribeHResult(hr)}. " +
+                     $"Not retried for {AudioSwitchMemo.RetryAfter.TotalMinutes:0} min.");
+        return AudioSwitchResult.Failed;
+    }
+
+    /// <summary>IPolicyConfig (Win7 – Win11) first; IPolicyConfigVista only when the Win7 interface is not exposed.</summary>
+    private static int CallSetDefaultEndpoint(string id, Role role, out string via)
+    {
+        object client = new CPolicyConfigClient();
+        try
+        {
+            if (client is IPolicyConfig policy)
+            {
+                via = "IPolicyConfig";
+                return policy.SetDefaultEndpoint(id, (ERole)(int)role);
+            }
+            if (client is IPolicyConfigVista vista)
+            {
+                via = "IPolicyConfigVista";
+                return vista.SetDefaultEndpoint(id, (ERole)(int)role);
+            }
+            via = "PolicyConfig";
+            return AudioEndpointId.E_NOINTERFACE;
         }
         finally
         {
-            Marshal.ReleaseComObject(policy);
+            Marshal.ReleaseComObject(client);
+        }
+    }
+
+    /// <summary>DEVICE_STATE_* of the endpoint, or null when Windows does not know the id (<paramref name="hr"/> says why).</summary>
+    private static int? ReadState(string id, out int hr)
+    {
+        hr = 0;
+        IMMDeviceEnumerator? enumerator = null;
+        IMMDevice? dev = null;
+        try
+        {
+            enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+            hr = enumerator.GetDevice(id, out dev);
+            if (hr != 0 || dev == null) return null;
+            hr = dev.GetState(out int state);
+            return hr == 0 ? state : null;
+        }
+        catch (Exception ex)
+        {
+            hr = ex.HResult;
+            return null;
+        }
+        finally
+        {
+            if (dev != null) Marshal.ReleaseComObject(dev);
+            if (enumerator != null) Marshal.ReleaseComObject(enumerator);
         }
     }
 
@@ -647,12 +920,13 @@ public static class AudioEndpoint
     private static string? ResolveId(string idOrName)
     {
         if (string.IsNullOrWhiteSpace(idOrName)) return null;
-        if (idOrName.StartsWith("{", StringComparison.Ordinal)) return idOrName;
+        if (AudioEndpointId.LooksLikeId(idOrName)) return idOrName.Trim();
         var match = ListDevices().FirstOrDefault(d =>
             d.Name.Contains(idOrName, StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrEmpty(match.Id))
         {
-            AppLog.Warn("Audio device not found: " + idOrName);
+            if (Memo.FirstUnavailableReport(idOrName))
+                AppLog.Warn("Audio device not found: " + idOrName);
             return null;
         }
         return match.Id;
@@ -664,7 +938,7 @@ public static class AudioEndpoint
     [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
     private class MMDeviceEnumeratorComObject { }
 
-    // CLSID_PolicyConfigClient
+    // CLSID_PolicyConfigClient (AudioSes.dll, ThreadingModel=Both).
     [ComImport, Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")]
     private class CPolicyConfigClient { }
 
@@ -692,6 +966,7 @@ public static class AudioEndpoint
         [PreserveSig] int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
         [PreserveSig] int OpenPropertyStore(int stgmAccess, out IPropertyStore propertyStore);
         [PreserveSig] int GetId([MarshalAs(UnmanagedType.LPWStr)] out string ppstrId);
+        [PreserveSig] int GetState(out int pdwState);
     }
 
     [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -704,9 +979,10 @@ public static class AudioEndpoint
         [PreserveSig] int Commit();
     }
 
-    // IPolicyConfig (Vista+) — only SetDefaultEndpoint used; placeholders keep vtable alignment.
+    // IPolicyConfig (Windows 7 – 11): 10 methods precede SetDefaultEndpoint (incl. ResetDeviceFormat).
+    // Only SetDefaultEndpoint is called; the placeholders keep the vtable slots aligned.
     [ComImport, Guid("F8679F50-850A-41CF-9C72-430F290290C8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IPolicyConfigVista
+    private interface IPolicyConfig
     {
         [PreserveSig] int GetMixFormat(IntPtr a, IntPtr b);
         [PreserveSig] int GetDeviceFormat(IntPtr a, IntPtr b, IntPtr c);
@@ -718,7 +994,24 @@ public static class AudioEndpoint
         [PreserveSig] int SetShareMode(IntPtr a, IntPtr b);
         [PreserveSig] int GetPropertyValue(IntPtr a, IntPtr b, IntPtr c);
         [PreserveSig] int SetPropertyValue(IntPtr a, IntPtr b, IntPtr c);
-        [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, int role);
+        [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, ERole role);
+        [PreserveSig] int SetEndpointVisibility(IntPtr a, IntPtr b);
+    }
+
+    // IPolicyConfigVista: no ResetDeviceFormat → SetDefaultEndpoint is the 10th method.
+    [ComImport, Guid("568B9108-44BF-40B4-9006-86AFE5B5A620"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPolicyConfigVista
+    {
+        [PreserveSig] int GetMixFormat(IntPtr a, IntPtr b);
+        [PreserveSig] int GetDeviceFormat(IntPtr a, IntPtr b, IntPtr c);
+        [PreserveSig] int SetDeviceFormat(IntPtr a, IntPtr b, IntPtr c);
+        [PreserveSig] int GetProcessingPeriod(IntPtr a, IntPtr b, IntPtr c, IntPtr d);
+        [PreserveSig] int SetProcessingPeriod(IntPtr a, IntPtr b);
+        [PreserveSig] int GetShareMode(IntPtr a, IntPtr b);
+        [PreserveSig] int SetShareMode(IntPtr a, IntPtr b);
+        [PreserveSig] int GetPropertyValue(IntPtr a, IntPtr b, IntPtr c);
+        [PreserveSig] int SetPropertyValue(IntPtr a, IntPtr b, IntPtr c);
+        [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, ERole role);
         [PreserveSig] int SetEndpointVisibility(IntPtr a, IntPtr b);
     }
 

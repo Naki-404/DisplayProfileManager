@@ -369,16 +369,21 @@ public partial class OptimizePage : ShellPageBase
         root.Children.Add(actions);
 
         var textCol = new StackPanel();
-        var titleRow = new StackPanel { Orientation = WpfOrientation.Horizontal };
-        titleRow.Children.Add(NewBadge(Loc.T(rec.SeverityKey),
+        // DockPanel, not a horizontal StackPanel: a StackPanel measures the title with infinite width, so it never
+        // wrapped and long (Russian) titles ran under the action buttons. Badge pinned to the first text line.
+        var titleRow = new DockPanel();
+        var badge = NewBadge(Loc.T(rec.SeverityKey),
             rec.Severity == RecommendationSeverity.Warning ? "WarningBrush" : "BorderBrush",
-            rec.Severity == RecommendationSeverity.Warning ? "WarningBrush" : "MutedBrush"));
+            rec.Severity == RecommendationSeverity.Warning ? "WarningBrush" : "MutedBrush");
+        badge.VerticalAlignment = VerticalAlignment.Top;
+        DockPanel.SetDock(badge, Dock.Left);
+        titleRow.Children.Add(badge);
         var title = new TextBlock
         {
             Text = Loc.T(rec.TitleKey),
             FontWeight = FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Top
         };
         title.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
         titleRow.Children.Add(title);

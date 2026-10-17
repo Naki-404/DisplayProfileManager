@@ -416,4 +416,128 @@ public class OptimizeRecommendationTests
         Assert.Contains(list, r => r.Id == RecommendationEngine.IdGameModeOff);
         Assert.All(list, r => Assert.Empty(r.Evidence));
     }
+
+    // ---------------- PC tweaks: startup apps / cleanup / HAGS ----------------
+
+    private static Visor.Services.Optimize.Pc.StartupEntry Startup(string name, bool enabled, long? size) => new()
+    {
+        Location = Visor.Services.Optimize.Pc.StartupLocation.UserRun,
+        Name = name,
+        DisplayName = name,
+        Command = "\"C:\\Apps\\" + name + ".exe\"",
+        Enabled = enabled,
+        FileSizeBytes = size
+    };
+
+    [Fact]
+    public void Many_enabled_startup_apps_is_info_with_names_and_sizes_as_evidence()
+    {
+        var apps = Enumerable.Range(1, 10).Select(i => Startup("App" + i, true, i * 1024L * 1024)).ToList();
+        apps.Add(Startup("Disabled", false, 999L * 1024 * 1024));
+        apps.Add(Startup("NoFile", true, null));
+        var r = Assert.Single(Eval(new RecommendationContext { ProfileCount = 1, NowUtc = Now, StartupApps = apps }),
+            x => x.Id == RecommendationEngine.IdStartupMany);
+        Assert.Equal(RecommendationSeverity.Info, r.Severity);
+        Assert.Equal(RecommendationAction.OpenStartupApps, r.Action);
+        Assert.Null(r.SafeActionId);
+        Assert.Equal("11", r.BodyArgs[0]);
+        Assert.Equal("enabled: 11/12", r.Evidence[0]);
+        Assert.Equal("App10: 10 MB", r.Evidence[1]);                   // largest first
+        Assert.Equal(1 + RecommendationEngine.StartupEvidenceMax, r.Evidence.Length);
+        Assert.DoesNotContain(r.Evidence, e => e.StartsWith("Disabled"));
+        Assert.Equal("optimize.startup.undo", r.UndoKey);
+    }
+
+    [Fact]
+    public void Few_startup_apps_or_unknown_list_do_not_recommend()
+    {
+        var nine = Enumerable.Range(1, 9).Select(i => Startup("A" + i, true, 1)).ToList();
+        Assert.DoesNotContain(Eval(new RecommendationContext { ProfileCount = 1, NowUtc = Now, StartupApps = nine }),
+            r => r.Id == RecommendationEngine.IdStartupMany);
+        Assert.DoesNotContain(Eval(Ctx()), r => r.Id == RecommendationEngine.IdStartupMany);
+    }
+
+    private static Visor.Services.Optimize.Pc.CleanupScanResult Scan(long tempBytes, long shaderBytes) => new(new[]
+    {
+        new Visor.Services.Optimize.Pc.CleanupCategoryScan { Category = Visor.Services.Optimize.Pc.CleanupCategory.UserTemp, Bytes = tempBytes, Files = 3 },
+        new Visor.Services.Optimize.Pc.CleanupCategoryScan { Category = Visor.Services.Optimize.Pc.CleanupCategory.DirectXShaderCache, Bytes = shaderBytes, Files = 9 },
+        new Visor.Services.Optimize.Pc.CleanupCategoryScan { Category = Visor.Services.Optimize.Pc.CleanupCategory.DeliveryOptimization, InfoOnly = true, RequiresAdmin = true }
+    }, Now);
+
+    [Fact]
+    public void Low_disk_with_measured_cache_bytes_is_a_cleanup_tip()
+    {
+        const long gb = 1024L * 1024 * 1024;
+        var ctx = new RecommendationContext
+        {
+            ProfileCount = 1, NowUtc = Now,
+            Sensors = Snap(freeBytes: 50, totalBytes: 1000),
+            CleanupScan = Scan(gb / 2, gb),
+            CleanupDrive = "C:\\"
+        };
+        var r = Assert.Single(Eval(ctx), x => x.Id == RecommendationEngine.IdCleanupDisk);
+        Assert.Equal(RecommendationSeverity.Tip, r.Severity);
+        Assert.Equal(RecommendationAction.OpenCleanup, r.Action);
+        Assert.Null(r.SafeActionId);
+        Assert.Equal(new[] { "C:" }, r.BodyArgs);                       // bytes stay out of the dismissal hash
+        Assert.Contains("reclaimable: 1.5 GB", r.Evidence);
+        Assert.Contains("DirectXShaderCache: 1 GB", r.Evidence);
+        Assert.Contains("UserTemp: 512 MB", r.Evidence);
+        Assert.DoesNotContain(r.Evidence, e => e.StartsWith("DeliveryOptimization"));
+        Assert.Contains(Eval(ctx), x => x.Id == RecommendationEngine.IdDiskLow); // the warning stays separate
+    }
+
+    [Fact]
+    public void Cleanup_tip_needs_low_disk_on_the_cache_drive_and_enough_bytes()
+    {
+        const long mb = 1024L * 1024;
+        RecommendationContext C(long free, long bytes, string drive) => new()
+        {
+            ProfileCount = 1, NowUtc = Now, Sensors = Snap(freeBytes: free, totalBytes: 1000), CleanupScan = Scan(bytes, 0), CleanupDrive = drive
+        };
+        Assert.DoesNotContain(Eval(C(500, 5000 * mb, "C:\\")), r => r.Id == RecommendationEngine.IdCleanupDisk); // 50 % free
+        Assert.DoesNotContain(Eval(C(50, 100 * mb, "C:\\")), r => r.Id == RecommendationEngine.IdCleanupDisk);   // too little to matter
+        Assert.DoesNotContain(Eval(C(50, 5000 * mb, "D:\\")), r => r.Id == RecommendationEngine.IdCleanupDisk);  // other drive
+        Assert.Contains(Eval(C(50, 5000 * mb, "c:")), r => r.Id == RecommendationEngine.IdCleanupDisk);
+    }
+
+    [Fact]
+    public void Hags_off_on_supported_gpu_is_info_with_the_elevated_safe_action()
+    {
+        var hags = new Visor.Services.Optimize.Pc.HagsStatus
+        {
+            RegistryValue = 1, RegistryReadable = true, Supported = true, RunningOn = false, MaxWddmVersion = 3100
+        };
+        var r = Assert.Single(Eval(new RecommendationContext { ProfileCount = 1, NowUtc = Now, Hags = hags }),
+            x => x.Id == RecommendationEngine.IdHagsOff);
+        Assert.Equal(RecommendationSeverity.Info, r.Severity);
+        Assert.Equal(RecommendationAction.SafeActionHagsOn, r.Action);
+        Assert.Equal(Visor.Services.Optimize.Pc.HagsTarget.OnId, r.SafeActionId);
+        Assert.Contains("HwSchMode=1", r.Evidence);
+        Assert.Contains("wddm=3.1", r.Evidence);
+        Assert.Equal("optimize.hagsMode.undo", r.UndoKey);
+    }
+
+    [Theory]
+    [InlineData(null, null, 3200, 1)]    // caps query unavailable → skip
+    [InlineData(false, null, 3200, 1)]   // GPU cannot do it
+    [InlineData(true, true, 3200, 2)]    // already on
+    [InlineData(true, false, 3200, 2)]   // turned on, restart pending
+    [InlineData(true, false, 2600, 1)]   // pre-2.7 driver
+    public void Hags_rule_is_quiet_when_unknown_unsupported_on_or_pending(bool? supported, bool? running, int wddm, int registry)
+    {
+        var hags = new Visor.Services.Optimize.Pc.HagsStatus
+        {
+            RegistryValue = registry, RegistryReadable = true, Supported = supported, RunningOn = running, MaxWddmVersion = wddm
+        };
+        Assert.DoesNotContain(Eval(new RecommendationContext { ProfileCount = 1, NowUtc = Now, Hags = hags }),
+            r => r.Id == RecommendationEngine.IdHagsOff);
+    }
+
+    [Fact]
+    public void Ultimate_plan_is_never_recommended()
+    {
+        var list = Eval(new RecommendationContext { ProfileCount = 1, NowUtc = Now, PowerPlanAliasOrGuid = "balanced" });
+        Assert.DoesNotContain(list, r => r.Id.Contains("ultimate", StringComparison.OrdinalIgnoreCase));
+    }
 }

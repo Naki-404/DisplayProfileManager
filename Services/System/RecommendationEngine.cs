@@ -24,7 +24,13 @@ public enum RecommendationAction
     /// <summary>Mouse acceleration off via <see cref="Optimize.MouseAccelerationSafeActionTarget"/> (SafeActionId = mouseAccel.off).</summary>
     SafeActionMouseAccelOff,
     /// <summary>Per-game "disable fullscreen optimizations" — <see cref="Recommendation.SafeActionId"/> embeds the exe path.</summary>
-    SafeActionFsoForGame
+    SafeActionFsoForGame,
+    /// <summary>Navigate to the startup-apps list (Optimize → PC). Each toggle there is its own SafeAction.</summary>
+    OpenStartupApps,
+    /// <summary>Navigate to the cache cleanup panel (Optimize → PC). Nothing is deleted without a click there.</summary>
+    OpenCleanup,
+    /// <summary>HAGS on via <see cref="Optimize.Pc.HagsTarget"/> (SafeActionId = hags.on) — elevated helper + restart.</summary>
+    SafeActionHagsOn
 }
 
 public enum RecommendationSeverity
@@ -223,6 +229,17 @@ public sealed class RecommendationContext
     public bool? MouseAccelerationOn { get; init; }
     /// <summary>Per enabled profile with an exe path: is FSO already disabled (<see cref="Optimize.OptimizeStatus.FsoStatuses"/>).</summary>
     public IReadOnlyList<Optimize.GameFsoStatus> FsoStatuses { get; init; } = Array.Empty<Optimize.GameFsoStatus>();
+
+    // ---- PC tweaks (Services\System\Optimize\Pc) — all optional; null = not measured. ----
+
+    /// <summary>Startup entries (<see cref="Optimize.Pc.StartupAppsService.List"/>).</summary>
+    public IReadOnlyList<Optimize.Pc.StartupEntry>? StartupApps { get; init; }
+    /// <summary>Last cache scan (<see cref="Optimize.Pc.CleanupService.Scan"/>) — measured bytes only.</summary>
+    public Optimize.Pc.CleanupScanResult? CleanupScan { get; init; }
+    /// <summary>Drive root holding the cleanable caches ("C:\", <see cref="Optimize.Pc.CleanupService.PrimaryDrive"/>).</summary>
+    public string? CleanupDrive { get; init; }
+    /// <summary>HAGS registry + kernel state (<see cref="Optimize.Pc.HagsStatusReader.Read"/>).</summary>
+    public Optimize.Pc.HagsStatus? Hags { get; init; }
 }
 
 /// <summary>
@@ -323,6 +340,16 @@ public static class RecommendationEngine
     public const string IdGameBarOff = "rec.gamebar.off";
     public const string IdMouseAccel = "rec.mouse.accel";
     public const string IdFsoGame = "rec.fso.game";
+    public const string IdStartupMany = "rec.startup.many";
+    public const string IdCleanupDisk = "rec.cleanup.disk";
+    public const string IdHagsOff = "rec.hags.off";
+
+    /// <summary>Enabled startup entries at which the list is worth a look (info only).</summary>
+    public const int StartupManyThreshold = 10;
+    /// <summary>Measured reclaimable cache bytes below which the cleanup tip is not worth showing.</summary>
+    public const long CleanupTipMinBytes = 500L * 1024 * 1024;
+    /// <summary>Largest entries listed as evidence for the startup rule.</summary>
+    public const int StartupEvidenceMax = 8;
 
     private const GpuThrottleFlags ThrottleWorthWarning =
         GpuThrottleFlags.Thermal | GpuThrottleFlags.Power | GpuThrottleFlags.InsufficientPower;
@@ -561,6 +588,116 @@ public static class RecommendationEngine
                 UndoKey = "optimize.fso.undo"
             });
         }
+
+        EvaluatePcTweaks(ctx, emit);
+    }
+
+    private static string Size(long bytes) =>
+        bytes >= 1024L * 1024 * 1024
+            ? Num(bytes / (1024.0 * 1024 * 1024)) + " GB"
+            : Num(bytes / (1024.0 * 1024), "0") + " MB";
+
+    /// <summary>
+    /// Startup list, cache cleanup and HAGS rules. The Ultimate Performance plan is deliberately not a rule:
+    /// Visor already sets a plan per game, and a permanent "more power" nag would be noise.
+    /// </summary>
+    private static void EvaluatePcTweaks(RecommendationContext ctx, Action<Recommendation> emit)
+    {
+        // Many programs start with Windows — info only, evidence = names + file sizes (no invented "impact").
+        if (ctx.StartupApps != null)
+        {
+            var enabled = ctx.StartupApps.Where(e => e != null && e.Enabled).ToList();
+            if (enabled.Count >= StartupManyThreshold)
+            {
+                var evidence = new List<string> { "enabled: " + enabled.Count + "/" + ctx.StartupApps.Count };
+                evidence.AddRange(enabled
+                    .OrderByDescending(e => e.FileSizeBytes ?? -1)
+                    .ThenBy(e => e.DisplayName, StringComparer.OrdinalIgnoreCase)
+                    .Take(StartupEvidenceMax)
+                    .Select(e => e.DisplayName + ": " + (e.FileSizeBytes is { } b ? Size(b) : "?")));
+                emit(new Recommendation
+                {
+                    Id = IdStartupMany,
+                    Severity = RecommendationSeverity.Info,
+                    TitleKey = "rec.startup.many.title",
+                    BodyKey = "rec.startup.many.body",
+                    BodyArgs = new[] { enabled.Count.ToString(CultureInfo.InvariantCulture) },
+                    Action = RecommendationAction.OpenStartupApps,
+                    ActionKey = "rec.startup.many.action",
+                    Evidence = evidence.ToArray(),
+                    WhyKey = "rec.startup.many.why",
+                    RiskKey = "rec.startup.many.risk",
+                    UndoKey = "optimize.startup.undo"
+                });
+            }
+        }
+
+        // Low space on the cache drive AND measured cache bytes worth emptying → Tip to the cleanup panel.
+        // Bytes stay in the evidence (not the body args) so a re-scan does not resurface a dismissed tip.
+        if (ctx.CleanupScan != null && ctx.Sensors != null && !string.IsNullOrEmpty(ctx.CleanupDrive)
+            && ctx.CleanupScan.ReclaimableBytes >= CleanupTipMinBytes)
+        {
+            var drive = ctx.Sensors.Drives.FirstOrDefault(d => d.TotalBytes > 0 && SameDrive(d.Name, ctx.CleanupDrive));
+            if (drive != null && drive.FreePercent < HealthEvaluator.DiskFreeWarnPercent)
+            {
+                var evidence = new List<string>
+                {
+                    "drive: " + drive.Name,
+                    "free: " + Num(drive.FreePercent) + " %",
+                    "reclaimable: " + Size(ctx.CleanupScan.ReclaimableBytes)
+                };
+                evidence.AddRange(ctx.CleanupScan.Categories
+                    .Where(c => !c.InfoOnly && (c.Bytes ?? 0) > 0)
+                    .OrderByDescending(c => c.Bytes)
+                    .Select(c => c.Category + ": " + Size(c.Bytes!.Value)));
+                emit(new Recommendation
+                {
+                    Id = IdCleanupDisk,
+                    Severity = RecommendationSeverity.Tip,
+                    TitleKey = "rec.cleanup.disk.title",
+                    BodyKey = "rec.cleanup.disk.body",
+                    BodyArgs = new[] { drive.Name },
+                    Action = RecommendationAction.OpenCleanup,
+                    ActionKey = "rec.cleanup.disk.action",
+                    Evidence = evidence.ToArray(),
+                    WhyKey = "optimize.cleanup.why",
+                    RiskKey = "optimize.cleanup.risk",
+                    UndoKey = "optimize.cleanup.undo"
+                });
+            }
+        }
+
+        // HAGS off on a GPU whose driver reports support (WDDM >= 2.7 caps read) — info; admin + restart.
+        if (ctx.Hags is { } h && h.Supported == true && h.MaxWddmVersion >= 2700
+            && h.RunningOn == false && h.RegistryOn != true && !h.PendingRestart)
+        {
+            emit(new Recommendation
+            {
+                Id = IdHagsOff,
+                Severity = RecommendationSeverity.Info,
+                TitleKey = "rec.hags.off.title",
+                BodyKey = "rec.hags.off.body",
+                Action = RecommendationAction.SafeActionHagsOn,
+                ActionKey = "rec.hags.off.action",
+                SafeActionId = Optimize.Pc.HagsTarget.OnId,
+                Evidence = h.Evidence(),
+                WhyKey = "optimize.hagsMode.why",
+                RiskKey = "optimize.hagsMode.risk",
+                UndoKey = "optimize.hagsMode.undo"
+            });
+        }
+    }
+
+    /// <summary>"C:" vs "C:\" vs "c:\" — same volume letter.</summary>
+    private static bool SameDrive(string? a, string? b)
+    {
+        static char? Letter(string? s)
+        {
+            s = s?.Trim();
+            return s is { Length: >= 2 } && s[1] == ':' && char.IsAsciiLetter(s[0]) ? char.ToUpperInvariant(s[0]) : null;
+        }
+        var x = Letter(a);
+        return x != null && x == Letter(b);
     }
 
     /// <summary>Clears every dismissal so all suggestions show again.</summary>

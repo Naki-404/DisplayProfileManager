@@ -1,4 +1,5 @@
 <Window x:Class="Visor.CommandPaletteWindow"
+        UseLayoutRounding="True"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
@@ -7,7 +8,8 @@
         WindowStartupLocation="CenterOwner"
         WindowStyle="None" ResizeMode="NoResize"
         ShowInTaskbar="False"
-        Background="{DynamicResource BgBrush}"
+        AllowsTransparency="True"
+        Background="Transparent"
         Foreground="{DynamicResource TextBrush}"
         PreviewKeyDown="Window_PreviewKeyDown">
     <shell:WindowChrome.WindowChrome>

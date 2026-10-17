@@ -48,6 +48,10 @@ public static class OptimizeStatus
     public const string HagsId = "hags";
     public const string PowerPerGameId = "powerPerGame";
     public const string VisualEffectsId = "visualEffects";
+    /// <summary>PC tweak panels (Services\System\Optimize\Pc) — Loc prefix "optimize.{id}".</summary>
+    public const string StartupAppsId = "startupApps";
+    public const string CleanupId = "cleanup";
+    public const string UltimatePlanId = "ultimatePlan";
 
     public const string HagsKey = @"SYSTEM\CurrentControlSet\Control\GraphicsDrivers";
     public const string HagsValue = "HwSchMode";
@@ -76,6 +80,24 @@ public static class OptimizeStatus
             Kind = OptimizeInfoKind.RequiresAdmin,
             Status = on,
             Evidence = on == null ? Array.Empty<string>() : new[] { HagsValue + "=" + (on.Value ? 2 : 1) }
+        };
+    }
+
+    /// <summary>
+    /// HAGS card from the combined status (<see cref="Pc.HagsStatusReader.Read"/>): Status = what runs now
+    /// (kernel), falling back to the registry request; evidence carries HwSchMode, running state, WDDM
+    /// version and "pendingRestart" when the registry asks for a state the kernel does not run yet.
+    /// Changing it is the elevated <see cref="Pc.HagsTarget"/> (hags.on / hags.off).
+    /// </summary>
+    public static OptimizeInfoItem HagsItem(Pc.HagsStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        return new OptimizeInfoItem
+        {
+            Id = HagsId,
+            Kind = OptimizeInfoKind.RequiresAdmin,
+            Status = status.Supported == false ? null : status.EffectiveOn,
+            Evidence = status.Evidence()
         };
     }
 

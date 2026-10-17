@@ -1,4 +1,5 @@
 <Window x:Class="Visor.SettingsWindow"
+        UseLayoutRounding="True"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
@@ -11,7 +12,7 @@
         <shell:WindowChrome CaptionHeight="36" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
     <Border x:Name="ChromeRoot" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Background="{DynamicResource BgBrush}" Opacity="0">
-        <Grid Margin="20">
+        <Grid Margin="18">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -116,11 +117,13 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <DockPanel Grid.Row="2">
-                <Button x:Name="BtnCancel" Content="Cancel" Style="{StaticResource GhostButton}" IsCancel="True" Click="Close_Click"/>
+            <!-- Dialog footer convention: actions right-aligned, primary last (was Cancel pinned far left). -->
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="BtnCancel" Content="Cancel" Style="{StaticResource GhostButton}" Margin="0,0,8,0"
+                        IsCancel="True" Click="Close_Click"/>
                 <Button x:Name="BtnSave" Content="Save" Style="{StaticResource AccentButton}" IsDefault="True"
-                        HorizontalAlignment="Right" MinWidth="100" Click="Save_Click"/>
-            </DockPanel>
+                        MinWidth="100" Click="Save_Click"/>
+            </StackPanel>
         </Grid>
     </Border>
 </Window>

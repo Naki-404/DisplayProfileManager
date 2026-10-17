@@ -11,6 +11,8 @@ public sealed class SafeActionService
     private readonly Func<bool> _isGameSessionActive;
     private readonly Func<string, ISafeActionTarget?>? _resolver;
     private readonly object _gate = new();
+    /// <summary>Serialises async (possibly elevated) applies / undos - one UAC batch at a time.</summary>
+    private readonly SemaphoreSlim _asyncGate = new(1, 1);
 
     public SafeActionJournal Journal { get; }
 
@@ -33,23 +35,29 @@ public sealed class SafeActionService
     /// <summary>
     /// Real targets: Game Mode (HKCU), the High performance power plan, Xbox Game Bar background off,
     /// mouse acceleration off, plus per-game "disable fullscreen optimizations" resolved from the action id.
+    /// With <paramref name="elevation"/> also the admin-only network tweaks (MMCSS throttling, TCP auto-tuning,
+    /// per-adapter DNS / Nagle) — those apply / undo only via <see cref="ApplyAsync"/> / <see cref="UndoAsync"/>.
     /// </summary>
     public static SafeActionService CreateDefault(string? configDirectory, Func<string, bool> setPlan,
-        Func<bool>? isGameSessionActive)
+        Func<bool>? isGameSessionActive, Elevation.IElevationBroker? elevation = null)
     {
         ArgumentNullException.ThrowIfNull(setPlan);
+        var targets = new List<ISafeActionTarget>
+        {
+            new GameModeSafeActionTarget(enable: true),
+            new GameModeSafeActionTarget(enable: false),
+            new PowerPlanSafeActionTarget(setPlan),
+            new Optimize.GameBarSafeActionTarget(),
+            new Optimize.MouseAccelerationSafeActionTarget()
+        };
+        if (elevation != null)
+            targets.AddRange(NetworkTweaks.NetworkTweakCatalog.CreateStatic(elevation));
         return new SafeActionService(
             new SafeActionJournal(configDirectory),
-            new ISafeActionTarget[]
-            {
-                new GameModeSafeActionTarget(enable: true),
-                new GameModeSafeActionTarget(enable: false),
-                new PowerPlanSafeActionTarget(setPlan),
-                new Optimize.GameBarSafeActionTarget(),
-                new Optimize.MouseAccelerationSafeActionTarget()
-            },
+            targets,
             isGameSessionActive,
-            id => ResolvePerGame(id, registry: null));
+            id => ResolvePerGame(id, registry: null)
+                  ?? (elevation != null ? NetworkTweaks.NetworkTweakCatalog.Resolve(id, elevation) : null));
     }
 
     /// <summary>Default per-game resolver: understands <see cref="Optimize.FullscreenOptimizationSafeActionTarget"/> ids.</summary>
@@ -113,6 +121,10 @@ public sealed class SafeActionService
         var target = FindTarget(actionId);
         if (target == null)
             return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.UnknownAction);
+
+        // Elevated writes wait on a UAC prompt - never on this (usually UI) thread.
+        if (target.RequiresElevation)
+            return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.NeedsElevation);
 
         lock (_gate)
         {
@@ -190,6 +202,8 @@ public sealed class SafeActionService
             var target = FindTarget(entry.ActionId);
             if (target == null)
                 return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.UnknownAction);
+            if (target.RequiresElevation)
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.NeedsElevation);
 
             string? current = target.ReadState();
             if (current == null)
@@ -221,6 +235,155 @@ public sealed class SafeActionService
             }
             return new SafeActionUndoOutcome(SafeActionUndoResult.Failed,
                 wrote ? SafeActionCodes.RollbackVerifyMismatch : SafeActionCodes.ApplyFailed);
+        }
+    }
+
+    /// <summary>
+    /// Async apply - works for every target and is the only path for <see cref="ISafeActionTarget.RequiresElevation"/>
+    /// targets (one UAC prompt per call). Same contract as <see cref="Apply"/>: refuse during a game session,
+    /// NoOp at target, re-read to verify, journal exactly what was there before.
+    /// <para>
+    /// Re-applying over Visor's own earlier change (e.g. DNS Cloudflare, then Google) keeps the ORIGINAL previous
+    /// state in the journal, so one undo always returns to what the user had before Visor touched it.
+    /// A declined UAC prompt changes nothing and journals nothing.
+    /// </para>
+    /// <para>
+    /// Continuations stay on the caller's context (no ConfigureAwait(false)), so the verify re-read and
+    /// <see cref="SafeActionJournal.Changed"/> happen on the calling (UI) thread like the sync path. Await it;
+    /// never block on it from the UI thread.
+    /// </para>
+    /// </summary>
+    public async Task<SafeActionOutcome> ApplyAsync(string actionId, CancellationToken ct = default)
+    {
+        var target = FindTarget(actionId);
+        if (target == null)
+            return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.UnknownAction);
+
+        await _asyncGate.WaitAsync(ct);
+        try
+        {
+            string? previous;
+            string? targetState;
+            lock (_gate)
+            {
+                if (target.BlockedDuringGameSession && SafeInvoke(_isGameSessionActive))
+                    return new SafeActionOutcome(SafeActionResult.Blocked, SafeActionCodes.SessionActive);
+
+                previous = target.ReadState();
+                if (previous == null)
+                    return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.Unavailable);
+
+                targetState = target.ResolveTargetState();
+                if (targetState == null)
+                    return new SafeActionOutcome(SafeActionResult.Failed, SafeActionCodes.SchemeMissing);
+
+                if (target.SatisfiesTarget(previous, targetState))
+                    return new SafeActionOutcome(SafeActionResult.NoOp);
+            }
+
+            SafeActionWriteResult write;
+            try { write = await target.WriteStateAsync(targetState, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                AppLog.Warn(ex, "SafeAction apply " + actionId);
+                write = SafeActionWriteResult.Fail(SafeActionCodes.ApplyFailed);
+            }
+
+            lock (_gate)
+            {
+                string? after = target.ReadState();
+                bool atTarget = after != null && target.SatisfiesTarget(after, targetState);
+                bool moved = after != null && !target.StatesEqual(after, previous);
+                if (atTarget || moved)
+                {
+                    // Chain over Visor's own earlier change: keep the pre-Visor state as the undo point.
+                    string journalPrevious = previous;
+                    var existing = Journal.Get(target.JournalKey);
+                    bool chained = existing != null && target.StatesEqual(previous, existing.TargetState);
+                    if (chained)
+                        journalPrevious = existing!.PreviousState;
+
+                    if (chained && target.StatesEqual(after!, journalPrevious))
+                        Journal.Remove(target.JournalKey);   // back at the original - nothing left to undo
+                    else
+                        Journal.Record(new SafeActionJournalEntry
+                        {
+                            Key = target.JournalKey,
+                            ActionId = target.ActionId,
+                            Utc = DateTime.UtcNow,
+                            PreviousState = journalPrevious,
+                            TargetState = after!
+                        });
+                }
+                if (atTarget)
+                    return new SafeActionOutcome(SafeActionResult.Applied);
+                return new SafeActionOutcome(SafeActionResult.Failed,
+                    write.Written ? SafeActionCodes.VerifyMismatch : write.Code ?? SafeActionCodes.ApplyFailed);
+            }
+        }
+        finally
+        {
+            _asyncGate.Release();
+        }
+    }
+
+    /// <summary>Async undo - see <see cref="Undo"/>; the only undo path for elevated targets.</summary>
+    public async Task<SafeActionUndoOutcome> UndoAsync(string actionId, bool confirmedConflict = false,
+        CancellationToken ct = default)
+    {
+        await _asyncGate.WaitAsync(ct);
+        try
+        {
+            SafeActionJournalEntry? entry;
+            ISafeActionTarget? target;
+            lock (_gate)
+            {
+                entry = FindEntry(actionId);
+                if (entry == null)
+                    return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.CannotRollback);
+                target = FindTarget(entry.ActionId);
+                if (target == null)
+                    return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.UnknownAction);
+
+                string? current = target.ReadState();
+                if (current == null)
+                    return new SafeActionUndoOutcome(SafeActionUndoResult.Failed, SafeActionCodes.Unavailable);
+
+                if (target.StatesEqual(current, entry.PreviousState))
+                {
+                    Journal.Remove(entry.Key);
+                    return new SafeActionUndoOutcome(SafeActionUndoResult.Undone);
+                }
+
+                if (!confirmedConflict && !target.StatesEqual(current, entry.TargetState))
+                    return new SafeActionUndoOutcome(SafeActionUndoResult.Conflict, SafeActionCodes.Conflict);
+            }
+
+            SafeActionWriteResult write;
+            try { write = await target.WriteStateAsync(entry.PreviousState, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                AppLog.Warn(ex, "SafeAction undo " + entry.ActionId);
+                write = SafeActionWriteResult.Fail(SafeActionCodes.ApplyFailed);
+            }
+
+            lock (_gate)
+            {
+                string? after = target.ReadState();
+                if (after != null && target.StatesEqual(after, entry.PreviousState))
+                {
+                    Journal.Remove(entry.Key);
+                    return new SafeActionUndoOutcome(SafeActionUndoResult.Undone);
+                }
+                return new SafeActionUndoOutcome(SafeActionUndoResult.Failed,
+                    write.Written ? SafeActionCodes.RollbackVerifyMismatch : write.Code ?? SafeActionCodes.ApplyFailed);
+            }
+        }
+        finally
+        {
+            _asyncGate.Release();
         }
     }
 

@@ -217,8 +217,7 @@ public partial class GamesPage : ShellPageBase
 
     public override void ApplyLocalization()
     {
-        BtnGamesListMore.Content = "⋯";
-        BtnGamesEditorMore.Content = "⋯";
+        // The ⋯ glyph is a vector icon in XAML (a text "⋯" sat on the baseline, visibly low in the button).
         BtnGamesListMore.ToolTip = Loc.T("games.more");
         BtnGamesEditorMore.ToolTip = Loc.T("games.more");
         // "⋯" has no readable text of its own.
@@ -388,8 +387,7 @@ public partial class GamesPage : ShellPageBase
     private static void OpenButtonContextMenu(object sender)
     {
         if (sender is not System.Windows.Controls.Button btn || btn.ContextMenu == null) return;
-        btn.ContextMenu.PlacementTarget = btn;
-        btn.ContextMenu.IsOpen = true;
+        MenuPlacement.OpenBelowRightAligned(btn.ContextMenu, btn);
     }
 
     /// <summary>

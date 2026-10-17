@@ -3,9 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Visor">
     <!-- Optimize: suggestions from measured facts, reversible SafeAction tweaks (journal + undo), read-only info cards. -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                  CanContentScroll="False" PanningMode="VerticalOnly">
-        <StackPanel Margin="0,4,0,8">
+    <ScrollViewer Style="{StaticResource PageScrollViewer}">
+        <StackPanel Margin="4,4,12,8">
 
             <!-- Summary: counts + last change; honest numbers, no "boost" promises. -->
             <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">

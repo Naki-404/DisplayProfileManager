@@ -40,6 +40,8 @@ public sealed class AppServices : IDisposable
         History = new ActivityHistoryStore(Config.ConfigDirectory);
 
         Display = new DisplayEngine(Config.ConfigDirectory);
+        // "ultimate" must resolve to the installed duplicate, not the hidden template GUID.
+        DisplayEngine.UltimateResolver = () => new Visor.Services.Optimize.Pc.UltimatePlanService().FindInstalled();
         Zoom = new ScreenZoomService();
         Zoom.ApplyFromConfig(Config.Current.Ui);
 

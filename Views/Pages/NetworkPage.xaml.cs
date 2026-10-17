@@ -7,7 +7,6 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using Visor.Controls;
 using Visor.Services;
-using WpfOrientation = System.Windows.Controls.Orientation;
 
 namespace Visor;
 
@@ -776,7 +775,9 @@ public partial class NetworkPage : ShellPageBase
             DiagnosisSeverity.Warning => "WarningBrush",
             _ => "MutedBrush"
         };
-        var titleRow = new StackPanel { Orientation = WpfOrientation.Horizontal };
+        // DockPanel (badge left, title fills): a horizontal StackPanel gave the title infinite width, so it never
+        // wrapped and long findings were clipped at the card edge.
+        var titleRow = new DockPanel();
         var badge = new Border
         {
             CornerRadius = new CornerRadius(4),

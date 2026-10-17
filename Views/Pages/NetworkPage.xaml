@@ -5,9 +5,8 @@
         xmlns:controls="clr-namespace:Visor.Controls">
     <!-- Network: adapter overview, live throughput, Wi-Fi, ping series, traceroute, diagnosis, 10-echo probe, DNS.
          Every probe is click-initiated; only the throughput counter read ticks while the page is live. -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                  CanContentScroll="False" PanningMode="VerticalOnly">
-        <StackPanel Margin="0,4,0,8">
+    <ScrollViewer Style="{StaticResource PageScrollViewer}">
+        <StackPanel Margin="4,4,12,8">
             <DockPanel Margin="0,0,0,10">
                 <Button x:Name="BtnNetRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
                         Click="NetRefresh_Click"/>
@@ -58,14 +57,21 @@
                 </Border>
 
                 <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">
-                    <DockPanel>
-                        <TextBlock x:Name="LblNetHost" DockPanel.Dock="Left" VerticalAlignment="Center"
+                    <!-- Grid, not DockPanel: a right-docked wrapping hint was measured before the combo and could
+                         take the whole row, squeezing the combo under its MinWidth so the two overlapped. -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto" MinWidth="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="LblNetHost" VerticalAlignment="Center"
                                    Margin="0,0,8,0" Foreground="{DynamicResource MutedBrush}"/>
-                        <TextBlock x:Name="TxtNetHostHint" DockPanel.Dock="Right" Style="{StaticResource Hint}"
-                                   VerticalAlignment="Center" Margin="10,0,0,0" TextWrapping="Wrap"/>
-                        <ComboBox x:Name="CmbNetHost" MinWidth="160" HorizontalAlignment="Left"
+                        <ComboBox x:Name="CmbNetHost" Grid.Column="1" MinWidth="160"
                                   AutomationProperties.LabeledBy="{Binding ElementName=LblNetHost}"/>
-                    </DockPanel>
+                        <TextBlock x:Name="TxtNetHostHint" Grid.Column="2" Style="{StaticResource Hint}"
+                                   VerticalAlignment="Center" Margin="10,0,0,0" TextWrapping="Wrap"/>
+                    </Grid>
                 </Border>
 
                 <Border Style="{StaticResource CardSurface}" Padding="14" Margin="0,0,0,12">

@@ -63,6 +63,8 @@
         <Geometry x:Key="IconExpand">M5.59,7.41L7,6L13,12L7,18L5.59,16.59L10.17,12L5.59,7.41M11.59,7.41L13,6L19,12L13,18L11.59,16.59L16.17,12L11.59,7.41Z</Geometry>
         <Geometry x:Key="IconThemes">M17.5,12A1.5,1.5 0 0,1 16,10.5A1.5,1.5 0 0,1 17.5,9A1.5,1.5 0 0,1 19,10.5A1.5,1.5 0 0,1 17.5,12M14.5,8A1.5,1.5 0 0,1 13,6.5A1.5,1.5 0 0,1 14.5,5A1.5,1.5 0 0,1 16,6.5A1.5,1.5 0 0,1 14.5,8M9.5,8A1.5,1.5 0 0,1 8,6.5A1.5,1.5 0 0,1 9.5,5A1.5,1.5 0 0,1 11,6.5A1.5,1.5 0 0,1 9.5,8M6.5,12A1.5,1.5 0 0,1 5,10.5A1.5,1.5 0 0,1 6.5,9A1.5,1.5 0 0,1 8,10.5A1.5,1.5 0 0,1 6.5,12M12,3A9,9 0 0,0 3,12A9,9 0 0,0 12,21A1.5,1.5 0 0,0 13.5,19.5C13.5,19.11 13.35,18.76 13.11,18.5C12.88,18.23 12.73,17.88 12.73,17.5A1.5,1.5 0 0,1 14.23,16H16A5,5 0 0,0 21,11C21,6.58 16.97,3 12,3Z</Geometry>
         <Geometry x:Key="IconChevronRight">M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z</Geometry>
+        <!-- "More" (⋯) — vector so the dots sit on the optical center instead of the text baseline. -->
+        <Geometry x:Key="IconMore">M16,12A2,2 0 0,1 18,10A2,2 0 0,1 20,12A2,2 0 0,1 18,14A2,2 0 0,1 16,12M10,12A2,2 0 0,1 12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12M4,12A2,2 0 0,1 6,10A2,2 0 0,1 8,12A2,2 0 0,1 6,14A2,2 0 0,1 4,12Z</Geometry>
 <local:NullToVisibilityConverter x:Key="NullToVis"/>
         <local:InvertNullToVisibilityConverter x:Key="InvNullToVis"/>
         <local:TileForegroundConverter x:Key="TileFg"/>
@@ -96,6 +98,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- ============ Popup surfaces (ContextMenu, submenu, ComboBox dropdown) ============
+             One look for every dropdown: radius 10, 1-DIP card border, 4-DIP inner padding so highlighted rows
+             stay inside the rounded corners. The shadow is a separate layer BEHIND the chrome (an Effect on the
+             chrome itself would rasterize the menu text and blur it at 125/150 %). Hosts reserve a 6,2,6,8
+             margin around both layers for the blur. -->
+        <Style x:Key="PopupChrome" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource PanelBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="UseLayoutRounding" Value="True"/>
+        </Style>
+        <Style x:Key="PopupShadow" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource PanelBrush}"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="12" ShadowDepth="3" Direction="270" Opacity="0.32" Color="#000000"
+                                      RenderingBias="Performance"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Shared card surface (Phase 1 design system) -->
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource PanelBrush}"/>
@@ -121,13 +149,15 @@
 
         <!-- ============ Stage 1 shell: dashboard card, nav rail item, status dot, switch ============ -->
 
-        <!-- Dashboard card: radius 14, 1-px themed border, inner padding 18. Hover brightens the border. -->
+        <!-- Dashboard card: radius 14, 1-px themed border, inner padding 14 (the value every page already used
+             explicitly; Optimize relied on the old default 18 and was the only page with fatter cards).
+             Hover brightens the border. -->
         <Style x:Key="CardSurface" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource PanelBrush}"/>
             <Setter Property="CornerRadius" Value="14"/>
             <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="18"/>
+            <Setter Property="Padding" Value="14"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
@@ -153,12 +183,7 @@
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
-        <Style x:Key="CardLink" TargetType="Button" BasedOn="{StaticResource LinkButton}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="HorizontalAlignment" Value="Right"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-        </Style>
+        <!-- CardLink (BasedOn LinkButton) is declared right after LinkButton: StaticResource cannot look forward. -->
 
         <!-- Page typography (shared by every shell page) -->
         <Style x:Key="SectionTitle" TargetType="TextBlock">
@@ -230,15 +255,17 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="{x:Type controls:NavRailItem}">
+                        <!-- Wash / accent bar live outside the padded row, so they always fill the item exactly
+                             (expanded and compact) instead of relying on negative margins that mirror Padding. -->
                         <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="10"
-                                BorderThickness="1" BorderBrush="Transparent"
-                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                                BorderThickness="1" BorderBrush="Transparent" SnapsToDevicePixels="True">
                             <Grid>
                                 <Border x:Name="HoverWash" Background="{DynamicResource TabHoverBrush}" CornerRadius="9"
-                                        Margin="-12,-9" Opacity="0" IsHitTestVisible="False"/>
-                                <Border x:Name="AccentBar" Width="3" HorizontalAlignment="Left" Margin="-12,0,0,0"
+                                        Opacity="0" IsHitTestVisible="False"/>
+                                <Border x:Name="AccentBar" Width="3" Height="18" HorizontalAlignment="Left" VerticalAlignment="Center"
                                         CornerRadius="0,2,2,0" Background="{DynamicResource AccentGradientBrush}" Opacity="0"/>
-                                <StackPanel x:Name="Row" Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel x:Name="Row" Orientation="Horizontal" VerticalAlignment="Center"
+                                            Margin="{TemplateBinding Padding}">
                                     <Path x:Name="Ico" Width="18" Height="18" Stretch="Uniform"
                                           Data="{TemplateBinding Icon}" Fill="{TemplateBinding Foreground}"
                                           VerticalAlignment="Center"/>
@@ -257,6 +284,8 @@
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource TabSelectedBrush}"/>
                                 <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+                                <!-- The hover wash is darker than the selected fill: never draw it over the selection. -->
+                                <Setter TargetName="HoverWash" Property="Visibility" Value="Hidden"/>
                                 <Setter TargetName="AccentBar" Property="Opacity" Value="1"/>
                                 <Setter TargetName="Ico" Property="Fill" Value="{DynamicResource AccentBrush}"/>
                                 <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
@@ -264,7 +293,7 @@
                             <Trigger Property="IsCompact" Value="True">
                                 <Setter TargetName="Lbl" Property="Visibility" Value="Collapsed"/>
                                 <Setter TargetName="Row" Property="HorizontalAlignment" Value="Center"/>
-                                <Setter Property="Padding" Value="9,9"/>
+                                <Setter TargetName="Row" Property="Margin" Value="0,9"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.4"/>
@@ -434,6 +463,10 @@
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
             <Setter Property="Padding" Value="10,7"/>
+            <!-- Same outer height as ComboBox (MinHeight 34) so fields line up in forms and rows. -->
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}"/>
             <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRingField}"/>
@@ -453,6 +486,7 @@
                                            TextTrimming="CharacterEllipsis"
                                            Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"/>
                                 <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                               VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"
                                               HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"/>
                             </Grid>
@@ -474,6 +508,12 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+            <Style.Triggers>
+                <!-- Multi-line text (log view) starts at the top instead of floating in the middle. -->
+                <Trigger Property="AcceptsReturn" Value="True">
+                    <Setter Property="VerticalContentAlignment" Value="Top"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <!-- Dark ComboBox — supports IsEditable via PART_EditableTextBox -->
@@ -529,7 +569,9 @@
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                               ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"/>
-                            <TextBox x:Name="PART_EditableTextBox" Visibility="Hidden"
+                            <!-- MinHeight 0: the implicit TextBox MinHeight (34) + this margin would make editable
+                                 combos 2 DIP taller than read-only ones. -->
+                            <TextBox x:Name="PART_EditableTextBox" Visibility="Hidden" MinHeight="0"
                                      Margin="8,1,30,1" Padding="2,0" VerticalAlignment="Stretch"
                                      VerticalContentAlignment="Center"
                                      Background="Transparent" BorderThickness="0"
@@ -549,15 +591,22 @@
                                     </ControlTemplate>
                                 </TextBox.Template>
                             </TextBox>
+                            <!-- Dropdown: same chrome as ContextMenu (PopupChrome). The 6-DIP side margin hosts the
+                                 shadow; HorizontalOffset -6 keeps the list's left edge flush with the field, and
+                                 MinWidth = field width keeps the list at least as wide as the toggle. -->
                             <Popup x:Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}"
-                                   AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
-                                <Border Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}"
-                                        BorderThickness="1" CornerRadius="6" MinWidth="{TemplateBinding ActualWidth}"
-                                        MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,2,0,0">
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
-                                    </ScrollViewer>
-                                </Border>
+                                   HorizontalOffset="-6" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade"
+                                   UseLayoutRounding="True">
+                                <Grid Margin="6,2,6,8" MinWidth="{TemplateBinding ActualWidth}"
+                                      MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <Border Style="{StaticResource PopupShadow}"/>
+                                    <Border Style="{StaticResource PopupChrome}">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                                      CanContentScroll="False">
+                                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
                             </Popup>
                         </Grid>
                         <ControlTemplate.Triggers>
@@ -577,25 +626,191 @@
             </Setter>
         </Style>
 
+        <!-- Dropdown row: 32 DIP like menu items, rounded highlight inset by the popup padding. -->
         <Style TargetType="ComboBoxItem">
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
             <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter/>
+                        <Border x:Name="Bd" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ComboHighlightBrush}"/>
-                            </Trigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ComboSelectedBrush}"/>
                             </Trigger>
+                            <!-- Highlight after Selected: the row under the pointer / keyboard cursor always shows. -->
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ComboHighlightBrush}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource CardHoverBrush}"/>
+                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ============ Menus (⋯ buttons, any ContextMenu) ============
+             Replaces the Aero2 look (light gutter, system colors, uneven heights): themed PopupChrome, 32-DIP rows,
+             12-DIP text inset, icon/check column that collapses to 0 when no row uses it (SharedSizeGroup),
+             right-aligned InputGestureText, submenu chevron, muted disabled rows. -->
+        <Style TargetType="ContextMenu">
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Normal"/>
+            <Setter Property="MinWidth" Value="180"/>
+            <Setter Property="HasDropShadow" Value="True"/>
+            <Setter Property="Grid.IsSharedSizeScope" Value="True"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="UseLayoutRounding" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <!-- 6,2,6,8: room for the shadow layer. Callers that place the menu against a control
+                             (GamesPage ⋯ buttons) compensate with MenuPlacement.ShadowInset. -->
+                        <Grid Margin="6,2,6,8">
+                            <Border x:Name="Shadow" Style="{StaticResource PopupShadow}"/>
+                            <Border Style="{StaticResource PopupChrome}">
+                                <ScrollViewer CanContentScroll="False" VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"
+                                                    KeyboardNavigation.TabNavigation="Cycle"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="HasDropShadow" Value="False">
+                                <Setter TargetName="Shadow" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Menu separator (MenuBase applies MenuItem.SeparatorStyleKey to <Separator/> items automatically). -->
+        <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Separator">
+                        <Border Height="1" Margin="12,4" Background="{DynamicResource BorderBrush}" SnapsToDevicePixels="True"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="MenuItem">
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <!-- The highlighted row is the keyboard cursor; a dashed focus rectangle on top would be noise. -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="UseLayoutRounding" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Grid x:Name="Root" Background="Transparent" SnapsToDevicePixels="True">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="Transparent"
+                                    BorderThickness="1" CornerRadius="6" SnapsToDevicePixels="True"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuIcon"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuGesture"/>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuArrow"/>
+                                </Grid.ColumnDefinitions>
+                                <!-- Icon / check column: collapsed (0 width) unless a row has an icon or is checkable. -->
+                                <Grid x:Name="IconHost" Width="16" Height="16" Margin="12,0,0,0" VerticalAlignment="Center">
+                                    <ContentPresenter x:Name="IconPresenter" ContentSource="Icon"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Path x:Name="CheckMark" Visibility="Collapsed" Width="10" Height="10" Stretch="Uniform"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Data="M0,5 L3.5,8.5 L10,1" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                </Grid>
+                                <ContentPresenter x:Name="HeaderHost" Grid.Column="1" ContentSource="Header"
+                                                  Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                <TextBlock x:Name="Gesture" Grid.Column="2" Text="{TemplateBinding InputGestureText}"
+                                           Margin="12,0,12,0" FontSize="12" Foreground="{DynamicResource MutedBrush}"
+                                           HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                <Path x:Name="Arrow" Grid.Column="3" Visibility="Collapsed" Width="5" Height="9" Stretch="Uniform"
+                                      Margin="0,0,12,0" VerticalAlignment="Center" Data="M0,0 L4,4 L0,8"
+                                      Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                            </Grid>
+                            <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="-2" VerticalOffset="-7"
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                                   AllowsTransparency="True" Focusable="False" PopupAnimation="Fade" UseLayoutRounding="True">
+                                <Grid Margin="6,2,6,8" Grid.IsSharedSizeScope="True" MinWidth="180">
+                                    <Border Style="{StaticResource PopupShadow}"/>
+                                    <Border Style="{StaticResource PopupChrome}">
+                                        <ScrollViewer CanContentScroll="False" VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled">
+                                            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"
+                                                            KeyboardNavigation.TabNavigation="Cycle"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Icon" Value="{x:Null}">
+                                <Setter TargetName="IconHost" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                            <Trigger Property="IsCheckable" Value="True">
+                                <Setter TargetName="IconHost" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="IconHost" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="IconPresenter" Property="Visibility" Value="Collapsed"/>
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="Role" Value="SubmenuHeader">
+                                <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Gesture" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                            <Trigger Property="Role" Value="TopLevelHeader">
+                                <Setter TargetName="PART_Popup" Property="Placement" Value="Bottom"/>
+                                <Setter TargetName="PART_Popup" Property="HorizontalOffset" Value="-6"/>
+                                <Setter TargetName="PART_Popup" Property="VerticalOffset" Value="0"/>
+                                <Setter TargetName="Gesture" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                            <Trigger Property="Role" Value="TopLevelItem">
+                                <Setter TargetName="Gesture" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ComboHighlightBrush}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource CardHoverBrush}"/>
+                                <Setter TargetName="Arrow" Property="Stroke" Value="{DynamicResource TextBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSubmenuOpen" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ComboHighlightBrush}"/>
+                                <Setter TargetName="Arrow" Property="Stroke" Value="{DynamicResource AccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/>
+                                <Setter TargetName="IconHost" Property="Opacity" Value="0.5"/>
+                                <Setter TargetName="Arrow" Property="Opacity" Value="0.5"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -657,11 +872,14 @@
             </Setter>
         </Style>
 
-        <!-- Primary action. Radius 10; hover wash + pressed opacity (instant, reduced-motion safe). -->
+        <!-- Primary action. Radius 10; hover wash + pressed opacity (instant, reduced-motion safe).
+             Height parity: accent templates draw no border, ghost templates draw 1 DIP, so accent padding is 1 DIP
+             taller per side (18,10 vs 18,9 · compact 14,8 vs 14,7) — an accent and a ghost button in the same
+             row are exactly the same height (≈37 / 32 DIP) instead of differing by 2 DIP. -->
         <Style TargetType="Button" x:Key="AccentButton">
             <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="18,9"/>
+            <Setter Property="Padding" Value="18,10"/>
             <Setter Property="MinHeight" Value="36"/>
             <Setter Property="MinWidth" Value="88"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -773,7 +991,7 @@
 
         <Style TargetType="Button" x:Key="GhostButton">
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-            <Setter Property="Padding" Value="18,10"/>
+            <Setter Property="Padding" Value="18,9"/>
             <Setter Property="MinHeight" Value="36"/>
             <Setter Property="MinWidth" Value="72"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
@@ -817,7 +1035,7 @@
         <Style TargetType="Button" x:Key="DangerGhostButton" BasedOn="{StaticResource GhostButton}">
             <Setter Property="MinWidth" Value="0"/>
             <Setter Property="MinHeight" Value="32"/>
-            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="Padding" Value="14,7"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="Foreground" Value="{DynamicResource DangerBrush}"/>
@@ -858,7 +1076,7 @@
         <Style TargetType="Button" x:Key="CompactGhostButton" BasedOn="{StaticResource GhostButton}">
             <Setter Property="MinWidth" Value="0"/>
             <Setter Property="MinHeight" Value="32"/>
-            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="Padding" Value="14,7"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
         </Style>
@@ -918,6 +1136,14 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <!-- Card header link ("Open", "Details") -->
+        <Style x:Key="CardLink" TargetType="Button" BasedOn="{StaticResource LinkButton}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
         <!-- Two-state segmented toggle used as a sub-tab (More → Defaults / Log) -->
@@ -1228,7 +1454,12 @@
             </Setter>
         </Style>
 
-        <!-- Thin overlay scrollbars (6px) — dim until hovered -->
+        <!-- ============ Scrollbars ============
+             Overlay indicator (Windows 11 style): the bar is drawn ON TOP of the content (no reserved column, no
+             layout shift), is Collapsed whenever the content fits (Auto → ComputedVisibility), and is invisible at
+             rest. controls:ScrollIndicator fades it in while the user scrolls / moves the pointer over the area and
+             fades it out ~1.2 s later unless the pointer is on the bar or the thumb is being dragged. The thumb is a
+             4-DIP line that widens to 7 DIP when the pointer reaches the 10-DIP hit strip. -->
         <ControlTemplate x:Key="VScrollTemplate" TargetType="ScrollBar">
             <Border Background="Transparent" Width="{TemplateBinding Width}">
                 <Track x:Name="PART_Track" IsDirectionReversed="True">
@@ -1239,12 +1470,21 @@
                         <Thumb>
                             <Thumb.Template>
                                 <ControlTemplate TargetType="Thumb">
-                                    <Border x:Name="T" CornerRadius="3" Margin="1,2" Background="{DynamicResource ScrollThumbBrush}"/>
+                                    <Border Background="Transparent">
+                                        <Border x:Name="T" Width="4" HorizontalAlignment="Right" Margin="0,2,2,2"
+                                                CornerRadius="2" Background="{DynamicResource ScrollThumbBrush}"/>
+                                    </Border>
                                     <ControlTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="True">
+                                            <Setter TargetName="T" Property="Width" Value="7"/>
+                                            <Setter TargetName="T" Property="CornerRadius" Value="3.5"/>
+                                        </DataTrigger>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="T" Property="Background" Value="{DynamicResource ScrollThumbHoverBrush}"/>
                                         </Trigger>
                                         <Trigger Property="IsDragging" Value="True">
+                                            <Setter TargetName="T" Property="Width" Value="7"/>
+                                            <Setter TargetName="T" Property="CornerRadius" Value="3.5"/>
                                             <Setter TargetName="T" Property="Background" Value="{DynamicResource AccentBrush}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
@@ -1269,12 +1509,21 @@
                         <Thumb>
                             <Thumb.Template>
                                 <ControlTemplate TargetType="Thumb">
-                                    <Border x:Name="T" CornerRadius="3" Margin="2,1" Background="{DynamicResource ScrollThumbBrush}"/>
+                                    <Border Background="Transparent">
+                                        <Border x:Name="T" Height="4" VerticalAlignment="Bottom" Margin="2,0,2,2"
+                                                CornerRadius="2" Background="{DynamicResource ScrollThumbBrush}"/>
+                                    </Border>
                                     <ControlTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="True">
+                                            <Setter TargetName="T" Property="Height" Value="7"/>
+                                            <Setter TargetName="T" Property="CornerRadius" Value="3.5"/>
+                                        </DataTrigger>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="T" Property="Background" Value="{DynamicResource ScrollThumbHoverBrush}"/>
                                         </Trigger>
                                         <Trigger Property="IsDragging" Value="True">
+                                            <Setter TargetName="T" Property="Height" Value="7"/>
+                                            <Setter TargetName="T" Property="CornerRadius" Value="3.5"/>
                                             <Setter TargetName="T" Property="Background" Value="{DynamicResource AccentBrush}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
@@ -1291,15 +1540,17 @@
 
         <Style TargetType="ScrollBar">
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Width" Value="6"/>
-            <Setter Property="MinWidth" Value="6"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Setter Property="Template" Value="{StaticResource VScrollTemplate}"/>
             <Style.Triggers>
                 <Trigger Property="Orientation" Value="Horizontal">
                     <Setter Property="Width" Value="Auto"/>
                     <Setter Property="MinWidth" Value="0"/>
-                    <Setter Property="Height" Value="6"/>
-                    <Setter Property="MinHeight" Value="6"/>
+                    <Setter Property="Height" Value="10"/>
+                    <Setter Property="MinHeight" Value="10"/>
                     <Setter Property="Template" Value="{StaticResource HScrollTemplate}"/>
                 </Trigger>
             </Style.Triggers>
@@ -1310,6 +1561,7 @@
             <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
             <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
             <Setter Property="Focusable" Value="False"/>
+            <Setter Property="controls:ScrollIndicator.AutoHide" Value="True"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollViewer">
@@ -1319,31 +1571,35 @@
                                                     CanContentScroll="{TemplateBinding CanContentScroll}"
                                                     Content="{TemplateBinding Content}"
                                                     ContentTemplate="{TemplateBinding ContentTemplate}"/>
-                            <!-- Overlay bars: drawn on top of content, no layout cost -->
+                            <!-- Overlay bars: on top of the content, no layout cost. Opacity is driven by ScrollIndicator. -->
                             <ScrollBar x:Name="PART_VerticalScrollBar"
                                        Orientation="Vertical" HorizontalAlignment="Right"
-                                       Opacity="0.55" Margin="0,2,1,2"
+                                       Opacity="0" Margin="0,2,0,2"
                                        Maximum="{TemplateBinding ScrollableHeight}"
                                        ViewportSize="{TemplateBinding ViewportHeight}"
                                        Value="{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
                                        Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
                             <ScrollBar x:Name="PART_HorizontalScrollBar"
                                        Orientation="Horizontal" VerticalAlignment="Bottom"
-                                       Opacity="0.55" Margin="2,0,8,1"
+                                       Opacity="0" Margin="2,0,10,0"
                                        Maximum="{TemplateBinding ScrollableWidth}"
                                        ViewportSize="{TemplateBinding ViewportWidth}"
                                        Value="{Binding HorizontalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
                                        Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"/>
                         </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="PART_VerticalScrollBar" Property="Opacity" Value="1"/>
-                                <Setter TargetName="PART_HorizontalScrollBar" Property="Opacity" Value="1"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <!-- Page-level scroller (every shell page). Extends 12 DIP into the main column's right gutter so the overlay
+             bar sits in the gutter instead of on top of the cards' right border, and 4 DIP to the left so focus rings
+             of left-aligned controls are not clipped by the viewport. Page roots add the matching 4,_,12,_ margin,
+             so content edges stay aligned with the top bar. -->
+        <Style x:Key="PageScrollViewer" TargetType="ScrollViewer" BasedOn="{StaticResource {x:Type ScrollViewer}}">
+            <Setter Property="Margin" Value="-4,0,-12,0"/>
+            <Setter Property="CanContentScroll" Value="False"/>
+            <Setter Property="PanningMode" Value="VerticalOnly"/>
         </Style>
 
         <!-- Two-way color backend switch: Unchecked = GPU driver (left, Content), Checked = Low Level (right, Tag) -->

@@ -93,11 +93,13 @@ public partial class CustomThemeWindow : Window
             var swatch = new Border
             {
                 Width = 28, Height = 28, CornerRadius = new CornerRadius(6),
-                BorderBrush = (System.Windows.Media.Brush)FindResource("BorderBrush"),
                 BorderThickness = new Thickness(1),
                 Margin = new Thickness(0, 0, 10, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
+            // Live palette editing replaces BorderBrush on every keystroke: a FindResource snapshot kept the
+            // swatch outlines in the old color. Track the resource instead.
+            swatch.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
             DockPanel.SetDock(swatch, Dock.Left);
 
             var box = new System.Windows.Controls.TextBox

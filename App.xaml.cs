@@ -481,6 +481,25 @@ public partial class App : System.Windows.Application
     /// </summary>
     private bool TryHandleCliArgs(string[] args)
     {
+        // Per-action elevated helper: "Visor.exe --elevated <id>.req.json <id>.res.json" (started by
+        // ElevationBroker via UAC). Handled before the log, mutex, config, hooks or any window exist and
+        // touches none of them — validate the allowlisted ops, run them, write the result, exit.
+        if (args.Length > 0 && args[0].Equals(Visor.Services.Elevation.ElevatedHelperHost.CliSwitch, StringComparison.OrdinalIgnoreCase))
+        {
+            int helperExit = 1;
+            try
+            {
+                if (args.Length == 3)
+                    helperExit = Visor.Services.Elevation.ElevatedHelperHost.Run(args[1], args[2]);
+            }
+            catch (Exception)
+            {
+                helperExit = 1;
+            }
+            Shutdown(helperExit);
+            return true;
+        }
+
         bool wantsList = false;
         bool wantsEmergency = false;
         string? applyProfileName = null;

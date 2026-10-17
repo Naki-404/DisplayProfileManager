@@ -24,9 +24,8 @@
         </Style>
     </local:ShellPageBase.Resources>
     <!-- My PC: read-only inventory (CPU / memory / GPU / Windows / storage), live hardware cards, busiest processes. -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                  CanContentScroll="False" PanningMode="VerticalOnly">
-        <StackPanel Margin="0,4,0,8">
+    <ScrollViewer Style="{StaticResource PageScrollViewer}">
+        <StackPanel Margin="4,4,12,8">
             <DockPanel Margin="0,0,0,10">
                 <Button x:Name="BtnSystemRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
                         Click="SystemRefresh_Click"/>

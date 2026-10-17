@@ -623,6 +623,19 @@ public sealed class DisplayEngine
 
     // ------------------------------------------------------------------ power plan
 
+    /// <summary>
+    /// Finds the installed Ultimate Performance scheme. e9a42b02-… is only the hidden template: on standard
+    /// installs the usable scheme is a duplicate with its own GUID, so activating the template fails with
+    /// "scheme not installed". Set at startup (UltimatePlanService.FindInstalled); null in tests.
+    /// </summary>
+    public static Func<string?>? UltimateResolver { get; set; }
+
+    private static string? InstalledUltimate()
+    {
+        try { return UltimateResolver?.Invoke(); }
+        catch (Exception ex) { AppLog.Warn(ex, "Ultimate plan resolve"); return null; }
+    }
+
     /// <summary>Plan alias (highPerformance / balanced / powerSaver / ultimate) or GUID → scheme GUID; null if unknown.</summary>
     public static string? ResolvePowerPlanGuid(string? plan)
     {
@@ -634,20 +647,24 @@ public sealed class DisplayEngine
             "highperformance" or "high" or "high_performance" => PowerHighPerf,
             "balanced" => PowerBalanced,
             "powersaver" or "power_saver" or "saver" => PowerSaver,
-            "ultimate" or "ultimateperformance" or "ultimate_performance" => PowerUltimate,
+            "ultimate" or "ultimateperformance" or "ultimate_performance" => InstalledUltimate() ?? PowerUltimate,
             _ => null
         };
     }
 
     /// <summary>UI alias for a stock scheme GUID ("balanced" / "highPerformance" / …), else null.</summary>
-    public static string? PowerPlanAlias(string guid) => guid.ToLowerInvariant() switch
+    public static string? PowerPlanAlias(string guid)
     {
-        PowerBalanced => "balanced",
-        PowerHighPerf => "highPerformance",
-        PowerSaver => "powerSaver",
-        PowerUltimate => "ultimate",
-        _ => null
-    };
+        var g = guid.ToLowerInvariant();
+        switch (g)
+        {
+            case PowerBalanced: return "balanced";
+            case PowerHighPerf: return "highPerformance";
+            case PowerSaver: return "powerSaver";
+            case PowerUltimate: return "ultimate";
+        }
+        return string.Equals(g, InstalledUltimate(), StringComparison.OrdinalIgnoreCase) ? "ultimate" : null;
+    }
 
     /// <summary>Activates a power scheme via PowerSetActiveScheme (no powercfg child process).</summary>
     /// <returns>True when the scheme is verified active afterwards. Unknown plan names are rejected, never mapped to Balanced.</returns>

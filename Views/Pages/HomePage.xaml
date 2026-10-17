@@ -23,16 +23,17 @@
     </local:ShellPageBase.Resources>
     <!-- Dashboard. Fits 1366×768 @125 % / 1080p @150 % without scrolling; the ScrollViewer is a safety net.
          Below ~720 DIP the stat grid drops under the welcome card (HomeRoot_SizeChanged). -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                  CanContentScroll="False" PanningMode="VerticalOnly">
-        <Grid x:Name="HomeRoot" Margin="0,4,0,8" SizeChanged="HomeRoot_SizeChanged">
+    <ScrollViewer Style="{StaticResource PageScrollViewer}">
+        <Grid x:Name="HomeRoot" Margin="4,4,12,8" SizeChanged="HomeRoot_SizeChanged">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Grid x:Name="TopRegion" Grid.Row="0">
+            <!-- The 12-DIP gap to the bottom row lives on the region (not on the welcome card), so the welcome card and
+                 the stat grid end on the same line and the gap exists in the narrow (stacked) layout too. -->
+            <Grid x:Name="TopRegion" Grid.Row="0" Margin="0,0,0,12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition x:Name="ColWelcome" Width="300"/>
                     <ColumnDefinition x:Name="ColGap" Width="12"/>
@@ -44,7 +45,7 @@
                 </Grid.RowDefinitions>
 
                 <!-- Welcome / health -->
-                <Border x:Name="WelcomeCard" Grid.Column="0" Style="{StaticResource HomeCard}" Margin="0,0,0,12">
+                <Border x:Name="WelcomeCard" Grid.Column="0" Style="{StaticResource HomeCard}">
                     <DockPanel>
                         <Button x:Name="BtnHomeMyPc" DockPanel.Dock="Bottom" Style="{StaticResource CardLink}"
                                 HorizontalAlignment="Left" Margin="0,10,0,0" Click="OpenMyPc_Click"/>

@@ -632,7 +632,12 @@ public sealed class CompanionLabelConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-/// <summary>Tray menu renderer that follows the current app theme (dark / light / custom).</summary>
+/// <summary>
+/// Tray menu renderer that follows the current app theme (dark / light / custom) and mirrors the WPF ContextMenu
+/// style in App.xaml: rounded highlight inset 4 DIP from the edges (ComboHighlight fill + CardHover border), text
+/// 16 DIP from the menu edge (4 inset + 12 padding), 1-DIP separators inset 12 DIP, text stays TextBrush on hover.
+/// All insets are scaled by the menu's DPI (the tray runs PerMonitorV2, so raw pixels would shrink at 125/150 %).
+/// </summary>
 internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
 {
     private readonly ThemeColors _t;
@@ -647,7 +652,8 @@ internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
 
     internal readonly record struct ThemeColors(
         System.Drawing.Color Bg, System.Drawing.Color Border, System.Drawing.Color Hover,
-        System.Drawing.Color Accent, System.Drawing.Color Text, System.Drawing.Color Muted)
+        System.Drawing.Color Accent, System.Drawing.Color Text, System.Drawing.Color Muted,
+        System.Drawing.Color HoverBorder)
     {
         public static ThemeColors Read()
         {
@@ -658,12 +664,20 @@ internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
             }
             return new ThemeColors(
                 C("PanelBrush", "#121821"),
-                C("BorderBrush", "#243041"),
+                C("CardBorderBrush", "#1E2630"),
                 C("ComboHighlightBrush", "#1A2330"),
                 C("AccentBrush", "#22D3EE"),
                 C("TextBrush", "#E6EDF5"),
-                C("MutedBrush", "#8A98AB"));
+                C("MutedBrush", "#8A98AB"),
+                C("CardHoverBrush", "#2B3A4C"));
         }
+    }
+
+    /// <summary>Logical (96-DPI) length → device pixels for the strip that owns <paramref name="item"/>.</summary>
+    private static int Px(ToolStripItem? item, int logical)
+    {
+        int dpi = item?.Owner?.DeviceDpi ?? 96;
+        return (int)Math.Round(logical * (dpi <= 0 ? 96 : dpi) / 96.0);
     }
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
@@ -686,40 +700,47 @@ internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
 
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
     {
-        var g = e.Graphics;
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        var bounds = new System.Drawing.Rectangle(6, 1, e.Item.Width - 12, e.Item.Height - 2);
-
         if (!e.Item.Enabled || (!e.Item.Selected && !e.Item.Pressed)) return;
 
-        using var path = RoundedRect(bounds, 4);
+        var g = e.Graphics;
+        var oldMode = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        int inset = Px(e.Item, 4);
+        // Inner rect (pen centered on the edge): -1 so the right/bottom stroke stays inside the item.
+        var bounds = new System.Drawing.Rectangle(inset, 1, e.Item.Width - inset * 2 - 1, e.Item.Height - 3);
+        using var path = RoundedRect(bounds, Px(e.Item, 6));
         using var brush = new System.Drawing.SolidBrush(_t.Hover);
         g.FillPath(brush, path);
-        using var pen = new System.Drawing.Pen(_t.Accent);
+        using var pen = new System.Drawing.Pen(_t.HoverBorder);
         g.DrawPath(pen, path);
+        g.SmoothingMode = oldMode;
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
-        e.TextColor = !e.Item.Enabled ? _t.Muted : e.Item.Selected ? _t.Accent : _t.Text;
+        // Same as the WPF menu: text keeps TextBrush on hover (the row highlight carries the state).
+        e.TextColor = !e.Item.Enabled ? _t.Muted : _t.Text;
         e.TextFormat = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix
-                       | TextFormatFlags.EndEllipsis;
-        // Keep left padding consistent
-        e.TextRectangle = new System.Drawing.Rectangle(14, 0, e.Item.Width - 28, e.Item.Height);
+                       | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine;
+        int left = Px(e.Item, 16);
+        // Submenu headers keep room for the chevron on the right.
+        int right = Px(e.Item, e.Item is ToolStripMenuItem { HasDropDownItems: true } ? 28 : 16);
+        e.TextRectangle = new System.Drawing.Rectangle(left, 0, Math.Max(0, e.Item.Width - left - right), e.Item.Height);
         base.OnRenderItemText(e);
     }
 
     protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
     {
-        e.ArrowColor = e.Item?.Selected == true ? _t.Accent : _t.Muted;
+        e.ArrowColor = e.Item?.Selected == true ? _t.Text : _t.Muted;
         base.OnRenderArrow(e);
     }
 
     protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
     {
         var y = e.Item.ContentRectangle.Top + e.Item.ContentRectangle.Height / 2;
+        int inset = Px(e.Item, 12);
         using var pen = new System.Drawing.Pen(_t.Border);
-        e.Graphics.DrawLine(pen, 12, y, e.Item.Width - 12, y);
+        e.Graphics.DrawLine(pen, inset, y, e.Item.Width - inset, y);
     }
 
     private static System.Drawing.Drawing2D.GraphicsPath RoundedRect(System.Drawing.Rectangle bounds, int radius)
@@ -740,7 +761,7 @@ internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
         public SlateMenuColorTable(ThemeColors t) => _t = t;
 
         public override System.Drawing.Color MenuBorder => _t.Border;
-        public override System.Drawing.Color MenuItemBorder => _t.Accent;
+        public override System.Drawing.Color MenuItemBorder => _t.HoverBorder;
         public override System.Drawing.Color MenuItemSelected => _t.Hover;
         public override System.Drawing.Color MenuItemSelectedGradientBegin => _t.Hover;
         public override System.Drawing.Color MenuItemSelectedGradientEnd => _t.Hover;

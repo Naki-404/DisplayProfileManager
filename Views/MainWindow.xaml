@@ -11,6 +11,7 @@
         WindowStyle="None"
         ResizeMode="CanResize"
         Icon="pack://application:,,,/Assets/app.ico"
+        UseLayoutRounding="True"
         Background="{DynamicResource BgBrush}"
         Foreground="{DynamicResource TextBrush}"
         Loaded="Window_Loaded"
@@ -98,7 +99,7 @@
                     </Grid.RowDefinitions>
 
                     <!-- Brand + collapse -->
-                    <DockPanel Grid.Row="0" Margin="12,2,8,14">
+                    <DockPanel x:Name="BrandDock" Grid.Row="0" Margin="12,2,8,14">
                         <Button x:Name="BtnRailCollapse" DockPanel.Dock="Right" Style="{StaticResource IconButton}"
                                 Width="28" Height="28" Click="RailCollapse_Click">
                             <Path x:Name="RailCollapseIcon" Width="14" Height="14" Stretch="Uniform"

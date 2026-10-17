@@ -24,9 +24,11 @@
                     </UniformGrid>
                 </StackPanel>
                 <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
-                    <Button x:Name="BtnGamesListMore" DockPanel.Dock="Right" Content="..."
-                            Style="{StaticResource CompactGhostButton}" MinWidth="36" Padding="8,6"
+                    <Button x:Name="BtnGamesListMore" DockPanel.Dock="Right"
+                            Style="{StaticResource CompactGhostButton}" Width="36" Padding="0"
                             Click="GamesListMore_Click" ToolTip="More">
+                        <Path Width="16" Height="16" Stretch="Uniform" Data="{StaticResource IconMore}"
+                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                         <Button.ContextMenu>
                             <ContextMenu>
                                 <MenuItem x:Name="MiDup" Header="Duplicate" Click="DupProfile_Click"/>
@@ -41,7 +43,7 @@
                             Margin="0,0,6,0" Click="DeleteProfile_Click"/>
                 </DockPanel>
                 <Grid>
-                    <ListBox x:Name="ProfileList" SelectionChanged="ProfileList_SelectionChanged"
+                    <ListBox x:Name="ProfileList" Margin="0,0,-10,0" Padding="0,0,10,0" SelectionChanged="ProfileList_SelectionChanged"
                              ItemTemplate="{StaticResource GameTileTemplate}"
                              ItemContainerStyle="{StaticResource GameTileItem}"/>
                     <StackPanel x:Name="LibraryEmpty" VerticalAlignment="Center" Margin="8" Visibility="Collapsed">
@@ -97,9 +99,11 @@
                                 Margin="0,0,6,4" Click="ApplyProfileNow_Click"/>
                         <Button x:Name="BtnLaunchGame" Content="Launch" Style="{StaticResource CompactAccentButton}"
                                 Margin="0,0,6,4" MinWidth="88" Click="LaunchGame_Click"/>
-                        <Button x:Name="BtnGamesEditorMore" Content="..."
-                                Style="{StaticResource CompactGhostButton}" MinWidth="36" Padding="8,6" Margin="0,0,0,4"
+                        <Button x:Name="BtnGamesEditorMore"
+                                Style="{StaticResource CompactGhostButton}" Width="36" Padding="0" Margin="0,0,0,4"
                                 Click="GamesEditorMore_Click">
+                            <Path Width="16" Height="16" Stretch="Uniform" Data="{StaticResource IconMore}"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
                             <Button.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem x:Name="MiOverlay" Header="Live overlay" Click="Overlay_Click"/>
@@ -125,9 +129,9 @@
 
                 <Grid Grid.Row="2">
                     <!-- DISPLAY -->
-                    <ScrollViewer x:Name="PanelGamesDisplay" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer x:Name="PanelGamesDisplay" VerticalScrollBarVisibility="Auto" Margin="0,0,2,10"
                                   HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
-                        <StackPanel x:Name="EditorPanel" Margin="20,4,20,16">
+                        <StackPanel x:Name="EditorPanel" Margin="20,4,18,6">
                             <TextBlock x:Name="LblProfileTitle" Text="Game profile" Style="{StaticResource SectionTitle}" Margin="0,0,0,10"/>
                             <TextBlock x:Name="LblName" Text="Name" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
                             <TextBox x:Name="TxtName" AutomationProperties.LabeledBy="{Binding ElementName=LblName}" TextChanged="EditorChanged"/>
@@ -182,9 +186,9 @@
                     </ScrollViewer>
 
                     <!-- COLOR (live) -->
-                    <ScrollViewer x:Name="PanelGamesColor" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer x:Name="PanelGamesColor" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Margin="0,0,2,10"
                                   HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
-                        <StackPanel x:Name="PlayEditor" Margin="20,4,20,16">
+                        <StackPanel x:Name="PlayEditor" Margin="20,4,18,6">
                             <DockPanel Margin="0,0,0,4">
                                 <CheckBox x:Name="ChkPlayPreview" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="12,0,0,0"
                                           Content="Preview on desktop" Checked="PlayPreview_Changed" Unchecked="PlayPreview_Changed"/>
@@ -217,9 +221,9 @@
                     </ScrollViewer>
 
                     <!-- SESSION -->
-                    <ScrollViewer x:Name="PanelGamesSession" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer x:Name="PanelGamesSession" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Margin="0,0,2,10"
                                   HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
-                        <StackPanel Margin="20,4,20,16">
+                        <StackPanel Margin="20,4,18,6">
                             <Expander x:Name="ExpAdvanced" Header="Advanced" IsExpanded="True" Margin="0,0,0,8">
                                 <StackPanel Margin="2,0,0,0">
                                     <TextBlock x:Name="LblAliases" Text="Process aliases (comma-separated)" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
@@ -318,9 +322,9 @@
                     </ScrollViewer>
 
                     <!-- COMPANIONS -->
-                    <ScrollViewer x:Name="PanelGamesCompanions" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer x:Name="PanelGamesCompanions" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Margin="0,0,2,10"
                                   HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
-                        <StackPanel Margin="20,4,20,16">
+                        <StackPanel Margin="20,4,18,6">
                             <DockPanel Margin="0,0,0,8">
                                 <local:InfoHint x:Name="InfoCompanions" DockPanel.Dock="Right"/>
                                 <TextBlock x:Name="LblCompanions" Text="Companion apps" Style="{StaticResource SubHeader}" Margin="0" VerticalAlignment="Center"/>
@@ -415,8 +419,8 @@
                                     <Button x:Name="BtnApplyPreset" DockPanel.Dock="Right" Content="Apply now" Style="{StaticResource CompactAccentButton}" HorizontalAlignment="Right" Click="ApplyPresetNow_Click"/>
                                     <TextBlock x:Name="LblPresetEditorTitle" Text="Preset" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
                                 </DockPanel>
-                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
-                                    <StackPanel Margin="20,0,20,16">
+                                <ScrollViewer Grid.Row="1" Margin="0,0,2,10" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly">
+                                    <StackPanel Margin="20,0,18,6">
                                         <TextBlock x:Name="LblPresetName" Text="Name" Style="{StaticResource FieldLabel}"/>
                                         <TextBox x:Name="TxtPresetName" AutomationProperties.LabeledBy="{Binding ElementName=LblPresetName}" TextChanged="PresetName_TextChanged" LostFocus="PresetName_LostFocus"/>
                                         <TextBlock x:Name="LblPresetHotkey" Text="Hotkey" Style="{StaticResource FieldLabel}"/>

@@ -587,6 +587,8 @@ public partial class HomePage : ShellPageBase
                 Grid.SetColumn(WelcomeCard, 2);
                 Grid.SetRow(WelcomeCard, 0);
                 Grid.SetRow(StatGrid, 1);
+                // Stacked: the welcome card needs its own gap above the stat grid.
+                WelcomeCard.Margin = new Thickness(0, 0, 0, 12);
             }
             else
             {
@@ -595,10 +597,45 @@ public partial class HomePage : ShellPageBase
                 Grid.SetColumn(WelcomeCard, 0);
                 Grid.SetRow(WelcomeCard, 0);
                 Grid.SetRow(StatGrid, 0);
+                // Side by side: no bottom margin, so the card's bottom edge lines up with the stat grid's.
+                WelcomeCard.Margin = new Thickness(0);
             }
         }
-        BottomRow.Columns = e.NewSize.Width < 600 ? 1 : 3;
-        HwStrip.Columns = e.NewSize.Width < 720 ? 2 : 4;
+        int bottomCols = e.NewSize.Width < 600 ? 1 : 3;
+        int hwCols = e.NewSize.Width < 720 ? 2 : 4;
+        if (BottomRow.Columns != bottomCols || e.PreviousSize.Width <= 0)
+        {
+            BottomRow.Columns = bottomCols;
+            ApplyGutters(BottomRow);
+        }
+        if (HwStrip.Columns != hwCols || e.PreviousSize.Width <= 0)
+        {
+            HwStrip.Columns = hwCols;
+            ApplyGutters(HwStrip);
+        }
+    }
+
+    /// <summary>
+    /// 12-DIP gutters for a reflowing UniformGrid. The XAML margins (0,0,6,0 · 6,0,6,0 · 6,0,0,0) only fit the
+    /// widest column count: after a reflow to 1 or 2 columns, cards kept 6-DIP side insets (ragged edges) and
+    /// stacked rows touched (no vertical gap).
+    /// </summary>
+    private static void ApplyGutters(System.Windows.Controls.Primitives.UniformGrid grid, double gap = 12)
+    {
+        int cols = Math.Max(1, grid.Columns);
+        int count = grid.Children.Count;
+        int rows = (count + cols - 1) / cols;
+        double half = gap / 2;
+        for (int i = 0; i < count; i++)
+        {
+            if (grid.Children[i] is not FrameworkElement child) continue;
+            int col = i % cols, row = i / cols;
+            child.Margin = new Thickness(
+                col == 0 ? 0 : half,
+                0,
+                col == cols - 1 ? 0 : half,
+                row < rows - 1 ? gap : 0);
+        }
     }
 
     // -- Actions --------------------------------------------------------------------------------------------
