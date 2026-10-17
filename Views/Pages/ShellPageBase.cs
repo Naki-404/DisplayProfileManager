@@ -33,4 +33,7 @@ public abstract class ShellPageBase : System.Windows.Controls.UserControl
 
     /// <summary>Window shown again or page selected: rebuild whatever went stale while hidden.</summary>
     public virtual void RefreshIfStale() { }
+
+    /// <summary>Selects a sub-section by its key ("dns", "startup", …). Unknown keys are ignored.</summary>
+    public virtual void ShowSubSection(string key) { }
 }

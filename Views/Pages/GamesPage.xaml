@@ -114,7 +114,7 @@
                     </WrapPanel>
                 </Grid>
 
-                <WrapPanel Grid.Row="1" Margin="16,0,16,8">
+                <WrapPanel Grid.Row="1" Margin="16,0,16,8" controls:SegmentNav.ArrowKeys="True">
                     <RadioButton x:Name="RbGamesDisplay" GroupName="GamesEditor" Style="{StaticResource SegmentRadio}"
                                  Content="Display" IsChecked="True" Checked="GamesEditorSection_Checked"/>
                     <RadioButton x:Name="RbGamesColor" GroupName="GamesEditor" Style="{StaticResource SegmentRadio}"

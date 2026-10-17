@@ -67,6 +67,12 @@ public partial class NetworkPage : ShellPageBase
 
     public override void ApplyLocalization()
     {
+        RbNetOverview.Content = Loc.T("net.sec.overview");
+        RbNetDiagnostics.Content = Loc.T("net.sec.diagnostics");
+        RbNetDns.Content = Loc.T("net.sec.dns");
+        RbNetTcp.Content = Loc.T("net.sec.tcp");
+        ApplyDnsLocalization();
+        _tcpPanel?.Relabel();
         LblNetOverview.Text = Loc.T("net.overview");
         BtnNetRefresh.Content = Loc.T("system.refresh");
         TxtNetEmpty.Text = Loc.T("net.empty");
@@ -133,8 +139,71 @@ public partial class NetworkPage : ShellPageBase
         try { _netDnsCts?.Cancel(); } catch { /* ignore */ }
         try { _traceCts?.Cancel(); } catch { /* ignore */ }
         try { _diagCts?.Cancel(); } catch { /* ignore */ }
+        try { _benchCts?.Cancel(); } catch { /* ignore */ }
         StopThroughput();
         StopPingSeries();
+    }
+
+    // -- Sub-sections ------------------------------------------------------------------------------------
+
+    private enum NetSection { Overview, Diagnostics, Dns, Tcp }
+
+    private NetSection _netSection = NetSection.Overview;
+    private NetTweakPanel? _tcpPanel;
+
+    public override void ShowSubSection(string key)
+    {
+        if (!Enum.TryParse<NetSection>(key, ignoreCase: true, out var s)) return;
+        var rb = s switch
+        {
+            NetSection.Diagnostics => RbNetDiagnostics,
+            NetSection.Dns => RbNetDns,
+            NetSection.Tcp => RbNetTcp,
+            _ => RbNetOverview
+        };
+        if (rb.IsChecked != true) rb.IsChecked = true; // → NetSection_Checked
+        else ApplyNetSection(s);
+    }
+
+    private void NetSection_Checked(object sender, RoutedEventArgs e)
+    {
+        if (PanelNetOverview == null) return;
+        var s = sender == RbNetDiagnostics ? NetSection.Diagnostics
+            : sender == RbNetDns ? NetSection.Dns
+            : sender == RbNetTcp ? NetSection.Tcp
+            : NetSection.Overview;
+        ApplyNetSection(s);
+    }
+
+    private void ApplyNetSection(NetSection s)
+    {
+        bool changed = _netSection != s;
+        _netSection = s;
+        PanelNetOverview.Visibility = s == NetSection.Overview ? Visibility.Visible : Visibility.Collapsed;
+        DiagnosticsHost.Visibility = s == NetSection.Diagnostics ? Visibility.Visible : Visibility.Collapsed;
+        PanelNetDns.Visibility = s == NetSection.Dns ? Visibility.Visible : Visibility.Collapsed;
+        PanelNetTcp.Visibility = s == NetSection.Tcp ? Visibility.Visible : Visibility.Collapsed;
+        if (changed) NetScroll.ScrollToTop();
+        if (IsLive) RefreshSection();
+    }
+
+    /// <summary>Reads for the DNS / TCP sections (off the UI thread) — only for the visible one.</summary>
+    private void RefreshSection()
+    {
+        switch (_netSection)
+        {
+            case NetSection.Dns:
+                _ = RefreshDnsCurrentAsync();
+                break;
+            case NetSection.Tcp:
+                if (_tcpPanel == null)
+                {
+                    _tcpPanel = new NetTweakPanel(Host);
+                    PanelNetTcp.Children.Add(_tcpPanel);
+                }
+                _ = _tcpPanel.RefreshAsync();
+                break;
+        }
     }
 
     private void RebuildNetHosts(bool hasGateway)
@@ -186,6 +255,7 @@ public partial class NetworkPage : ShellPageBase
         _stale = false;
         var info = NetworkInfoService.CapturePrimary(forceRefresh);
         _lastAdapter = info;
+        RefreshSection();
         _netHasGateway = !string.IsNullOrEmpty(info?.Gateway);
         RebuildNetHosts(_netHasGateway);
         StartThroughput(info);

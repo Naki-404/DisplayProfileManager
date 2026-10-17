@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using Visor.Services;
@@ -308,7 +308,44 @@ public class LocTests
         }
     }
 
-    private static readonly string[] NavKeys = { "nav.home", "nav.mypc", "nav.games", "nav.optimize", "nav.network", "nav.settings" };
+    /// <summary>Every literal key passed to Loc.T / Loc.Tf / Loc.Plural in the app sources exists in the table.</summary>
+    [Fact]
+    public void Every_literal_key_used_in_the_sources_exists()
+    {
+        var csproj = FindRepoFile("Visor.csproj");
+        Assert.NotNull(csproj);
+        var root = Path.GetDirectoryName(csproj)!;
+        var call = new Regex(@"Loc\.(?:T|Tf|Plural)\(\s*""([^""]+)""\s*[,)]", RegexOptions.Compiled);
+        var map = Table();
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        int used = 0;
+        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(root, file);
+            var first = rel.Split(Path.DirectorySeparatorChar)[0];
+            if (first is "tests" or "obj" or "bin" or "Installer" or "tools" or "_IconGen") continue;
+            if (string.Equals(Path.GetFileName(file), "Loc.cs", StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (Match m in call.Matches(File.ReadAllText(file)))
+            {
+                used++;
+                if (!map.ContainsKey(m.Groups[1].Value))
+                    missing.Add(m.Groups[1].Value + " (" + rel + ")");
+            }
+        }
+        Assert.True(used > 500, "literal Loc calls found: " + used);
+        Assert.True(missing.Count == 0, "missing Loc keys:\n" + string.Join("\n", missing));
+    }
+
+    [Fact]
+    public void Has_reports_table_membership()
+    {
+        Assert.True(Loc.Has("btn.cancel"));
+        Assert.True(Loc.Has("BTN.CANCEL"));
+        Assert.False(Loc.Has("no.such.key.xyz"));
+        Assert.False(Loc.Has(""));
+    }
+
+    private static readonly string[] NavKeys ={ "nav.home", "nav.mypc", "nav.games", "nav.optimize", "nav.network", "nav.settings" };
 
     private static string? FindRepoFile(string relative)
     {

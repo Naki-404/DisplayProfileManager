@@ -16,6 +16,15 @@ public sealed class AppServices : IDisposable
     public SensorService Sensors { get; }
     /// <summary>FPS / frametime capture via PresentMon (named FrameMonitor: <see cref="Monitor"/> is the profile monitor).</summary>
     public MonitorService FrameMonitor { get; }
+    /// <summary>Per-action elevated helper (one UAC prompt per apply / undo). Visor itself never runs elevated.</summary>
+    public Services.Elevation.ElevationBroker Elevation { get; }
+    /// <summary>PC tweaks: startup apps, Ultimate plan, HAGS, cache cleanup (targets registered in <see cref="SafeActions"/>).</summary>
+    public Services.Optimize.Pc.PcTweaks Pc { get; }
+    /// <summary>
+    /// The one journaled apply / undo service every page uses (Optimize, Network, recommendations). Elevated
+    /// targets (network tweaks, HAGS, HKLM startup toggles) apply only via ApplyAsync / UndoAsync.
+    /// </summary>
+    public SafeActionService SafeActions { get; }
 
     /// <summary>Crash-event summary is re-read on demand at most this often (System log scan: 100 ms – a few s).</summary>
     public static readonly TimeSpan CrashSummaryMinAge = TimeSpan.FromMinutes(10);
@@ -40,8 +49,11 @@ public sealed class AppServices : IDisposable
         History = new ActivityHistoryStore(Config.ConfigDirectory);
 
         Display = new DisplayEngine(Config.ConfigDirectory);
-        // "ultimate" must resolve to the installed duplicate, not the hidden template GUID.
-        DisplayEngine.UltimateResolver = () => new Visor.Services.Optimize.Pc.UltimatePlanService().FindInstalled();
+        // Nothing here elevates or writes: the broker only launches the helper on an explicit apply / undo.
+        Elevation = new Services.Elevation.ElevationBroker();
+        Pc = Services.Optimize.Pc.PcTweaks.Create(Config.ConfigDirectory, Elevation, Display.SetPowerPlan);
+        // "ultimate" must resolve to the installed duplicate (incl. the one Visor created), not the hidden template GUID.
+        DisplayEngine.UltimateResolver = () => Pc.Ultimate.FindInstalled();
         Zoom = new ScreenZoomService();
         Zoom.ApplyFromConfig(Config.Current.Ui);
 
@@ -55,6 +67,13 @@ public sealed class AppServices : IDisposable
         Companions = new CompanionService();
         Monitor = new ProfileMonitor(Config, Display, Watcher, Companions, History);
         Hotkeys = new HotkeyService();
+
+        // Journal load only (no system change). Journaled PC targets (HAGS, Ultimate plan, startup toggles)
+        // are registered so their undo works after a restart; network ids resolve on demand.
+        SafeActions = SafeActionService.CreateDefault(Config.ConfigDirectory, Display.SetPowerPlan,
+            () => Monitor.SnapshotActive, elevation: Elevation);
+        try { Pc.Register(SafeActions); }
+        catch (Exception ex) { AppLog.Warn(ex, "PC tweak targets"); }
 
         // Crash restore only from real evidence: a leftover session snapshot is restored first
         // (pre-game modes / ramps / extras). A dirty exit without one re-applies the baseline

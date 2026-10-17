@@ -722,7 +722,8 @@ internal sealed class SlateMenuRenderer : ToolStripProfessionalRenderer
         e.TextColor = !e.Item.Enabled ? _t.Muted : _t.Text;
         e.TextFormat = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix
                        | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine;
-        int left = Px(e.Item, 16);
+        // Padding.Left (device px, already DPI-scaled by the caller) indents nested rows such as tray presets.
+        int left = Px(e.Item, 16) + Math.Max(0, e.Item.Padding.Left);
         // Submenu headers keep room for the chevron on the right.
         int right = Px(e.Item, e.Item is ToolStripMenuItem { HasDropDownItems: true } ? 28 : 16);
         e.TextRectangle = new System.Drawing.Rectangle(left, 0, Math.Max(0, e.Item.Width - left - right), e.Item.Height);

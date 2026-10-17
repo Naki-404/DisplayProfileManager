@@ -31,6 +31,7 @@ public static class HistoryText
                 ? "history.kind.leftoverRestored"
                 : "history.kind.leftoverRestored.fail"),
             "safeAction" => Loc.Tf("history.kind.safeAction", SafeActionDetail(entry.Detail)),
+            "cleanup" => Loc.Tf("history.kind.cleanup", CleanupDetail(entry.Detail)),
             _ => entry.Kind
         };
         if (!entry.Success && entry.Kind is not "leftoverRestored")
@@ -45,6 +46,46 @@ public static class HistoryText
         "gameMode.rollback" => Loc.T("system.hist.gameMode.rollback"),
         "powerHighPerf" => Loc.T("system.hist.power"),
         "power.rollback" => Loc.T("system.hist.power.rollback"),
-        _ => detail ?? "?"
+        _ => ResolveDetail(detail)
     };
+
+    /// <summary>
+    /// Localized title for a SafeAction id stored as history detail (set by the UI, which knows the targets).
+    /// Returns null for ids it cannot name; the raw id is shown then.
+    /// </summary>
+    public static Func<string, string?>? SafeActionTitleResolver { get; set; }
+
+    private static string ResolveDetail(string? detail)
+    {
+        if (string.IsNullOrEmpty(detail)) return "?";
+        var resolve = SafeActionTitleResolver;
+        if (resolve == null) return detail;
+        try
+        {
+            const string undoSuffix = ".undo";
+            if (detail.EndsWith(undoSuffix, StringComparison.Ordinal))
+            {
+                var undone = resolve(detail[..^undoSuffix.Length]);
+                if (undone != null) return Loc.Tf("history.safeAction.undo", undone);
+            }
+            return resolve(detail) ?? detail;
+        }
+        catch (Exception)
+        {
+            return detail;
+        }
+    }
+
+    /// <summary>"UserTemp|1234" → "Temporary files (older than 24 h) · 1.2 KB".</summary>
+    public static string CleanupDetail(string? detail)
+    {
+        if (string.IsNullOrEmpty(detail)) return "?";
+        var parts = detail.Split('|');
+        string label = Enum.TryParse<Optimize.Pc.CleanupCategory>(parts[0], out var cat)
+            ? Loc.T(Optimize.Pc.CleanupService.CategoryLocKey(cat))
+            : parts[0];
+        return parts.Length > 1 && long.TryParse(parts[1], out long bytes)
+            ? label + " · " + SystemInfoService.FormatBytes(bytes)
+            : label;
+    }
 }

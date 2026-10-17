@@ -8,7 +8,7 @@
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
             <Button x:Name="BtnPreferences" DockPanel.Dock="Right" Style="{StaticResource CompactAccentButton}"
                     HorizontalAlignment="Right" Click="Preferences_Click"/>
-            <WrapPanel>
+            <WrapPanel controls:SegmentNav.ArrowKeys="True">
                 <RadioButton x:Name="RbDefaults" GroupName="SettingsTabs" Style="{StaticResource SegmentRadio}"
                              Content="Defaults" IsChecked="True" Checked="Section_Checked"/>
                 <RadioButton x:Name="RbHotkeys" GroupName="SettingsTabs" Style="{StaticResource SegmentRadio}"

@@ -762,14 +762,22 @@ public partial class App : System.Windows.Application
         var trayFore = System.Drawing.Color.FromArgb(0xE8, 0xEE, 0xF4);
         var trayBack = System.Drawing.Color.FromArgb(0x16, 0x1B, 0x22);
 
-        System.Windows.Forms.ToolStripMenuItem MakeItem(string text, EventHandler onClick, int width = 220)
+        // Fixed-size items are in device pixels: scale the 96-DPI design sizes by the menu's DPI (125 / 150 %).
+        float dpiScale = (menu.DeviceDpi <= 0 ? 96 : menu.DeviceDpi) / 96f;
+        int Px(int logical) => (int)Math.Round(logical * dpiScale);
+
+        System.Windows.Forms.ToolStripSeparator MakeSeparator() =>
+            new System.Windows.Forms.ToolStripSeparator { AutoSize = false, Height = Px(7) };
+
+        System.Windows.Forms.ToolStripMenuItem MakeItem(string text, EventHandler onClick, int width = 220, int indent = 0)
         {
             return new System.Windows.Forms.ToolStripMenuItem(text, null, onClick)
             {
                 AutoSize = false,
-                Width = width,
-                Height = 32,
-                Padding = new System.Windows.Forms.Padding(0),
+                Width = Px(width),
+                Height = Px(32),
+                // Left padding = extra text indent (SlateMenuRenderer adds it to its 16-DIP inset).
+                Padding = new System.Windows.Forms.Padding(Px(indent), 0, 0, 0),
                 Margin = new System.Windows.Forms.Padding(0),
                 ForeColor = trayFore,
                 BackColor = trayBack,
@@ -870,7 +878,7 @@ public partial class App : System.Windows.Application
                 hotkeysMenu.DropDownItems.Add(MakeItem($"{label}: {gesture}", (_, _) => CopyHotkeyToClipboard(gesture!), width: 240));
             if (presetBindings.Count > 0)
             {
-                hotkeysMenu.DropDownItems.Add(new System.Windows.Forms.ToolStripSeparator { AutoSize = false, Height = 7 });
+                hotkeysMenu.DropDownItems.Add(MakeSeparator());
                 foreach (var (label, gesture) in presetBindings)
                     hotkeysMenu.DropDownItems.Add(MakeItem($"{label}: {gesture}", (_, _) => CopyHotkeyToClipboard(gesture!), width: 240));
             }
@@ -879,7 +887,7 @@ public partial class App : System.Windows.Application
 
         var active = Services.Monitor.CurrentProfile;
         var presets = active?.Presets?.Where(p => !string.IsNullOrWhiteSpace(p.Name)).ToList();
-        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator { AutoSize = false, Height = 7 });
+        menu.Items.Add(MakeSeparator());
         if (active != null && presets != null && presets.Count > 0)
         {
             var header = MakeItem($"{Loc.T("tray.presets")}: {active.Name}", (_, _) => { });
@@ -888,15 +896,15 @@ public partial class App : System.Windows.Application
             foreach (var preset in presets.Take(MaxTrayPresets))
             {
                 var p = preset;
-                menu.Items.Add(MakeItem("  " + p.Name, (_, _) =>
+                menu.Items.Add(MakeItem(p.Name, (_, _) =>
                 {
                     Services.Monitor.ApplyPreset(p);
                     _main?.Dispatcher.Invoke(() => _main.ShowToast($"{Loc.T("btn.apply")}: {p.Name}"));
-                }));
+                }, indent: 12));
             }
             if (presets.Count > MaxTrayPresets)
             {
-                var more = MakeItem($"  … +{presets.Count - MaxTrayPresets} more (Open app)", (_, _) => ShowMain());
+                var more = MakeItem($"… +{presets.Count - MaxTrayPresets} more (Open app)", (_, _) => ShowMain(), indent: 12);
                 more.Enabled = false;
                 menu.Items.Add(more);
             }
@@ -908,11 +916,11 @@ public partial class App : System.Windows.Application
             menu.Items.Add(none);
         }
 
-        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator { AutoSize = false, Height = 7 });
+        menu.Items.Add(MakeSeparator());
         menu.Items.Add(MakeItem(Loc.T("tray.exit"), (_, _) => ExitApp()));
 
         foreach (System.Windows.Forms.ToolStripItem it in menu.Items)
-            if (it is System.Windows.Forms.ToolStripMenuItem mi && mi.DropDownItems.Count == 0) mi.Width = 220;
+            if (it is System.Windows.Forms.ToolStripMenuItem mi && mi.DropDownItems.Count == 0) mi.Width = Px(220);
 
         var old = _tray.ContextMenuStrip;
         _tray.ContextMenuStrip = menu;

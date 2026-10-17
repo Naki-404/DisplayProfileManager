@@ -140,6 +140,7 @@ public partial class MainWindow : Window, IShellHost
         _editorSuppress = 0;
 
         OptimizePage.PruneDismissedRecommendations();
+        HistoryText.SafeActionTitleResolver = SafeActionUi.TryTitleFor;
         ReloadFromConfig();
         ApplyLocalization();
         UpdateActiveHeader(App.Services.Monitor.CurrentProfile);
@@ -778,6 +779,13 @@ public partial class MainWindow : Window, IShellHost
         var tab = TabFor(section);
         if (!ReferenceEquals(MainTabs.SelectedItem, tab))
             MainTabs.SelectedItem = tab;
+    }
+
+    public void Navigate(ShellSection section, string? subSection)
+    {
+        Navigate(section);
+        if (!string.IsNullOrEmpty(subSection) && TabFor(section).Content is ShellPageBase page)
+            page.ShowSubSection(subSection);
     }
 
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)

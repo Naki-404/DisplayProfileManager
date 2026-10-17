@@ -1,29 +1,44 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using Visor.Controls;
 using Visor.Models;
 using Visor.Services;
 using Visor.Services.Optimize;
+using Visor.Services.Optimize.Pc;
 using WpfButton = System.Windows.Controls.Button;
 using WpfOrientation = System.Windows.Controls.Orientation;
 
 namespace Visor;
 
+/// <summary>Sub-sections of the Optimize page, in strip order.</summary>
+public enum OptimizeSection
+{
+    Overview,
+    System,
+    Graphics,
+    Input,
+    Network,
+    Startup,
+    Cleanup
+}
+
 /// <summary>
-/// Optimize section: suggestions (RecommendationEngine over the full measured context), SafeAction cards
-/// (Game Mode, power plan, Game Bar background, mouse acceleration), per-game fullscreen-optimization
-/// rows, read-only info cards and the undo journal. Registry / WMI reads run off the UI thread.
+/// Optimize section, split into sub-sections (segmented strip, Left / Right moves): Overview (summary,
+/// suggestions, undo journal), System (Game Mode, power plans, HAGS, Game Bar, managed info), Graphics (per-game
+/// fullscreen optimizations, HAGS shortcut, visual effects), Input (mouse acceleration), Network (shared
+/// <see cref="NetTweakPanel"/>), Startup (startup apps) and Cleanup (cache cleanup). Every apply / undo goes
+/// through <see cref="SafeActionUi"/> (async, never blocks the UI); every read runs off the UI thread and the
+/// page re-reads after each action.
 /// </summary>
 public partial class OptimizePage : ShellPageBase
 {
-    private SafeActionService? _safeActions;
     private bool _stale = true;
     private int _refreshGen;
     private PageSnapshot _snap = new();
-    private readonly List<OptDetailsPanel> _detailPanels = new();
+    private OptimizeSection _section = OptimizeSection.Overview;
+    private NetTweakPanel? _netPanel;
     /// <summary>Before/after bookkeeping per journal key; fed by <see cref="RecordMetric"/> (Monitor stage).</summary>
     private readonly Dictionary<string, OptimizationExperiment> _experiments = new(StringComparer.OrdinalIgnoreCase);
 
@@ -37,43 +52,39 @@ public partial class OptimizePage : ShellPageBase
         public bool? GameBarOn;
         public bool? MouseAccelOn;
         public IReadOnlyList<GameFsoStatus> Fso = Array.Empty<GameFsoStatus>();
-        public IReadOnlyList<OptimizeInfoItem> Info = Array.Empty<OptimizeInfoItem>();
+        public OptimizeInfoItem? PowerPerGame;
         public IReadOnlyList<SafeActionJournalEntry> Journal = Array.Empty<SafeActionJournalEntry>();
         public IReadOnlyList<SafeActionJournalEntry> PerGameJournal = Array.Empty<SafeActionJournalEntry>();
         public bool SessionActive;
+        public HagsStatus? Hags;
+        public string? UltimateGuid;
+        public bool? UltimateActive;
+        public IReadOnlyList<StartupEntry>? Startup;
+        public CleanupScanResult? CleanupScan;
+        public bool Loaded;
     }
 
     public OptimizePage(IShellHost host) : base(host)
     {
         InitializeComponent();
+        SafeActionUi.Completed += OnSafeActionCompleted;
     }
 
     public override ShellSection Section => ShellSection.Optimize;
     public override string TitleKey => "nav.optimize";
 
-    /// <summary>Journaled, reversible Windows tweaks. Created on first use (UI thread).</summary>
-    private SafeActionService? SafeActions
-    {
-        get
-        {
-            if (_safeActions != null) return _safeActions;
-            try
-            {
-                _safeActions = SafeActionService.CreateDefault(
-                    App.Services.Config.ConfigDirectory,
-                    p => App.Services.Display.SetPowerPlan(p),
-                    () => App.Services.Monitor.SnapshotActive);
-            }
-            catch (Exception ex)
-            {
-                AppLog.Warn(ex, "SafeAction service");
-            }
-            return _safeActions;
-        }
-    }
+    private static SafeActionService Safe => App.Services.SafeActions;
 
     public override void ApplyLocalization()
     {
+        RbOptOverview.Content = Loc.T("optimize.sec.overview");
+        RbOptSystem.Content = Loc.T("optimize.sec.system");
+        RbOptGraphics.Content = Loc.T("optimize.sec.graphics");
+        RbOptInput.Content = Loc.T("optimize.sec.input");
+        RbOptNetwork.Content = Loc.T("optimize.sec.network");
+        RbOptStartup.Content = Loc.T("optimize.sec.startup");
+        RbOptCleanup.Content = Loc.T("optimize.sec.cleanup");
+
         LblOptSummary.Text = Loc.T("optimize.ui.summary");
         TxtOptSummaryHint.Text = Loc.T("optimize.ui.summary.hint");
         BtnOptimizeRefresh.Content = Loc.T("system.refresh");
@@ -85,25 +96,133 @@ public partial class OptimizePage : ShellPageBase
         TxtRecHint.Text = Loc.T("rec.hint");
         TxtRecEmpty.Text = Loc.T("rec.empty");
         BtnRecReset.Content = Loc.T("rec.reset");
-        LblActions.Text = Loc.T("system.safe");
-        TxtActionsHint.Text = Loc.T("system.safe.hint");
-        LblPerGame.Text = Loc.T("optimize.ui.perGame");
-        TxtPerGameHint.Text = Loc.T("optimize.ui.perGame.hint");
-        TxtPerGameEmpty.Text = Loc.T("optimize.ui.perGame.empty");
-        LblInfo.Text = Loc.T("optimize.ui.info");
-        TxtInfoHint.Text = Loc.T("optimize.ui.info.hint");
         LblJournal.Text = Loc.T("optimize.ui.journal");
         TxtJournalHint.Text = Loc.T("optimize.ui.journal.hint");
         TxtJournalEmpty.Text = Loc.T("optimize.ui.journal.empty");
+
+        LblSystem.Text = Loc.T("system.safe");
+        TxtSystemHint.Text = Loc.T("system.safe.hint");
+        LblSystemGpu.Text = Loc.T("optimize.ui.system.admin");
+        TxtSystemGpuHint.Text = Loc.T("optimize.ui.system.admin.hint");
+        LblInfo.Text = Loc.T("optimize.ui.info");
+        TxtInfoHint.Text = Loc.T("optimize.ui.info.hint");
+
+        LblPerGame.Text = Loc.T("optimize.ui.perGame");
+        TxtPerGameHint.Text = Loc.T("optimize.ui.perGame.hint");
+        TxtPerGameEmpty.Text = Loc.T("optimize.ui.perGame.empty");
+        LblGfxHags.Text = Loc.T("optimize.hagsMode.title");
+        LblGfxInfo.Text = Loc.T("optimize.ui.info");
+
+        LblInput.Text = Loc.T("optimize.ui.input");
+        TxtInputHint.Text = Loc.T("optimize.ui.input.hint");
+        TxtInputMore.Text = Loc.T("optimize.ui.input.more");
+
+        LblNetDnsLink.Text = Loc.T("optimize.ui.net.dns");
+        TxtNetDnsLink.Text = Loc.T("optimize.ui.net.dns.hint");
+        BtnOpenDns.Content = Loc.T("optimize.ui.net.dns.open");
+        _netPanel?.Relabel();
+
+        LblStartup.Text = Loc.T("optimize.startup.title");
+        BtnStartupRefresh.Content = Loc.T("system.refresh");
+        TxtStartupWhy.Text = Loc.T("optimize.startup.why");
+        TxtStartupNote.Text = Loc.T("optimize.startup.impactNote");
+        StartupDetails.SetTexts(null, Loc.T("optimize.startup.risk"), Loc.T("optimize.startup.undo"));
+        StartupDetails.Relabel();
+        RbStartupAll.Content = Loc.T("optimize.startup.filter.all");
+        RbStartupEnabled.Content = Loc.T("optimize.startup.filter.enabled");
+        RbStartupDisabled.Content = Loc.T("optimize.startup.filter.disabled");
+
+        LblCleanup.Text = Loc.T("optimize.cleanup.title");
+        BtnCleanupScan.Content = Loc.T("optimize.cleanup.scan");
+        TxtCleanupWhy.Text = Loc.T("optimize.cleanup.why");
+        CleanupDetails.SetTexts(null, Loc.T("optimize.cleanup.risk"), Loc.T("optimize.cleanup.undo"));
+        CleanupDetails.Relabel();
+
+        if (_snap.Loaded) RenderAll();
         Refresh();
     }
 
     public override void OnActivated() => Refresh();
 
+    public override void OnDeactivated() => CancelCleanupScan();
+
     public override void RefreshIfStale()
     {
         if (_stale) Refresh();
     }
+
+    public override void ShowSubSection(string key)
+    {
+        if (Enum.TryParse<OptimizeSection>(key, ignoreCase: true, out var s))
+            ShowSection(s);
+    }
+
+    /// <summary>Selects a sub-section (strip + panel); renders it and refreshes when the page is live.</summary>
+    public void ShowSection(OptimizeSection section)
+    {
+        var rb = RadioFor(section);
+        if (rb.IsChecked != true)
+            rb.IsChecked = true; // → OptSection_Checked
+        else
+            ApplySection(section);
+    }
+
+    private System.Windows.Controls.RadioButton RadioFor(OptimizeSection s) => s switch
+    {
+        OptimizeSection.System => RbOptSystem,
+        OptimizeSection.Graphics => RbOptGraphics,
+        OptimizeSection.Input => RbOptInput,
+        OptimizeSection.Network => RbOptNetwork,
+        OptimizeSection.Startup => RbOptStartup,
+        OptimizeSection.Cleanup => RbOptCleanup,
+        _ => RbOptOverview
+    };
+
+    private void OptSection_Checked(object sender, RoutedEventArgs e)
+    {
+        if (PanelOverview == null || sender is not System.Windows.Controls.RadioButton rb) return;
+        var section = rb == RbOptSystem ? OptimizeSection.System
+            : rb == RbOptGraphics ? OptimizeSection.Graphics
+            : rb == RbOptInput ? OptimizeSection.Input
+            : rb == RbOptNetwork ? OptimizeSection.Network
+            : rb == RbOptStartup ? OptimizeSection.Startup
+            : rb == RbOptCleanup ? OptimizeSection.Cleanup
+            : OptimizeSection.Overview;
+        ApplySection(section);
+    }
+
+    private void ApplySection(OptimizeSection section)
+    {
+        bool changed = _section != section;
+        _section = section;
+        PanelOverview.Visibility = Vis(section == OptimizeSection.Overview);
+        PanelSystem.Visibility = Vis(section == OptimizeSection.System);
+        PanelGraphics.Visibility = Vis(section == OptimizeSection.Graphics);
+        PanelInput.Visibility = Vis(section == OptimizeSection.Input);
+        PanelNetwork.Visibility = Vis(section == OptimizeSection.Network);
+        PanelStartup.Visibility = Vis(section == OptimizeSection.Startup);
+        PanelCleanup.Visibility = Vis(section == OptimizeSection.Cleanup);
+        if (changed) OptScroll.ScrollToTop();
+
+        if (section == OptimizeSection.Network && IsLive)
+        {
+            EnsureNetPanel();
+            _ = _netPanel!.RefreshAsync();
+        }
+        if (section == OptimizeSection.Cleanup && IsLive && _snap.Loaded && _cleanupScan == null && _cleanupCts == null)
+            _ = ScanCleanupAsync();
+    }
+
+    private static Visibility Vis(bool v) => v ? Visibility.Visible : Visibility.Collapsed;
+
+    private void EnsureNetPanel()
+    {
+        if (_netPanel != null) return;
+        _netPanel = new NetTweakPanel(Host);
+        NetTweakHost.Children.Add(_netPanel);
+    }
+
+    private void OpenDns_Click(object sender, RoutedEventArgs e) => Host.Navigate(ShellSection.Network, "dns");
 
     /// <summary>Monitoring / config changed elsewhere — rebuild when visible, else mark stale.</summary>
     public void Refresh()
@@ -116,37 +235,52 @@ public partial class OptimizePage : ShellPageBase
         }
         _stale = false;
         _ = RefreshAsync();
+        if (_section == OptimizeSection.Network)
+        {
+            EnsureNetPanel();
+            _ = _netPanel!.RefreshAsync();
+        }
     }
 
     private void OptimizeRefresh_Click(object sender, RoutedEventArgs e) => Refresh();
 
-    private bool WindowAlive => Host.Window.IsLoaded;
+    /// <summary>A SafeAction finished anywhere (this page, Network page, a toast's Undo): experiments + staleness.</summary>
+    private void OnSafeActionCompleted(string journalKey, bool applied)
+    {
+        if (applied) MarkExperimentApplied(journalKey);
+        else _experiments.Remove(journalKey);
+        if (!IsLive) _stale = true;
+    }
 
     // -- Snapshot (background) ---------------------------------------------------------------------------
 
+    /// <summary>Re-reads everything off the UI thread and re-renders (newest call wins).</summary>
     private async Task RefreshAsync()
     {
         int gen = ++_refreshGen;
-        var safe = SafeActions;
         var profiles = Host.Profiles.ToList();
         var dismissed = (UiStateStore.Current.DismissedRecommendations ?? new List<string>()).ToList();
+        var cleanup = _cleanupScan;
         TxtOptLoading.Visibility = Visibility.Visible;
         BtnOptimizeRefresh.IsEnabled = false;
+        BtnStartupRefresh.IsEnabled = false;
 
         PageSnapshot snap;
         try
         {
-            snap = await Task.Run(() => CaptureSnapshot(profiles, dismissed, safe)).ConfigureAwait(true);
+            snap = await Task.Run(() => CaptureSnapshot(profiles, dismissed, cleanup));
         }
         catch (Exception ex)
         {
             AppLog.Warn(ex, "Optimize refresh");
-            snap = new PageSnapshot();
+            snap = new PageSnapshot { CleanupScan = cleanup, Loaded = true };
         }
-        if (gen != _refreshGen) return; // a newer refresh is in flight
+        if (gen != _refreshGen || !Host.Window.IsLoaded) return; // a newer refresh is in flight
         TxtOptLoading.Visibility = Visibility.Collapsed;
         BtnOptimizeRefresh.IsEnabled = true;
+        BtnStartupRefresh.IsEnabled = true;
         _snap = snap;
+        _cleanupScan ??= snap.CleanupScan;
         try
         {
             RenderAll();
@@ -157,37 +291,73 @@ public partial class OptimizePage : ShellPageBase
         }
     }
 
-    private static PageSnapshot CaptureSnapshot(List<GameProfile> profiles, List<string> dismissed, SafeActionService? safe)
+    /// <summary>Refresh now and wait for it (used after an action so the row shows the verified state).</summary>
+    private Task RefreshNowAsync()
     {
+        if (!IsLive)
+        {
+            _stale = true;
+            return Task.CompletedTask;
+        }
+        _stale = false;
+        return RefreshAsync();
+    }
+
+    private static PageSnapshot CaptureSnapshot(List<GameProfile> profiles, List<string> dismissed, CleanupScanResult? cleanup)
+    {
+        var safe = Safe;
+        var pc = App.Services.Pc;
         var s = new PageSnapshot
         {
+            Loaded = true,
             SessionActive = App.Services.Monitor.SnapshotActive,
             GameMode = GameModeSetting.Read(),
             PowerPlan = PowerPlanSafeAction.ReadAliasOrGuid(),
             GameBarOn = GameBarSafeActionTarget.ReadBackgroundOn(),
             MouseAccelOn = MouseAccelerationSafeActionTarget.ReadAccelerationOn(),
             Fso = OptimizeStatus.FsoStatuses(profiles),
-            Info = OptimizeStatus.InfoItems(profiles),
-            DismissedCount = RecommendationDismissals.Parse(dismissed, DateTime.UtcNow).Count
+            PowerPerGame = OptimizeStatus.PowerPerGameItem(profiles),
+            DismissedCount = RecommendationDismissals.Parse(dismissed, DateTime.UtcNow).Count,
+            Hags = HagsStatusReader.Read(),
+            UltimateGuid = pc.Ultimate.FindInstalled(),
+            CleanupScan = cleanup
         };
-        s.Recs = RecommendationEngine.Evaluate(BuildContext(profiles, dismissed, s.GameMode, s.GameBarOn, s.MouseAccelOn, s.Fso));
-        if (safe != null)
+        s.UltimateActive = s.UltimateGuid == null ? false : pc.Ultimate.IsActive();
+        try
         {
-            s.Journal = safe.Journal.Entries.OrderByDescending(e => e.Utc).ToList();
-            s.PerGameJournal = safe.PerGameEntries();
+            var apps = pc.Startup.List();
+            pc.Startup.Register(safe, apps); // per-entry enable / disable targets (no system change)
+            s.Startup = apps;
         }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Startup apps list");
+        }
+        // The cache scan only measures. First visit measures once; later scans run on the Scan click / after a clean.
+        if (s.CleanupScan == null)
+        {
+            try { s.CleanupScan = pc.Cleanup.Scan(); }
+            catch (Exception ex) { AppLog.Warn(ex, "Cleanup scan"); }
+        }
+
+        var ctx = BuildContext(profiles, dismissed, s.GameMode, s.GameBarOn, s.MouseAccelOn, s.Fso,
+            s.Startup, s.CleanupScan, pc.Cleanup.PrimaryDrive(), s.Hags);
+        s.Recs = RecommendationEngine.Evaluate(ctx);
+        s.Journal = safe.Journal.Entries.OrderByDescending(e => e.Utc).ToList();
+        s.PerGameJournal = safe.PerGameEntries();
         return s;
     }
 
     private void RenderAll()
     {
-        _detailPanels.Clear();
         RenderSummary();
         RenderRecommendations();
-        RenderActions();
-        RenderPerGame();
-        RenderInfo();
         RenderJournal();
+        RenderSystem();
+        RenderGraphics();
+        RenderInput();
+        RenderStartup();
+        RenderCleanup();
     }
 
     // -- Recommendations: shared evaluation ------------------------------------------------------------------
@@ -205,60 +375,35 @@ public partial class OptimizePage : ShellPageBase
         return RecommendationEngine.Evaluate(ctx);
     }
 
-    /// <summary>Full measured context: Visor state, network, HKCU facts, hardware singletons when present.</summary>
+    /// <summary>Measured context: Visor state, network, HKCU facts, hardware services (null = not measured yet).</summary>
     private static RecommendationContext BuildContext(IReadOnlyList<GameProfile> profiles, IEnumerable<string> dismissed,
-        bool? gameMode, bool? gameBarOn, bool? mouseAccelOn, IReadOnlyList<GameFsoStatus> fso)
+        bool? gameMode, bool? gameBarOn, bool? mouseAccelOn, IReadOnlyList<GameFsoStatus> fso,
+        IReadOnlyList<StartupEntry>? startupApps = null, CleanupScanResult? cleanupScan = null, string? cleanupDrive = null,
+        HagsStatus? hags = null)
     {
         var net = NetworkInfoService.CapturePrimary();
-        // The hardware singletons (App.Services.Sensors / CrashSummary / Health) are added by the My PC stage;
-        // they are looked up by name so this page builds before and after that lands and never invents data.
-        var sensors = ServiceMember<SensorSnapshot>("Sensors");
+        var services = App.Services;
         return new RecommendationContext
         {
-            MonitoringPaused = App.Services.Monitor.IsPaused,
+            MonitoringPaused = services.Monitor.IsPaused,
             ProfileCount = profiles.Count,
             GameModeEnabled = gameMode,
             HasUsableNetworkAdapter = net != null,
             HasUsableGateway = !string.IsNullOrEmpty(net?.Gateway),
             DismissedIds = new HashSet<string>(dismissed, StringComparer.OrdinalIgnoreCase),
             Inventory = HardwareInventoryService.Cached,
-            Sensors = sensors,
-            Health = ServiceMember<HealthReport>("Health"),
-            Crashes = ServiceMember<CrashEventSummary>("CrashSummary") ?? ServiceMember<CrashEventSummary>("Crashes"),
-            GameRunning = App.Services.Monitor.SnapshotActive,
+            Sensors = services.Sensors.Latest,
+            Health = services.Health,
+            Crashes = services.CrashSummary,
+            GameRunning = services.Monitor.SnapshotActive,
             GameBarBackgroundOn = gameBarOn,
             MouseAccelerationOn = mouseAccelOn,
-            FsoStatuses = fso
+            FsoStatuses = fso,
+            StartupApps = startupApps,
+            CleanupScan = cleanupScan,
+            CleanupDrive = cleanupDrive,
+            Hags = hags
         };
-    }
-
-    /// <summary>
-    /// Null-tolerant lookup of an <see cref="AppServices"/> member by name: the value itself, or its
-    /// Latest / Cached / Current / Report / Summary property when the member is a service wrapper.
-    /// Returns null when the member does not exist yet — never throws, never fabricates.
-    /// </summary>
-    private static T? ServiceMember<T>(string name) where T : class
-    {
-        try
-        {
-            var services = App.Services;
-            if (services == null) return null;
-            var prop = services.GetType().GetProperty(name);
-            var value = prop?.GetValue(services);
-            if (value == null) return null;
-            if (value is T direct) return direct;
-            foreach (var inner in new[] { "Latest", "Cached", "Current", "Report", "Summary" })
-            {
-                var p = value.GetType().GetProperty(inner);
-                if (p != null && typeof(T).IsAssignableFrom(p.PropertyType) && p.GetValue(value) is T found)
-                    return found;
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn(ex, "Recommendation context " + name);
-        }
-        return null;
     }
 
     /// <summary>Startup housekeeping: drop expired / legacy dismissal tokens (saved only when something changed).</summary>
@@ -343,25 +488,23 @@ public partial class OptimizePage : ShellPageBase
         var dismiss = new WpfButton
         {
             Content = Loc.T("rec.dismiss"),
-            Style = (Style)FindResource("CompactGhostButton"),
             Tag = rec,
             Margin = new Thickness(4, 0, 0, 0)
         };
+        dismiss.SetResourceReference(StyleProperty, "CompactGhostButton");
         dismiss.Click += RecDismiss_Click;
         actions.Children.Add(dismiss);
 
+        bool needsAdmin = rec.SafeActionId != null && SafeActionUi.NeedsElevation(rec.SafeActionId);
         if (rec.Action != RecommendationAction.None && !string.IsNullOrEmpty(rec.ActionKey))
         {
-            var apply = new WpfButton
-            {
-                Content = Loc.T(rec.ActionKey),
-                Style = (Style)FindResource("CompactAccentButton"),
-                Tag = rec
-            };
+            var apply = new WpfButton { Content = Loc.T(rec.ActionKey), Tag = rec };
+            apply.SetResourceReference(StyleProperty, "CompactAccentButton");
             if (rec.SafeActionId != null && IsBlocked(rec.SafeActionId))
             {
                 apply.IsEnabled = false;
                 apply.ToolTip = Loc.T("safeAction.code.sessionActive");
+                ToolTipService.SetShowOnDisabled(apply, true);
             }
             apply.Click += RecApply_Click;
             actions.Children.Insert(0, apply);
@@ -372,7 +515,7 @@ public partial class OptimizePage : ShellPageBase
         // DockPanel, not a horizontal StackPanel: a StackPanel measures the title with infinite width, so it never
         // wrapped and long (Russian) titles ran under the action buttons. Badge pinned to the first text line.
         var titleRow = new DockPanel();
-        var badge = NewBadge(Loc.T(rec.SeverityKey),
+        var badge = TweakRow.Badge(Loc.T(rec.SeverityKey),
             rec.Severity == RecommendationSeverity.Warning ? "WarningBrush" : "BorderBrush",
             rec.Severity == RecommendationSeverity.Warning ? "WarningBrush" : "MutedBrush");
         badge.VerticalAlignment = VerticalAlignment.Top;
@@ -388,7 +531,9 @@ public partial class OptimizePage : ShellPageBase
         title.SetResourceReference(TextBlock.ForegroundProperty, "TextBrush");
         titleRow.Children.Add(title);
         textCol.Children.Add(titleRow);
-        textCol.Children.Add(NewHint(FormatRecommendationBody(rec), new Thickness(0, 4, 0, 0)));
+        textCol.Children.Add(TweakRow.Hint(FormatRecommendationBody(rec), new Thickness(0, 4, 0, 0)));
+        if (needsAdmin)
+            textCol.Children.Add(TweakRow.Hint(Loc.T("net.tweak.status.uacHint"), new Thickness(0, 4, 0, 0)));
         if (rec.Evidence.Length > 0)
             textCol.Children.Add(NewChips(rec.Evidence));
         if (rec.WhyKey != null || rec.RiskKey != null || rec.UndoKey != null)
@@ -414,337 +559,107 @@ public partial class OptimizePage : ShellPageBase
         Refresh();
     }
 
-    private void RecApply_Click(object sender, RoutedEventArgs e)
+    private async void RecApply_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not WpfButton { Tag: Recommendation rec }) return;
-        switch (rec.Action)
+        if (sender is not WpfButton { Tag: Recommendation rec } button) return;
+        button.IsEnabled = false;
+        try
         {
-            case RecommendationAction.ResumeMonitoring:
-                if (App.Services.Monitor.IsPaused)
-                    Host.TogglePauseMonitoring();
-                break;
-            case RecommendationAction.SafeActionEnableGameMode:
-                EnableGameModeFromRecommendation();
-                return; // the toggle path refreshes itself
-            case RecommendationAction.SafeActionHighPerfPower:
-                PowerHighPerf_Click(sender, e);
-                return;
-            case RecommendationAction.SafeActionGameBarOff:
-            case RecommendationAction.SafeActionMouseAccelOff:
-            case RecommendationAction.SafeActionFsoForGame:
-                if (rec.SafeActionId != null)
-                    ConfirmAndApply(rec.SafeActionId, rec.WhyKey, rec.RiskKey);
-                return;
-            case RecommendationAction.OpenSystem:
-                Host.Navigate(ShellSection.MyPc);
-                break;
-            case RecommendationAction.OpenNetwork:
-                Host.Navigate(ShellSection.Network);
-                break;
-            case RecommendationAction.OpenGames:
-                Host.Navigate(ShellSection.Games);
-                break;
+            switch (rec.Action)
+            {
+                case RecommendationAction.ResumeMonitoring:
+                    if (App.Services.Monitor.IsPaused)
+                        Host.TogglePauseMonitoring();
+                    Refresh();
+                    break;
+                case RecommendationAction.SafeActionEnableGameMode:
+                    await EnableGameModeFromRecommendationAsync();
+                    break;
+                case RecommendationAction.SafeActionHighPerfPower:
+                    await PowerHighPerfAsync();
+                    break;
+                case RecommendationAction.SafeActionGameBarOff:
+                case RecommendationAction.SafeActionMouseAccelOff:
+                case RecommendationAction.SafeActionFsoForGame:
+                    if (rec.SafeActionId != null)
+                        await ApplyAndRefreshAsync(rec.SafeActionId, new SafeApplyOptions { WhyKey = rec.WhyKey, RiskKey = rec.RiskKey });
+                    break;
+                case RecommendationAction.SafeActionHagsOn:
+                    await ApplyAndRefreshAsync(rec.SafeActionId ?? HagsTarget.OnId, new SafeApplyOptions
+                    {
+                        WhyKey = rec.WhyKey ?? "optimize.hagsMode.why",
+                        RiskKey = rec.RiskKey ?? "optimize.hagsMode.risk",
+                        AfterNote = Loc.T("optimize.hagsMode.pendingRestart")
+                    });
+                    break;
+                case RecommendationAction.OpenStartupApps:
+                    ShowSection(OptimizeSection.Startup);
+                    break;
+                case RecommendationAction.OpenCleanup:
+                    ShowSection(OptimizeSection.Cleanup);
+                    break;
+                case RecommendationAction.OpenSystem:
+                    Host.Navigate(ShellSection.MyPc);
+                    break;
+                case RecommendationAction.OpenNetwork:
+                    Host.Navigate(ShellSection.Network);
+                    break;
+                case RecommendationAction.OpenGames:
+                    Host.Navigate(ShellSection.Games);
+                    break;
+            }
         }
-        Refresh();
-    }
-
-    // -- Actions (global SafeAction targets) -----------------------------------------------------------------
-
-    private void RenderActions()
-    {
-        ActionList.Children.Clear();
-        var safe = SafeActions;
-        bool session = _snap.SessionActive;
-
-        // Game Mode: on/off toggle sharing one undo slot.
-        var gm = _snap.GameMode;
-        ActionList.Children.Add(BuildActionCard(
-            title: Loc.T("optimize.gameMode.title"),
-            status: gm == null ? Loc.T("system.unavailable") : Loc.T(gm.Value ? "system.gameMode.on" : "system.gameMode.off"),
-            dot: StatusDot.FromBool(gm),
-            applyText: Loc.T(gm == true ? "system.gameMode.disable" : "system.gameMode.enable"),
-            applyEnabled: gm != null && safe != null,
-            applyTooltip: null,
-            onApply: GameModeToggle_Click,
-            undoEnabled: safe?.CanUndo(GameModeSetting.ActionId) == true,
-            onUndo: GameModeRollback_Click,
-            why: Loc.T("optimize.gameMode.why"), risk: Loc.T("optimize.gameMode.risk"), undo: Loc.T("optimize.gameMode.undo")));
-
-        // Power plan (desktop): blocked while a game session owns the plan.
-        var plan = _snap.PowerPlan;
-        ActionList.Children.Add(BuildActionCard(
-            title: Loc.T("optimize.powerHighPerf.title"),
-            status: plan == null ? Loc.T("system.unavailable") : Loc.Tf("system.power.current", ComboUi.PowerPlanStateLabel(plan)),
-            dot: plan == null ? StatusKind.Unknown : RecommendationEngine.IsPerformanceClassPlan(plan) ? StatusKind.Ok : StatusKind.Warn,
-            applyText: Loc.T("system.power.highPerf"),
-            applyEnabled: !session && safe != null,
-            applyTooltip: session ? Loc.T("safeAction.code.sessionActive") : null,
-            onApply: PowerHighPerf_Click,
-            undoEnabled: safe?.CanUndo(PowerPlanSafeAction.ActionId) == true,
-            onUndo: PowerRollback_Click,
-            why: Loc.T("optimize.powerHighPerf.why"), risk: Loc.T("optimize.powerHighPerf.risk"), undo: Loc.T("optimize.powerHighPerf.undo")));
-
-        // Xbox Game Bar background features.
-        ActionList.Children.Add(BuildGenericActionCard(GameBarSafeActionTarget.Id, _snap.GameBarOn,
-            onText: Loc.T("optimize.ui.gameBar.status.on"), offText: Loc.T("optimize.ui.gameBar.status.off"),
-            applyText: Loc.T("rec.gamebar.off.action")));
-
-        // Mouse acceleration.
-        ActionList.Children.Add(BuildGenericActionCard(MouseAccelerationSafeActionTarget.Id, _snap.MouseAccelOn,
-            onText: Loc.T("optimize.ui.mouseAccel.status.on"), offText: Loc.T("optimize.ui.mouseAccel.status.off"),
-            applyText: Loc.T("rec.mouse.accel.action")));
-    }
-
-    /// <summary>Card for a registry target whose "apply" means "turn the feature off" (true = still on).</summary>
-    private FrameworkElement BuildGenericActionCard(string actionId, bool? featureOn, string onText, string offText, string applyText)
-    {
-        var safe = SafeActions;
-        var target = safe?.FindTarget(actionId);
-        bool blocked = IsBlocked(actionId);
-        return BuildActionCard(
-            title: Loc.T(target?.TitleKey ?? "optimize." + actionId + ".title"),
-            status: featureOn == null ? Loc.T("system.unavailable") : featureOn.Value ? onText : offText,
-            dot: featureOn == null ? StatusKind.Unknown : featureOn.Value ? StatusKind.Warn : StatusKind.Ok,
-            applyText: applyText,
-            applyEnabled: featureOn == true && safe != null && !blocked,
-            applyTooltip: blocked ? Loc.T("safeAction.code.sessionActive") : null,
-            onApply: (s, _) => ConfirmAndApply(actionId, target?.WhyKey, target?.RiskKey),
-            undoEnabled: safe?.CanUndo(actionId) == true,
-            onUndo: (s, _) => UndoSafeAction(actionId, historyDetail: actionId + ".undo"),
-            why: target == null ? null : Loc.T(target.WhyKey),
-            risk: target == null ? null : Loc.T(target.RiskKey),
-            undo: target == null ? null : Loc.T(target.UndoKey));
-    }
-
-    private FrameworkElement BuildActionCard(string title, string status, StatusKind dot, string applyText, bool applyEnabled,
-        string? applyTooltip, RoutedEventHandler onApply, bool undoEnabled, RoutedEventHandler onUndo,
-        string? why, string? risk, string? undo)
-    {
-        var grid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var dotCtl = new StatusDot { Status = dot, Label = title, Margin = new Thickness(0, 6, 10, 0), VerticalAlignment = VerticalAlignment.Top };
-        grid.Children.Add(dotCtl);
-
-        var text = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
-        var titleTb = new TextBlock { Text = title };
-        titleTb.SetResourceReference(StyleProperty, "CardTitle");
-        text.Children.Add(titleTb);
-        text.Children.Add(NewHint(status, new Thickness(0, 2, 0, 0)));
-        text.Children.Add(NewDetails(why, risk, undo));
-        Grid.SetColumn(text, 1);
-        grid.Children.Add(text);
-
-        var buttons = new StackPanel { Orientation = WpfOrientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
-        var apply = new WpfButton
+        finally
         {
-            Content = applyText,
-            Style = (Style)FindResource("CompactAccentButton"),
-            Margin = new Thickness(0, 0, 6, 0),
-            IsEnabled = applyEnabled,
-            ToolTip = applyTooltip
-        };
-        ToolTipService.SetShowOnDisabled(apply, true);
-        apply.Click += onApply;
-        buttons.Children.Add(apply);
-        var undoBtn = new WpfButton
-        {
-            Content = Loc.T("system.rollback"),
-            Style = (Style)FindResource("CompactGhostButton"),
-            IsEnabled = undoEnabled
-        };
-        undoBtn.Click += onUndo;
-        buttons.Children.Add(undoBtn);
-        Grid.SetColumn(buttons, 2);
-        grid.Children.Add(buttons);
-        return grid;
+            button.IsEnabled = true;
+        }
     }
 
     /// <summary>True when the target refuses to apply right now (a game session owns the setting).</summary>
     private bool IsBlocked(string actionId) =>
-        _snap.SessionActive && SafeActions?.FindTarget(actionId)?.BlockedDuringGameSession == true;
-
-    // -- Per game (fullscreen optimizations) ---------------------------------------------------------------
-
-    private void RenderPerGame()
-    {
-        PerGameList.Children.Clear();
-        var safe = SafeActions;
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var s in _snap.Fso)
-        {
-            seen.Add(s.ExePath);
-            string actionId = FullscreenOptimizationSafeActionTarget.ActionIdFor(s.ExePath);
-            string name = string.IsNullOrWhiteSpace(s.ProfileName) ? Path.GetFileName(s.ExePath) : s.ProfileName;
-            string status = s.FsoDisabled switch
-            {
-                true => Loc.T("optimize.ui.fso.status.off"),
-                false => Loc.T("optimize.ui.fso.status.on"),
-                null => Loc.T("system.unavailable")
-            };
-            PerGameList.Children.Add(BuildPerGameRow(actionId, name, s.ExePath, status,
-                s.FsoDisabled == null ? StatusKind.Unknown : s.FsoDisabled.Value ? StatusKind.Ok : StatusKind.Warn,
-                applyEnabled: s.FsoDisabled == false && safe != null,
-                undoEnabled: safe?.CanUndo(actionId) == true));
-        }
-
-        // Journaled per-game changes whose profile is gone / disabled: still undoable.
-        foreach (var e in _snap.PerGameJournal)
-        {
-            var exe = FullscreenOptimizationSafeActionTarget.ExePathFromActionId(e.ActionId);
-            if (exe == null || !seen.Add(exe)) continue;
-            PerGameList.Children.Add(BuildPerGameRow(e.ActionId, Path.GetFileName(exe), exe,
-                Loc.T("optimize.ui.fso.status.off"), StatusKind.Ok, applyEnabled: false, undoEnabled: true));
-        }
-
-        TxtPerGameEmpty.Visibility = PerGameList.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private FrameworkElement BuildPerGameRow(string actionId, string name, string exePath, string status, StatusKind dot,
-        bool applyEnabled, bool undoEnabled)
-    {
-        var card = BuildActionCard(
-            title: name,
-            status: status,
-            dot: dot,
-            applyText: Loc.T("rec.fso.game.action"),
-            applyEnabled: applyEnabled,
-            applyTooltip: null,
-            onApply: (_, _) => ConfirmAndApply(actionId, "optimize.fso.why", "optimize.fso.risk"),
-            undoEnabled: undoEnabled,
-            onUndo: (_, _) => UndoSafeAction(actionId, historyDetail: "fso.undo"),
-            why: Loc.T("optimize.fso.why"), risk: Loc.T("optimize.fso.risk"), undo: Loc.T("optimize.fso.undo"));
-        // Second hint line: the exe the flag is keyed by (the registry value name).
-        if (card is Grid g && g.Children.Count > 1 && g.Children[1] is StackPanel text && text.Children.Count > 1)
-        {
-            var exeTb = NewHint(exePath, new Thickness(0, 2, 0, 0));
-            exeTb.TextTrimming = TextTrimming.CharacterEllipsis;
-            exeTb.TextWrapping = TextWrapping.NoWrap;
-            exeTb.ToolTip = exePath;
-            text.Children.Insert(2, exeTb);
-        }
-        return card;
-    }
-
-    // -- Managed / info cards --------------------------------------------------------------------------------
-
-    private void RenderInfo()
-    {
-        InfoList.Children.Clear();
-        foreach (var item in _snap.Info)
-            InfoList.Children.Add(BuildInfoCard(item));
-    }
-
-    private FrameworkElement BuildInfoCard(OptimizeInfoItem item)
-    {
-        var grid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        string title = Loc.T(item.TitleKey);
-        var dot = item.Id switch
-        {
-            OptimizeStatus.PowerPerGameId => StatusDot.FromBool(item.Status),
-            OptimizeStatus.HagsId => StatusDot.FromBool(item.Status, whenFalse: StatusKind.Unknown),
-            _ => StatusKind.Unknown
-        };
-        grid.Children.Add(new StatusDot { Status = dot, Label = title, Margin = new Thickness(0, 6, 10, 0), VerticalAlignment = VerticalAlignment.Top });
-
-        var text = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
-        var titleTb = new TextBlock { Text = title };
-        titleTb.SetResourceReference(StyleProperty, "CardTitle");
-        text.Children.Add(titleTb);
-        string kind = Loc.T(item.Kind switch
-        {
-            OptimizeInfoKind.RequiresAdmin => "optimize.ui.kind.admin",
-            OptimizeInfoKind.ManagedByProfile => "optimize.ui.kind.managed",
-            _ => "optimize.ui.kind.manual"
-        });
-        text.Children.Add(NewHint(Loc.T(item.StatusKey) + " · " + kind, new Thickness(0, 2, 0, 0)));
-        if (item.Evidence.Length > 0)
-            text.Children.Add(NewChips(item.Evidence));
-        text.Children.Add(NewDetails(Loc.T(item.WhyKey), Loc.T(item.RiskKey), null));
-        Grid.SetColumn(text, 1);
-        grid.Children.Add(text);
-
-        // The only control: a link to where the setting really lives.
-        WpfButton? link = item.Id switch
-        {
-            OptimizeStatus.HagsId => NewLink(Loc.T("optimize.ui.openSettings"), (_, _) => OpenShell("ms-settings:display-advancedgraphics")),
-            OptimizeStatus.VisualEffectsId => NewLink(Loc.T("optimize.ui.openPerfOptions"), (_, _) => OpenShell("SystemPropertiesPerformance.exe")),
-            OptimizeStatus.PowerPerGameId => NewLink(Loc.T("rec.emptyLibrary.action"), (_, _) => Host.Navigate(ShellSection.Games)),
-            _ => null
-        };
-        if (link != null)
-        {
-            link.VerticalAlignment = VerticalAlignment.Top;
-            Grid.SetColumn(link, 2);
-            grid.Children.Add(link);
-        }
-        return grid;
-    }
-
-    private void OpenShell(string target)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn(ex, "Open " + target);
-            Host.ShowToast(Loc.T("system.unavailable"));
-        }
-    }
+        _snap.SessionActive && Safe.FindTarget(actionId)?.BlockedDuringGameSession == true;
 
     // -- Journal ---------------------------------------------------------------------------------------------
 
     private void RenderJournal()
     {
         JournalList.Children.Clear();
-        var safe = SafeActions;
         foreach (var e in _snap.Journal)
         {
             var card = NewRowCard();
             var root = new DockPanel();
-            var undoBtn = new WpfButton
-            {
-                Content = Loc.T("system.rollback"),
-                Style = (Style)FindResource("CompactGhostButton"),
-                Margin = new Thickness(8, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Top,
-                IsEnabled = safe != null
-            };
             string key = e.Key;
-            undoBtn.Click += (_, _) => UndoSafeAction(key, historyDetail: key + ".undo");
+            string title = SafeActionUi.TitleFor(e.ActionId);
+            bool admin = SafeActionUi.NeedsElevation(e.ActionId);
+            var undoBtn = AsyncButton(Loc.T("system.rollback"), "CompactGhostButton", title,
+                () => UndoAndRefreshAsync(key));
+            undoBtn.Margin = new Thickness(8, 0, 0, 0);
+            undoBtn.VerticalAlignment = VerticalAlignment.Top;
             DockPanel.SetDock(undoBtn, Dock.Right);
             root.Children.Add(undoBtn);
 
             var text = new StackPanel();
-            var title = new TextBlock { Text = TitleForAction(e.ActionId), TextWrapping = TextWrapping.Wrap };
-            title.SetResourceReference(StyleProperty, "CardTitle");
-            text.Children.Add(title);
-            text.Children.Add(NewHint(e.Utc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture), new Thickness(0, 2, 0, 0)));
+            var titleRow = new DockPanel();
+            if (admin)
+            {
+                var badge = TweakRow.Badge(Loc.T("optimize.ui.adminBadge"), "WarningBrush", "WarningBrush");
+                badge.ToolTip = Loc.T("net.tweak.status.uacHint");
+                badge.VerticalAlignment = VerticalAlignment.Top;
+                DockPanel.SetDock(badge, Dock.Left);
+                titleRow.Children.Add(badge);
+            }
+            var titleTb = new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap };
+            titleTb.SetResourceReference(StyleProperty, "CardTitle");
+            titleRow.Children.Add(titleTb);
+            text.Children.Add(titleRow);
+            text.Children.Add(TweakRow.Hint(e.Utc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture), new Thickness(0, 2, 0, 0)));
             var exp = ExperimentLine(e.Key);
-            if (exp != null) text.Children.Add(NewHint(exp, new Thickness(0, 2, 0, 0)));
+            if (exp != null) text.Children.Add(TweakRow.Hint(exp, new Thickness(0, 2, 0, 0)));
             root.Children.Add(text);
             card.Child = root;
             JournalList.Children.Add(card);
         }
         TxtJournalEmpty.Visibility = _snap.Journal.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>Localized card title for an action id (per-game ids format the exe name in).</summary>
-    private string TitleForAction(string actionId)
-    {
-        var exe = FullscreenOptimizationSafeActionTarget.ExePathFromActionId(actionId);
-        if (exe != null) return Loc.Tf("optimize.fso.title", Path.GetFileName(exe));
-        var target = SafeActions?.FindTarget(actionId);
-        return Loc.T(target?.TitleKey ?? "optimize." + actionId + ".title");
     }
 
     // -- Experiments (before / after) ------------------------------------------------------------------------
@@ -782,143 +697,52 @@ public partial class OptimizePage : ShellPageBase
         return string.Join(" · ", parts);
     }
 
-    // -- SafeAction apply / undo -----------------------------------------------------------------------------
+    // -- Apply / undo glue -----------------------------------------------------------------------------------
 
-    private void GameModeToggle_Click(object sender, RoutedEventArgs e)
+    /// <summary>Apply through the shared flow, then re-read the page (the busy row stays busy until then).</summary>
+    private async Task ApplyAndRefreshAsync(string actionId, SafeApplyOptions? options = null)
     {
-        var current = GameModeSetting.Read();
-        if (current == null)
+        await SafeActionUi.ApplyAsync(Host, actionId, options);
+        await RefreshNowAsync();
+    }
+
+    private async Task UndoAndRefreshAsync(string actionIdOrKey, string? historyDetail = null)
+    {
+        await SafeActionUi.UndoAsync(Host, actionIdOrKey, historyDetail);
+        await RefreshNowAsync();
+    }
+
+    private void OpenShell(string target)
+    {
+        try
         {
+            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(ex, "Open " + target);
             Host.ShowToast(Loc.T("system.unavailable"));
-            return;
         }
-        bool next = !current.Value;
-        string preview = Loc.Tf("system.preview",
-            Loc.T(current.Value ? "system.gameMode.on.short" : "system.gameMode.off"),
-            Loc.T(next ? "system.gameMode.on.short" : "system.gameMode.off"));
-        if (!ThemedDialog.Confirm(Host.Window,
-                preview + "\n\n" + Loc.T(next ? "system.gameMode.confirm.on" : "system.gameMode.confirm.off"),
-                Loc.T("system.gameMode"),
-                Loc.T("btn.apply"),
-                danger: false))
-            return;
-
-        ApplySafeAction(
-            next ? GameModeSetting.ActionIdOn : GameModeSetting.ActionIdOff,
-            historyDetail: GameModeSetting.ActionId + "=" + next.ToString().ToLowerInvariant(),
-            okToast: Loc.T(next ? "system.gameMode.toast.on" : "system.gameMode.toast.off"));
-    }
-
-    /// <summary>Recommendation "Enable Game Mode" — same confirm + journal path as the button.</summary>
-    public void EnableGameModeFromRecommendation()
-    {
-        if (GameModeSetting.Read() == false)
-            GameModeToggle_Click(this, new RoutedEventArgs());
-    }
-
-    private void GameModeRollback_Click(object sender, RoutedEventArgs e) =>
-        UndoSafeAction(GameModeSetting.ActionId, historyDetail: "gameMode.rollback");
-
-    private void PowerHighPerf_Click(object sender, RoutedEventArgs e)
-    {
-        var current = PowerPlanSafeAction.ReadAliasOrGuid() ?? Loc.T("system.unavailable");
-        string preview = Loc.Tf("system.preview",
-            ComboUi.PowerPlanStateLabel(current),
-            Loc.T("power.high"));
-        if (!ThemedDialog.Confirm(Host.Window,
-                preview + "\n\n" + Loc.T("system.power.confirm"),
-                Loc.T("system.power"),
-                Loc.T("btn.apply"),
-                danger: false))
-            return;
-
-        ApplySafeAction(PowerPlanSafeAction.ActionId, historyDetail: PowerPlanSafeAction.ActionId, okToast: Loc.T("system.power.toast"));
-    }
-
-    private void PowerRollback_Click(object sender, RoutedEventArgs e) =>
-        UndoSafeAction(PowerPlanSafeAction.ActionId, historyDetail: "power.rollback");
-
-    /// <summary>Generic confirm (title + why + risk) → apply for registry targets and per-game actions.</summary>
-    private void ConfirmAndApply(string actionId, string? whyKey, string? riskKey)
-    {
-        var safe = SafeActions;
-        if (safe == null)
-        {
-            Host.ShowToast(Loc.T("system.unavailable"));
-            return;
-        }
-        var target = safe.FindTarget(actionId);
-        string title = TitleForAction(actionId);
-        var lines = new List<string>();
-        string? why = whyKey ?? target?.WhyKey;
-        string? risk = riskKey ?? target?.RiskKey;
-        if (why != null) lines.Add(Loc.T(why));
-        if (risk != null) lines.Add(Loc.T("optimize.ui.risk") + ": " + Loc.T(risk));
-        lines.Add(Loc.T("optimize.ui.confirm.undoNote"));
-        if (!ThemedDialog.Confirm(Host.Window, string.Join("\n\n", lines), title, Loc.T("btn.apply"), danger: false))
-            return;
-        ApplySafeAction(actionId, historyDetail: actionId, okToast: Loc.Tf("optimize.ui.toast.applied", title));
-    }
-
-    /// <summary>Apply → verify → journal. Codes are localized through SafeActionCodes.LocKey, never shown raw.</summary>
-    private void ApplySafeAction(string actionId, string historyDetail, string okToast)
-    {
-        var safe = SafeActions;
-        if (safe == null)
-        {
-            Host.ShowToast(Loc.T("system.unavailable"));
-            return;
-        }
-        var r = safe.Apply(actionId);
-        switch (r.Result)
-        {
-            case SafeActionResult.Applied:
-                App.Services.History.Add("safeAction", detail: historyDetail);
-                MarkExperimentApplied(safe.FindTarget(actionId)?.JournalKey ?? actionId);
-                Host.ShowToast(okToast);
-                break;
-            case SafeActionResult.NoOp:
-                Host.ShowToast(Loc.T("safeAction.noop"));
-                break;
-            case SafeActionResult.Blocked:
-            default:
-                Host.ShowToast(Loc.Tf("system.safe.fail", Loc.T(SafeActionCodes.LocKey(r.Code))));
-                break;
-        }
-        Refresh();
-    }
-
-    /// <summary>Restores the journaled previous state; a value changed outside Visor asks before forcing.</summary>
-    private void UndoSafeAction(string journalKey, string historyDetail)
-    {
-        var safe = SafeActions;
-        if (safe == null || !safe.CanUndo(journalKey)) return;
-        var r = safe.Undo(journalKey);
-        if (r.Result == SafeActionUndoResult.Conflict)
-        {
-            if (!ThemedDialog.Confirm(Host.Window,
-                    Loc.T("safeAction.undo.conflict"),
-                    Loc.T("system.rollback"),
-                    Loc.T("safeAction.undo.force"),
-                    danger: true))
-            {
-                Refresh();
-                return;
-            }
-            r = safe.Undo(journalKey, confirmedConflict: true);
-        }
-        if (r.Result == SafeActionUndoResult.Undone)
-        {
-            App.Services.History.Add("safeAction", detail: historyDetail);
-            _experiments.Remove(journalKey);
-            Host.ShowToast(Loc.T("system.rollback.ok"));
-        }
-        else
-            Host.ShowToast(Loc.Tf("system.safe.fail", Loc.T(SafeActionCodes.LocKey(r.Code))));
-        Refresh();
     }
 
     // -- Small element factories -----------------------------------------------------------------------------
+
+    /// <summary>Button whose async click disables it until the work (and the re-read) is done.</summary>
+    private static WpfButton AsyncButton(string text, string styleKey, string? subject, Func<Task> run, bool enabled = true)
+    {
+        var b = new WpfButton { Content = text, IsEnabled = enabled };
+        b.SetResourceReference(StyleProperty, styleKey);
+        if (!string.IsNullOrEmpty(subject))
+            System.Windows.Automation.AutomationProperties.SetName(b, text + " · " + subject);
+        b.Click += async (_, _) =>
+        {
+            b.IsEnabled = false;
+            try { await run(); }
+            catch (Exception ex) { AppLog.Warn(ex, "Optimize action"); }
+            finally { b.IsEnabled = true; }
+        };
+        return b;
+    }
 
     private static Border NewRowCard()
     {
@@ -930,32 +754,6 @@ public partial class OptimizePage : ShellPageBase
         };
         card.SetResourceReference(Border.BackgroundProperty, "FieldBrush");
         return card;
-    }
-
-    private static TextBlock NewHint(string text, Thickness margin)
-    {
-        var tb = new TextBlock { Text = text, Margin = margin, TextWrapping = TextWrapping.Wrap };
-        tb.SetResourceReference(StyleProperty, "Hint");
-        return tb;
-    }
-
-    /// <summary>Severity badge colored by the same tokens as the status dots.</summary>
-    private static Border NewBadge(string text, string borderBrushKey, string foregroundKey)
-    {
-        var badge = new Border
-        {
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(5, 1, 5, 1),
-            Margin = new Thickness(0, 0, 8, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            BorderThickness = new Thickness(1)
-        };
-        badge.SetResourceReference(Border.BorderBrushProperty, borderBrushKey);
-        badge.SetResourceReference(Border.BackgroundProperty, "PillBgBrush");
-        var tb = new TextBlock { Text = text, FontSize = 10, FontWeight = FontWeights.SemiBold };
-        tb.SetResourceReference(TextBlock.ForegroundProperty, foregroundKey);
-        badge.Child = tb;
-        return badge;
     }
 
     /// <summary>Evidence chips: raw measured facts, never localized, never invented.</summary>
@@ -981,19 +779,10 @@ public partial class OptimizePage : ShellPageBase
         return wrap;
     }
 
-    private OptDetailsPanel NewDetails(string? why, string? risk, string? undo)
+    private static OptDetailsPanel NewDetails(string? why, string? risk, string? undo)
     {
         var p = new OptDetailsPanel();
         p.SetTexts(why, risk, undo);
-        _detailPanels.Add(p);
         return p;
-    }
-
-    private static WpfButton NewLink(string text, RoutedEventHandler onClick)
-    {
-        var b = new WpfButton { Content = text };
-        b.SetResourceReference(StyleProperty, "LinkButton");
-        b.Click += onClick;
-        return b;
     }
 }

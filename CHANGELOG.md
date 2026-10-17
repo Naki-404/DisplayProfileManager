@@ -2,6 +2,13 @@
 
 ## Unreleased (2.1.0-dev)
 
+### Gamer toolkit (2026-10-17)
+- **Optimize** is split into Overview · System · Graphics · Input · Network · Startup · Cleanup. New: Ultimate Performance plan (create + activate + undo), HAGS on/off, startup apps manager (disable without deleting, undo), cache cleanup (temp, DirectX/NVIDIA/AMD shader caches; irreversible but safe, sizes shown first).
+- **Network** is split into Overview · Diagnostics · DNS · TCP. New: DNS server speed test (current, Cloudflare, Google, Quad9, AdGuard, OpenDNS, custom) and apply/undo, DNS cache flush, Nagle per adapter, multimedia network throttling, TCP auto-tuning restore, TCP info card. Texts say honestly what helps (DNS speeds up finding servers, not in-game ping; Nagle only matters for TCP games).
+- Admin-only changes go through a per-action elevated helper (`Visor.exe --elevated`): one UAC prompt per change, allowlisted operations only, exact undo from the journal. Visor itself never runs elevated.
+- UX pass: themed menus (no default white gutter, even 32-DIP rows, anchored under their button), scrollbars only while scrolling and outside the cards, aligned fields/buttons, layout rounding on every window, DPI-scaled tray menu. Details: `docs/UX-PASS-2026-10-17.md`.
+- Fixes: audio switch to a device that no longer exists (validated, logged once, back-off); the "ultimate" power plan alias now resolves the installed scheme instead of the hidden template.
+
 ### Gaming Optimization Center (stages 1–5)
 - New shell: nav rail Home · My PC · Games · Optimize · Network · Monitor · Settings (Ctrl+1..7), collapsible rail, Tooltip mode, Themes picker; pages are separate `UserControl`s (`Views\Pages`), `MainWindow.xaml` down to ~230 lines.
 - My PC: hardware inventory (CPU, RAM modules, GPU driver, disks with SMART via `MSFT_PhysicalDisk`, board/BIOS, monitors) and 1 Hz sensors — CPU %, RAM, GPU temperature/utilization/clocks/throttle flags (NvAPI), disk and network throughput; health summary with honest thresholds; crash/WHEA/TDR events from the System log. CPU temperature is shown as unavailable (needs a kernel driver — none shipped).

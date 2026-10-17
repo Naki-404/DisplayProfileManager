@@ -1,87 +1,214 @@
 <local:ShellPageBase x:Class="Visor.OptimizePage"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:local="clr-namespace:Visor">
-    <!-- Optimize: suggestions from measured facts, reversible SafeAction tweaks (journal + undo), read-only info cards. -->
-    <ScrollViewer Style="{StaticResource PageScrollViewer}">
-        <StackPanel Margin="4,4,12,8">
+        xmlns:local="clr-namespace:Visor"
+        xmlns:controls="clr-namespace:Visor.Controls">
+    <!-- Optimize: suggestions from measured facts, reversible SafeAction tweaks (journal + undo), read-only info cards.
+         Sub-sections (segmented strip, Left/Right to move): Overview · System · Graphics · Input · Network · Startup · Cleanup.
+         Only the selected section is visible; every read runs off the UI thread. -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
 
-            <!-- Summary: counts + last change; honest numbers, no "boost" promises. -->
-            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
-                <StackPanel>
-                    <DockPanel Margin="0,0,0,4">
-                        <Button x:Name="BtnOptimizeRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
-                                Click="OptimizeRefresh_Click"/>
-                        <TextBlock x:Name="LblOptSummary" Style="{StaticResource SubHeader}" Margin="0" VerticalAlignment="Center"/>
-                    </DockPanel>
-                    <TextBlock x:Name="TxtOptSummaryHint" Style="{StaticResource Hint}" Margin="0,0,0,12" TextWrapping="Wrap"/>
-                    <UniformGrid Columns="3">
-                        <StackPanel Margin="0,0,12,0">
-                            <TextBlock x:Name="TxtSumSuggestions" Style="{StaticResource CardValue}"/>
-                            <TextBlock x:Name="LblSumSuggestions" Style="{StaticResource CardCaption}"/>
-                        </StackPanel>
-                        <StackPanel Margin="0,0,12,0">
-                            <TextBlock x:Name="TxtSumApplied" Style="{StaticResource CardValue}"/>
-                            <TextBlock x:Name="LblSumApplied" Style="{StaticResource CardCaption}"/>
-                        </StackPanel>
+        <WrapPanel x:Name="OptSections" Margin="0,4,0,8" controls:SegmentNav.ArrowKeys="True">
+            <RadioButton x:Name="RbOptOverview" GroupName="OptSections" Style="{StaticResource SegmentRadio}" Margin="0,0,0,4"
+                         IsChecked="True" Checked="OptSection_Checked"/>
+            <RadioButton x:Name="RbOptSystem" GroupName="OptSections" Style="{StaticResource SegmentRadio}" Margin="0,0,0,4"
+                         Checked="OptSection_Checked"/>
+            <RadioButton x:Name="RbOptGraphics" GroupName="OptSections" Style="{StaticResource SegmentRadio}" Margin="0,0,0,4"
+                         Checked="OptSection_Checked"/>
+            <RadioButton x:Name="RbOptInput" GroupName="OptSections" Style="{StaticResource SegmentRadio}" Margin="0,0,0,4"
+                         Checked="OptSection_Checked"/>
+            <RadioButton x:Name="RbOptNetwork" GroupName="OptSections" Style="{StaticResource SegmentRadio}" Margin="0,0,0,4"
+                         Checked="OptSection_Checked"/>
+            <RadioButton x:Name="RbOptStartup" GroupName="OptSections" Style="{StaticResource SegmentRadio}" Margin="0,0,0,4"
+                         Checked="OptSection_Checked"/>
+            <RadioButton x:Name="RbOptCleanup" GroupName="OptSections" Style="{StaticResource SegmentRadio}" Margin="0,0,0,4"
+                         Checked="OptSection_Checked"/>
+        </WrapPanel>
+
+        <ScrollViewer x:Name="OptScroll" Grid.Row="1" Style="{StaticResource PageScrollViewer}">
+            <Grid Margin="4,0,12,8">
+
+                <!-- ================= OVERVIEW: summary · suggestions · recent changes ================= -->
+                <StackPanel x:Name="PanelOverview">
+                    <!-- Summary: counts + last change; honest numbers, no "boost" promises. -->
+                    <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock x:Name="TxtSumLast" Style="{StaticResource CardValue}"/>
-                            <TextBlock x:Name="LblSumLast" Style="{StaticResource CardCaption}"/>
+                            <DockPanel Margin="0,0,0,4">
+                                <Button x:Name="BtnOptimizeRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                        Click="OptimizeRefresh_Click"/>
+                                <TextBlock x:Name="LblOptSummary" Style="{StaticResource SubHeader}" Margin="0" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <TextBlock x:Name="TxtOptSummaryHint" Style="{StaticResource Hint}" Margin="0,0,0,12" TextWrapping="Wrap"/>
+                            <UniformGrid Columns="3">
+                                <StackPanel Margin="0,0,12,0">
+                                    <TextBlock x:Name="TxtSumSuggestions" Style="{StaticResource CardValue}"/>
+                                    <TextBlock x:Name="LblSumSuggestions" Style="{StaticResource CardCaption}"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,12,0">
+                                    <TextBlock x:Name="TxtSumApplied" Style="{StaticResource CardValue}"/>
+                                    <TextBlock x:Name="LblSumApplied" Style="{StaticResource CardCaption}"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock x:Name="TxtSumLast" Style="{StaticResource CardValue}"/>
+                                    <TextBlock x:Name="LblSumLast" Style="{StaticResource CardCaption}"/>
+                                </StackPanel>
+                            </UniformGrid>
+                            <TextBlock x:Name="TxtOptLoading" Style="{StaticResource Hint}" Margin="0,10,0,0" Visibility="Collapsed"/>
                         </StackPanel>
-                    </UniformGrid>
-                    <TextBlock x:Name="TxtOptLoading" Style="{StaticResource Hint}" Margin="0,10,0,0" Visibility="Collapsed"/>
-                </StackPanel>
-            </Border>
+                    </Border>
 
-            <!-- Suggestions (RecommendationEngine over the full measured context). -->
-            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock x:Name="LblRec" Text="Suggestions" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="TxtRecHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                    <StackPanel x:Name="RecList"/>
-                    <TextBlock x:Name="TxtRecEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
-                    <Button x:Name="BtnRecReset" Style="{StaticResource LinkButton}" HorizontalAlignment="Left"
-                            Margin="0,4,0,0" Visibility="Collapsed" Click="RecReset_Click"/>
-                </StackPanel>
-            </Border>
+                    <!-- Suggestions (RecommendationEngine over the full measured context). -->
+                    <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock x:Name="LblRec" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtRecHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="RecList"/>
+                            <TextBlock x:Name="TxtRecEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                            <Button x:Name="BtnRecReset" Style="{StaticResource LinkButton}" HorizontalAlignment="Left"
+                                    Margin="0,4,0,0" Visibility="Collapsed" Click="RecReset_Click"/>
+                        </StackPanel>
+                    </Border>
 
-            <!-- Actions: one card per global SafeAction target (apply / undo, blocked while a session owns it). -->
-            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock x:Name="LblActions" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="TxtActionsHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                    <StackPanel x:Name="ActionList"/>
+                    <!-- Journal: every change Visor made that can still be undone. -->
+                    <Border Style="{StaticResource CardSurface}">
+                        <StackPanel>
+                            <TextBlock x:Name="LblJournal" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtJournalHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="JournalList"/>
+                            <TextBlock x:Name="TxtJournalEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
-            </Border>
 
-            <!-- Per game: fullscreen optimizations per enabled profile with an exe. -->
-            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock x:Name="LblPerGame" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="TxtPerGameHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                    <StackPanel x:Name="PerGameList"/>
-                    <TextBlock x:Name="TxtPerGameEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                <!-- ================= SYSTEM: Game Mode · power plans · HAGS · Game Bar · managed info ================= -->
+                <StackPanel x:Name="PanelSystem" Visibility="Collapsed">
+                    <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock x:Name="LblSystem" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtSystemHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="SystemList"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock x:Name="LblSystemGpu" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtSystemGpuHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="SystemGpuList"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- Managed / info: read-only cards (no buttons that do nothing; links to the Windows dialog instead). -->
+                    <Border Style="{StaticResource CardSurface}">
+                        <StackPanel>
+                            <TextBlock x:Name="LblInfo" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtInfoHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="InfoList"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
-            </Border>
 
-            <!-- Managed / info: read-only cards (no buttons that do nothing; links to the Windows dialog instead). -->
-            <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock x:Name="LblInfo" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="TxtInfoHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                    <StackPanel x:Name="InfoList"/>
+                <!-- ================= GRAPHICS: per-game FSO · HAGS shortcut · visual effects ================= -->
+                <StackPanel x:Name="PanelGraphics" Visibility="Collapsed">
+                    <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock x:Name="LblPerGame" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtPerGameHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="PerGameList"/>
+                            <TextBlock x:Name="TxtPerGameEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardSurface}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock x:Name="LblGfxHags" Style="{StaticResource SubHeader}" Margin="0,0,0,8"/>
+                            <StackPanel x:Name="GfxHagsList"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardSurface}">
+                        <StackPanel>
+                            <TextBlock x:Name="LblGfxInfo" Style="{StaticResource SubHeader}" Margin="0,0,0,8"/>
+                            <StackPanel x:Name="GfxInfoList"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
-            </Border>
 
-            <!-- Journal: every change Visor made that can still be undone. -->
-            <Border Style="{StaticResource CardSurface}">
-                <StackPanel>
-                    <TextBlock x:Name="LblJournal" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="TxtJournalHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                    <StackPanel x:Name="JournalList"/>
-                    <TextBlock x:Name="TxtJournalEmpty" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                <!-- ================= INPUT: mouse acceleration (room for more) ================= -->
+                <StackPanel x:Name="PanelInput" Visibility="Collapsed">
+                    <Border Style="{StaticResource CardSurface}">
+                        <StackPanel>
+                            <TextBlock x:Name="LblInput" Style="{StaticResource SubHeader}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtInputHint" Style="{StaticResource Hint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="InputList"/>
+                            <TextBlock x:Name="TxtInputMore" Style="{StaticResource Hint}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
-            </Border>
-        </StackPanel>
-    </ScrollViewer>
+
+                <!-- ================= NETWORK: shared tweak rows (same control as Network → TCP) + DNS link ================= -->
+                <StackPanel x:Name="PanelNetwork" Visibility="Collapsed">
+                    <StackPanel x:Name="NetTweakHost"/>
+                    <Border Style="{StaticResource CardSurface}">
+                        <DockPanel>
+                            <Button x:Name="BtnOpenDns" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                    VerticalAlignment="Center" Margin="12,0,0,0" Click="OpenDns_Click"/>
+                            <StackPanel>
+                                <TextBlock x:Name="LblNetDnsLink" Style="{StaticResource CardTitle}" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="TxtNetDnsLink" Style="{StaticResource Hint}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ================= STARTUP: sign-in programs (StartupApproved switch, journaled) ================= -->
+                <StackPanel x:Name="PanelStartup" Visibility="Collapsed">
+                    <Border Style="{StaticResource CardSurface}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,4">
+                                <Button x:Name="BtnStartupRefresh" DockPanel.Dock="Right" Style="{StaticResource CompactGhostButton}"
+                                        Click="OptimizeRefresh_Click"/>
+                                <TextBlock x:Name="LblStartup" Style="{StaticResource SubHeader}" Margin="0" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <TextBlock x:Name="TxtStartupWhy" Style="{StaticResource Hint}" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="TxtStartupNote" Style="{StaticResource Hint}" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                            <controls:OptDetailsPanel x:Name="StartupDetails" Margin="0,0,0,10"/>
+                            <DockPanel Margin="0,0,0,10">
+                                <WrapPanel x:Name="StartupFilter" DockPanel.Dock="Right" controls:SegmentNav.ArrowKeys="True">
+                                    <RadioButton x:Name="RbStartupAll" GroupName="StartupFilter" Style="{StaticResource SegmentRadio}"
+                                                 Padding="10,4" IsChecked="True" Checked="StartupFilter_Checked"/>
+                                    <RadioButton x:Name="RbStartupEnabled" GroupName="StartupFilter" Style="{StaticResource SegmentRadio}"
+                                                 Padding="10,4" Checked="StartupFilter_Checked"/>
+                                    <RadioButton x:Name="RbStartupDisabled" GroupName="StartupFilter" Style="{StaticResource SegmentRadio}"
+                                                 Padding="10,4" Checked="StartupFilter_Checked"/>
+                                </WrapPanel>
+                                <TextBlock x:Name="TxtStartupSummary" Style="{StaticResource CardValue}" FontSize="13"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            </DockPanel>
+                            <StackPanel x:Name="StartupList"/>
+                            <TextBlock x:Name="TxtStartupEmpty" Style="{StaticResource Hint}" Visibility="Collapsed" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ================= CLEANUP: measured caches, one category per explicit click ================= -->
+                <StackPanel x:Name="PanelCleanup" Visibility="Collapsed">
+                    <Border Style="{StaticResource CardSurface}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,4">
+                                <Button x:Name="BtnCleanupScan" DockPanel.Dock="Right" Style="{StaticResource CompactAccentButton}"
+                                        Click="CleanupScan_Click"/>
+                                <TextBlock x:Name="LblCleanup" Style="{StaticResource SubHeader}" Margin="0" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <TextBlock x:Name="TxtCleanupWhy" Style="{StaticResource Hint}" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                            <controls:OptDetailsPanel x:Name="CleanupDetails" Margin="0,0,0,10"/>
+                            <TextBlock x:Name="TxtCleanupTotal" Style="{StaticResource CardValue}" FontSize="13"/>
+                            <TextBlock x:Name="TxtCleanupStatus" Style="{StaticResource Hint}" Margin="0,2,0,10" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="CleanupList"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
 </local:ShellPageBase>

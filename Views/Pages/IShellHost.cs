@@ -30,6 +30,8 @@ public interface IShellHost
     /// <summary>True when the window is visible and <paramref name="section"/> is the selected one.</summary>
     bool IsSectionLive(ShellSection section);
     void Navigate(ShellSection section);
+    /// <summary>Section plus one of its sub-sections (e.g. Network → "dns", Optimize → "startup").</summary>
+    void Navigate(ShellSection section, string? subSection);
     /// <summary>Games section with this profile selected in the list/editor.</summary>
     void OpenGame(GameProfile profile);
     /// <summary>Games section, new blank profile, name box focused.</summary>
