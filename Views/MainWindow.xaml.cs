@@ -95,6 +95,9 @@ public partial class MainWindow : Window, IShellHost
     public MainWindow()
     {
         _editorSuppress = 1; // InitializeComponent (window + pages) fires Checked/SelectionChanged events
+        // NavHome has IsChecked="True" in XAML: its Checked fires while InitializeComponent is still
+        // parsing, before MainTabs (declared later) exists. Nav sync starts once the shell is built.
+        _suppressNav = true;
         InitializeComponent();
 
         _home = new HomePage(this);
@@ -112,6 +115,7 @@ public partial class MainWindow : Window, IShellHost
         TabNetwork.Content = _network;
         TabMonitor.Content = _monitor;
         TabSettings.Content = _settings;
+        _suppressNav = false;
 
         _autoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
         _autoSaveTimer.Tick += (_, _) =>
@@ -205,10 +209,11 @@ public partial class MainWindow : Window, IShellHost
         base.OnClosed(e);
         try
         {
-            _autoSaveTimer.Stop();
-            _statusTimer.Stop();
-            _games.StopTimers();
-            _monitor.Shutdown();
+            // Members may be null when the constructor failed part-way (startup error path closes the window).
+            _autoSaveTimer?.Stop();
+            _statusTimer?.Stop();
+            _games?.StopTimers();
+            _monitor?.Shutdown();
             _shellFitTimer?.Stop();
             _gpuDetectCts.Cancel();
             Loc.Changed -= _onLocChanged;
@@ -638,6 +643,7 @@ public partial class MainWindow : Window, IShellHost
     {
         if (App.Current is App app && !app.IsExitRequested)
         {
+            if (_network == null) return; // constructor failed part-way — nothing to save, let it close
             _network.CancelProbes();
             FlushAutosave();
             SaveWindowBounds();
