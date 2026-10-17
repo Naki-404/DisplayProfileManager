@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased (2.1.0-dev)
+## 2.1.0 — 2026-10-17
 
-### Gamer toolkit (2026-10-17)
+First public release of **Visor** (formerly Display Profile Manager). It includes everything from 2.0.0 below, which was never published separately.
+
+### Fixes
+- Startup crash on first launch: the navigation handler fired while the main window was still loading (`Nav_Checked` → `MainTabs` null). New `XamlLoadGuardTests` guard every handler that can run during XAML load.
+
+### Gamer toolkit
 - **Optimize** is split into Overview · System · Graphics · Input · Network · Startup · Cleanup. New: Ultimate Performance plan (create + activate + undo), HAGS on/off, startup apps manager (disable without deleting, undo), cache cleanup (temp, DirectX/NVIDIA/AMD shader caches; irreversible but safe, sizes shown first).
 - **Network** is split into Overview · Diagnostics · DNS · TCP. New: DNS server speed test (current, Cloudflare, Google, Quad9, AdGuard, OpenDNS, custom) and apply/undo, DNS cache flush, Nagle per adapter, multimedia network throttling, TCP auto-tuning restore, TCP info card. Texts say honestly what helps (DNS speeds up finding servers, not in-game ping; Nagle only matters for TCP games).
 - Admin-only changes go through a per-action elevated helper (`Visor.exe --elevated`): one UAC prompt per change, allowlisted operations only, exact undo from the journal. Visor itself never runs elevated.
@@ -17,7 +22,8 @@
 - Monitor: FPS / frame time / 1 % and 0.1 % lows / p99 / stutters / GPU-vs-CPU-bound estimate via Intel PresentMon run elevated on explicit request (UAC per capture); PresentMon is not bundled — the page explains where to get it; signature/pinned-hash verified before launch; optional FPS OSD on the game's monitor.
 - Tests: 1036 (849 app + 187 installer).
 
-Stage 0 of the 2.1 plan (`docs/ANALYSIS-2026-10-13-v2.md` §4): stabilise before the shell redesign. No new user-facing features; the Home / Games / Presets / System / Network / Tools layout is unchanged until Stage 1.
+### Stabilisation (stage 0)
+Before the shell redesign (`docs/ANALYSIS-2026-10-13-v2.md` §4).
 
 ### Fixes (analysis §2.1–2.2)
 - SafeAction (Game Mode, High performance): a failed power-plan switch is reported as a failure, Undo survives repeated clicks and an app restart, and Windows tweaks are blocked while a game session is active so they no longer fight the session snapshot.
@@ -39,7 +45,7 @@ Stage 0 of the 2.1 plan (`docs/ANALYSIS-2026-10-13-v2.md` §4): stabilise before
 - README: accurate note on what the tests touch, data-file table lists `ui-state.json`, `active-session.json`, `history.json` and `profiles.json.bak`, screenshot note.
 - `docs/AUDIT-2026-10-13.md` marked as a historical snapshot; QA checklist updated for the current shell and the SafeAction changes.
 
-## 2.0.0 — Visor
+## 2.0.0 — Visor (not published separately)
 
 Display Profile Manager is now **Visor**. Settings migrate automatically from `%AppData%\DisplayProfileManager` to `%AppData%\Visor` (the old folder is left untouched).
 
