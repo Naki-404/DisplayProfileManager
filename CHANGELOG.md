@@ -71,6 +71,8 @@ Display Profile Manager is now **Visor**. Settings migrate automatically from `%
 - Network page: adapter overview, ICMP latency/loss/jitter probe (stoppable), DNS resolve timing (read-only).
 - Home suggestions: recommendation engine over Visor / System / Network signals; Windows tweaks apply only via SafeAction.
 - Shell fit helpers + tests for 100/125/150% DIP work areas; Settings default height fits 768-px @125%; command palette clamps to work area.
+- Launch game: Steam titles start via `steam://rungameid` (AppID from `appmanifest_*.acf`), not by running the .exe alone.
+- Faster release builds: ReadyToRun publish; game scan skips duplicate Steam/Epic trees; Steam AppID resolve is cached.
 - Default preset hotkeys no longer need a NumPad (Ctrl+Alt+1..5).
 
 ### Performance

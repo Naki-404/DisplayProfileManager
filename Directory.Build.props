@@ -11,5 +11,7 @@
     <Authors>Nakidev</Authors>
     <Copyright>Copyright (c) Nakidev</Copyright>
     <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 </Project>

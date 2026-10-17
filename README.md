@@ -49,17 +49,11 @@ SmartScreen may show *"Windows protected your PC"*. Click **More info → Run an
 
 ## Screenshots
 
-> The screenshots are being refreshed: they show the 2.0 layout, and `01-play.png` / `02-library.png` are
-> currently the same image. New captures will land together with the 2.1 shell.
+> Screenshots are placeholders until fresh 2.0 captures replace them.
 
 <p align="center">
   <img src="docs/screenshots/01-play.png" width="820" alt="Games hub with sidebar: list, sticky actions, Display/Color/Session/Companions tabs"><br>
   <em>Games: one list, sticky Apply/Launch, editor tabs for Display · Color · Session · Companions</em>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/02-library.png" width="820" alt="Games Display tab: resolution, power plan and profile identity"><br>
-  <em>Games · Display: resolution, power plan and profile identity</em>
 </p>
 
 <p align="center">
@@ -87,6 +81,7 @@ SmartScreen may show *"Windows protected your PC"*. Click **More info → Run an
 - **Network.** Adapter facts, ICMP latency / loss / jitter probe, and DNS resolve timing — no automatic DNS changes.
 - **Suggestions.** Home recommendations from real Visor / System / Network signals; Windows changes go through SafeAction with undo.
 - **DPI-aware shell.** PerMonitorV2; window size/clamp tuned for 100/125/150% and short (~768 px) displays.
+- **Steam launch.** “Launch game” uses `steam://rungameid` when the exe lives under a Steam library (AppID from `appmanifest_*.acf`).
 - **Tray mode.** Lives in the tray, with quick profile and preset switching.
 - **Themes and languages.** Dark, light or a custom theme, in **English and Russian**.
 - **Emergency restore.** One click resets the display to safe settings.

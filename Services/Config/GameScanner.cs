@@ -13,6 +13,10 @@ public static class GameScanner
     public static List<FoundGame> ScanAll(Action<string>? progress = null)
     {
         var byProcess = new Dictionary<string, FoundGame>(StringComparer.OrdinalIgnoreCase);
+        // One shared visit set across all roots — Steam libraries are not walked again via
+        // "SteamLibrary" / Program Files drive scans.
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var steamRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         void Add(string process, string name, string? path, bool running)
         {
@@ -38,7 +42,7 @@ public static class GameScanner
             Add(process, name, null, true);
 
         progress?.Invoke("Looking through Steam libraries…");
-        foreach (var hit in ScanSteam())
+        foreach (var hit in ScanSteam(visited, steamRoots))
             Add(hit.Process, hit.Name, hit.ExePath, false);
 
         progress?.Invoke("Checking Epic Games…");
@@ -50,11 +54,11 @@ public static class GameScanner
             Add(hit.Process, hit.Name, hit.ExePath, false);
 
         progress?.Invoke("Reading installed programs…");
-        foreach (var hit in ScanUninstallRegistry())
+        foreach (var hit in ScanUninstallRegistry(visited))
             Add(hit.Process, hit.Name, hit.ExePath, false);
 
         progress?.Invoke("Searching game folders on disks…");
-        foreach (var hit in ScanDriveGameFolders())
+        foreach (var hit in ScanDriveGameFolders(visited, steamRoots))
             Add(hit.Process, hit.Name, hit.ExePath, false);
 
         progress?.Invoke("Finishing…");
@@ -64,7 +68,7 @@ public static class GameScanner
             .ToList();
     }
 
-    private static IEnumerable<FoundGame> ScanSteam()
+    private static IEnumerable<FoundGame> ScanSteam(HashSet<string> visited, HashSet<string> steamRoots)
     {
         var roots = new List<string>();
         var steam = Path.Combine(
@@ -95,9 +99,10 @@ public static class GameScanner
 
         foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
+            steamRoots.Add(NormalizeDir(root));
             var common = Path.Combine(root, "steamapps", "common");
             if (!Directory.Exists(common)) continue;
-            foreach (var hit in FindKnownExesUnder(common, maxDepth: 4))
+            foreach (var hit in FindKnownExesUnder(common, maxDepth: 4, visited))
                 yield return hit;
         }
     }
@@ -165,7 +170,7 @@ public static class GameScanner
         }
     }
 
-    private static IEnumerable<FoundGame> ScanUninstallRegistry()
+    private static IEnumerable<FoundGame> ScanUninstallRegistry(HashSet<string> visited)
     {
         string[] keys =
         {
@@ -197,17 +202,20 @@ public static class GameScanner
                 }
 
                 if (!Directory.Exists(location)) continue;
-                foreach (var hit in FindKnownExesUnder(location, maxDepth: 3))
+                // Steam / Epic installs are already covered — skip their trees.
+                if (IsUnderSteamOrEpic(location)) continue;
+                foreach (var hit in FindKnownExesUnder(location, maxDepth: 3, visited))
                     yield return hit;
             }
         }
     }
 
-    private static IEnumerable<FoundGame> ScanDriveGameFolders()
+    private static IEnumerable<FoundGame> ScanDriveGameFolders(HashSet<string> visited, HashSet<string> steamRoots)
     {
+        // SteamLibrary / Steam already walked in ScanSteam — do not re-BFS them.
         var folderNames = new[]
         {
-            "Games", "Game", "SteamLibrary", "Epic Games", "XboxGames",
+            "Games", "Game", "Epic Games", "XboxGames",
             "Program Files", "Program Files (x86)"
         };
 
@@ -217,22 +225,23 @@ public static class GameScanner
             {
                 var dir = Path.Combine(drive.RootDirectory.FullName, name);
                 if (!Directory.Exists(dir)) continue;
-                foreach (var hit in FindKnownExesUnder(dir, maxDepth: name.StartsWith("Program") ? 3 : 4))
+                if (steamRoots.Contains(NormalizeDir(dir))) continue;
+                foreach (var hit in FindKnownExesUnder(dir, maxDepth: name.StartsWith("Program", StringComparison.Ordinal) ? 3 : 4, visited))
                     yield return hit;
             }
         }
     }
 
-    private static IEnumerable<FoundGame> FindKnownExesUnder(string root, int maxDepth)
+    private static IEnumerable<FoundGame> FindKnownExesUnder(string root, int maxDepth, HashSet<string> visited)
     {
         var queue = new Queue<(string Dir, int Depth)>();
         queue.Enqueue((root, 0));
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         while (queue.Count > 0)
         {
             var (dir, depth) = queue.Dequeue();
-            if (!seen.Add(dir)) continue;
+            string key = NormalizeDir(dir);
+            if (!visited.Add(key)) continue;
 
             IEnumerable<string> files;
             try { files = Directory.EnumerateFiles(dir, "*.exe"); }
@@ -255,11 +264,29 @@ public static class GameScanner
             {
                 var leaf = Path.GetFileName(sub);
                 if (leaf is "Windows" or "WinSxS" or "System32" or "SysWOW64" or "$Recycle.Bin"
-                    or "node_modules" or ".git")
+                    or "node_modules" or ".git" or "steamapps" or "Steam" or "SteamLibrary")
                     continue;
                 queue.Enqueue((sub, depth + 1));
             }
         }
+    }
+
+    private static bool IsUnderSteamOrEpic(string path)
+    {
+        try
+        {
+            string full = Path.GetFullPath(path);
+            return full.Contains($"{Path.DirectorySeparatorChar}steamapps{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                   || full.Contains($"{Path.DirectorySeparatorChar}Epic Games{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                   || full.Contains($"{Path.DirectorySeparatorChar}EpicGames{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    private static string NormalizeDir(string path)
+    {
+        try { return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
+        catch { return path; }
     }
 
     private static void TryAddDir(List<string> list, string path)

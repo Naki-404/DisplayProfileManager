@@ -561,6 +561,8 @@ public sealed class GameProfile
     public List<string> ProcessAliases { get; set; } = new();
     /// <summary>Optional full path to the game exe — used for icons and discovery.</summary>
     public string? ExePath { get; set; }
+    /// <summary>Steam AppID when known — Launch uses steam://rungameid instead of the raw .exe.</summary>
+    public int? SteamAppId { get; set; }
     public string? Resolution { get; set; }
     public int RefreshRate { get; set; }
     /// <summary>Preset Id to apply automatically when the game starts (null = none).</summary>
@@ -639,6 +641,7 @@ public sealed class GameProfile
         ProcessName = ProcessName,
         ProcessAliases = (ProcessAliases ?? new List<string>()).ToList(),
         ExePath = ExePath,
+        SteamAppId = SteamAppId,
         Resolution = Resolution,
         RefreshRate = RefreshRate,
         StartupPresetId = StartupPresetId,

@@ -202,10 +202,10 @@ Get-ChildItem -LiteralPath $release -File -ErrorAction SilentlyContinue | Where-
 
 try {
   # --- 1. app: self-contained, single-file, compressed ---
-  Write-Step 'Publish Visor.exe (self-contained single-file, compressed)'
+  Write-Step 'Publish Visor.exe (self-contained single-file, compressed, ReadyToRun)'
   Invoke-Dotnet -What 'App publish' -Arguments @(
     'publish', $appProject, '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true',
-    '-p:PublishSingleFile=true', '-o', $publishDir, '-nologo')
+    '-p:PublishSingleFile=true', '-p:PublishReadyToRun=true', '-o', $publishDir, '-nologo')
 
   $appExe = Join-Path $publishDir 'Visor.exe'
   if (-not (Test-Path -LiteralPath $appExe)) { throw "Publish produced no $appExe" }

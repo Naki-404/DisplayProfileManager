@@ -1094,6 +1094,8 @@ public partial class GamesPage : ShellPageBase
                                ?? Path.GetFileNameWithoutExtension(dlg.FileName);
         }
         _selected.ExePath = dlg.FileName;
+        if (SteamLaunch.TryResolveAppId(dlg.FileName, out int steamId))
+            _selected.SteamAppId = steamId;
         PushEditorToSelected();
         GameVisuals.Apply(_selected);
         RefreshGameTiles();
@@ -1280,9 +1282,20 @@ public partial class GamesPage : ShellPageBase
                 string.Equals(p.ProcessName, g.Process, StringComparison.OrdinalIgnoreCase));
             if (existing != null)
             {
+                bool touched = false;
                 if (string.IsNullOrWhiteSpace(existing.ExePath) && !string.IsNullOrWhiteSpace(g.ExePath))
                 {
                     existing.ExePath = g.ExePath;
+                    touched = true;
+                }
+                if (existing.SteamAppId is null or <= 0 && !string.IsNullOrWhiteSpace(existing.ExePath)
+                    && SteamLaunch.TryResolveAppId(existing.ExePath, out int sid))
+                {
+                    existing.SteamAppId = sid;
+                    touched = true;
+                }
+                if (touched)
+                {
                     GameVisuals.Apply(existing);
                     MarkDirty();
                 }
@@ -1290,6 +1303,8 @@ public partial class GamesPage : ShellPageBase
             }
 
             var profile = GameCatalog.CreateProfileSkeleton(g.Process, g.Name, g.ExePath);
+            if (SteamLaunch.TryResolveAppId(g.ExePath, out int newSid))
+                profile.SteamAppId = newSid;
             GameVisuals.Apply(profile);
             _profiles.Add(profile);
             last = profile;
@@ -1369,28 +1384,39 @@ public partial class GamesPage : ShellPageBase
         }
 
         string? path = profile.ExePath;
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        bool hasSteam = profile.SteamAppId is > 0
+                        || SteamLaunch.IsUnderSteamCommon(path);
+        if (!hasSteam && (string.IsNullOrWhiteSpace(path) || !File.Exists(path)))
         {
             ThemedDialog.Show(Host.Window, Loc.T("launch.noPath"), Loc.T("btn.launchGame"));
             return;
         }
 
-        try
+        // Cache AppID when we resolve it so the next launch skips disk scans.
+        if (profile.SteamAppId is null or <= 0
+            && SteamLaunch.TryResolveAppId(path, out int resolved))
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = path,
-                WorkingDirectory = Path.GetDirectoryName(path) ?? "",
-                UseShellExecute = true
-            });
-            ShowToast(Loc.Tf("toast.launching", profile.Name));
-            UiSound.Launch();
+            profile.SteamAppId = resolved;
+            MarkDirty();
         }
-        catch (Exception ex)
+
+        if (!SteamLaunch.TryStartGame(path, profile.SteamAppId, out bool viaSteam, out string? err))
         {
             UiSound.Error();
-            ThemedDialog.Show(Host.Window, Loc.T("launch.failed") + "\n" + ex.Message, Loc.T("btn.launchGame"));
+            string detail = err switch
+            {
+                "steam_missing" => Loc.T("launch.steam.missing"),
+                "no_exe" => Loc.T("launch.noPath"),
+                _ => err ?? "?"
+            };
+            ThemedDialog.Show(Host.Window, Loc.T("launch.failed") + "\n" + detail, Loc.T("btn.launchGame"));
+            return;
         }
+
+        ShowToast(viaSteam
+            ? Loc.Tf("toast.launching.steam", profile.Name)
+            : Loc.Tf("toast.launching", profile.Name));
+        UiSound.Launch();
     }
 
     /// <summary>Push this game's display/power settings to the desktop right now (test without launching).</summary>

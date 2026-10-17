@@ -51,7 +51,8 @@ public static class Loc
         ["btn.dup"] = ("Duplicate", "Дублировать"),
         ["btn.dup.tip"] = ("Copy this profile. The copy starts disabled and without hotkeys.", "Копия профиля. Копия выключена и без хоткеев."),
         ["btn.launchGame"] = ("Launch game", "Запустить игру"),
-        ["btn.launchGame.tip"] = ("Start the game's .exe (set it with Browse… or Scan).", "Запустить .exe игры (укажите через «Обзор…» или поиск)."),
+        ["btn.launchGame.tip"] = ("Start via Steam when possible, otherwise the game .exe (Browse… or Scan).",
+            "Запуск через Steam, если возможно, иначе .exe игры («Обзор…» или поиск)."),
         ["btn.openPresets"] = ("Edit presets", "Изменить пресеты"),
         ["btn.overlay"] = ("Live overlay", "Оверлей"),
         ["btn.overlay.tip"] = ("Small panel over the game — sliders change color live. The main window hides to the tray while it is open.", "Маленькая панель поверх игры — ползунки сразу меняют цвет. Главное окно уходит в трей, пока она открыта."),
@@ -639,6 +640,8 @@ public static class Loc
         ["scan.failed"] = ("Scan failed.", "Поиск не удался."),
         ["launch.noPath"] = ("Visor doesn't know where this game's .exe is.\nUse Browse… or Scan, then try again.", "Visor не знает, где .exe этой игры.\nУкажите его через «Обзор…» или поиск и попробуйте снова."),
         ["launch.failed"] = ("Could not start the game:", "Не удалось запустить игру:"),
+        ["launch.steam.missing"] = ("Steam is not installed (or steam.exe was not found).", "Steam не установлен (или steam.exe не найден)."),
+        ["toast.launching.steam"] = ("Launching {0} via Steam…", "Запуск {0} через Steam…"),
 
         // Presets tab
         ["presets.game"] = ("Game", "Игра"),

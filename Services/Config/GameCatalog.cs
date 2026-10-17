@@ -133,6 +133,10 @@ public static class GameCatalog
             Color = ColorSettings.Neutral
         };
 
+        if (!string.IsNullOrWhiteSpace(profile.ExePath)
+            && SteamLaunch.TryResolveAppId(profile.ExePath, out int steamId))
+            profile.SteamAppId = steamId;
+
         if (ProcessNames.Same(profile.ProcessName, "EscapeFromTarkov.exe"))
             profile.Presets = CreateTarkovRivaPresets();
 
